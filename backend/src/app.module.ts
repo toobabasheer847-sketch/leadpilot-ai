@@ -13,6 +13,7 @@ import { HealthModule } from './health/health.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { OrganizationsModule } from './organizations/organizations.module';
+import { SearchModule } from './search/search.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { OrganizationsModule } from './organizations/organizations.module';
     UsersModule,
     OrganizationsModule,
     AuthModule,
+    SearchModule,
   ],
   controllers: [AppController],
   providers: [

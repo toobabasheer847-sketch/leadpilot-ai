@@ -76,6 +76,7 @@ export const searchExecutions = pgTable('search_executions', {
   searchConfigurationId: uuid('search_configuration_id').notNull().references(() => searchConfigurations.id, { onDelete: 'restrict' }),
   organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'restrict' }),
   status: varchar('status', { length: 50 }).default('PENDING').notNull(),
+  structuredPlan: jsonb('structured_plan'),
   startedAt: timestamp('started_at', { withTimezone: true }),
   completedAt: timestamp('completed_at', { withTimezone: true }),
   totalCandidates: integer('total_candidates').default(0).notNull(),
