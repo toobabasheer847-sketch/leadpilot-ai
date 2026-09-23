@@ -7,9 +7,10 @@ import { SearchExecutionRepository } from './repositories/search-execution.repos
 import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
+import { SourcesModule } from '../sources/sources.module';
 
 @Module({
-  imports: [AuthModule, UsersModule, OrganizationsModule],
+  imports: [AuthModule, UsersModule, OrganizationsModule, SourcesModule],
   controllers: [SearchController],
   providers: [SearchService, SearchPlanParser, SearchConfigurationRepository, SearchExecutionRepository],
 })

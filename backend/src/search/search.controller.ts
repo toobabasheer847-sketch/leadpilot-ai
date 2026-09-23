@@ -33,6 +33,11 @@ export class SearchController {
     return this.searchService.getExecution(user, executionId);
   }
 
+  @Get('executions/:executionId/candidates')
+  listCandidates(@CurrentUser() user: AuthenticatedUser, @Param('executionId') executionId: string, @Query() pagination: ListSearchesDto) {
+    return this.searchService.listCandidates(user, executionId, pagination.page, pagination.limit);
+  }
+
   @Get(':searchId')
   findOne(@CurrentUser() user: AuthenticatedUser, @Param('searchId') searchId: string) {
     return this.searchService.findOne(user, searchId);

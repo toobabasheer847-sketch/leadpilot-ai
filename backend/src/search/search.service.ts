@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { DRIZZLE } from '../database/database.constants';
 import type { Database } from '../database/database.types';
@@ -10,6 +10,8 @@ import { ListSearchesDto } from './dto/list-searches.dto';
 import { SearchPlanParser } from './parsers/search-plan.parser';
 import { SearchConfigurationRepository } from './repositories/search-configuration.repository';
 import { SearchExecutionRepository } from './repositories/search-execution.repository';
+import { SourceDiscoveryQueue } from '../sources/source-discovery.queue';
+import { SourceDiscoveryService } from '../sources/services/source-discovery.service';
 
 @Injectable()
 export class SearchService {
@@ -18,6 +20,8 @@ export class SearchService {
     private readonly parser: SearchPlanParser,
     private readonly configurations: SearchConfigurationRepository,
     private readonly executions: SearchExecutionRepository,
+    private readonly sourceQueue: SourceDiscoveryQueue,
+    private readonly discovery: SourceDiscoveryService,
   ) {}
 
   preview(prompt: string) {
@@ -92,13 +96,28 @@ export class SearchService {
 
       await tx.insert(pipelineJobs).values({
         searchExecutionId: created.id,
-        jobType: 'SEARCH_EXECUTION',
+        jobType: 'SEARCH_DISCOVERY',
         status: 'QUEUED',
-        bullJobId: `search-execution:${created.id}`,
+        bullJobId: `search-discovery-${created.id}`,
       });
       return created;
     });
 
+    try {
+      await this.sourceQueue.enqueue({
+        searchExecutionId: execution.id,
+        searchConfigurationId: search.id,
+        organizationId: user.organizationId,
+      });
+    } catch {
+      await this.db.update(searchExecutions).set({
+        status: 'FAILED',
+        completedAt: new Date(),
+        errorMessage: 'Source discovery job could not be queued.',
+        updatedAt: new Date(),
+      }).where(eq(searchExecutions.id, execution.id));
+      throw new ServiceUnavailableException('Source discovery is temporarily unavailable.');
+    }
     await this.writeAudit(user, 'SEARCH_EXECUTION_CREATED', execution.id, { searchId });
     return execution;
   }
@@ -114,6 +133,11 @@ export class SearchService {
       throw new NotFoundException('Search execution not found');
     }
     return execution;
+  }
+
+  async listCandidates(user: AuthenticatedUser, executionId: string, page: number, limit: number) {
+    const execution = await this.getExecution(user, executionId);
+    return this.discovery.listCandidates(execution.id, user.organizationId, page, limit);
   }
 
   private async writeAudit(user: AuthenticatedUser, action: string, entityId: string, metadata: Record<string, string>) {

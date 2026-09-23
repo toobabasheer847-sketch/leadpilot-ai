@@ -186,6 +186,7 @@ export const sourceRecords = pgTable('source_records', {
   index('source_records_company_idx').on(table.companyId),
   index('source_records_type_idx').on(table.sourceType),
   index('source_records_url_idx').on(table.sourceUrl),
+  uniqueIndex('source_records_execution_provider_external_unique').on(table.organizationId, table.searchExecutionId, table.sourceType, table.externalId),
 ]);
 
 export const leadEvidence = pgTable('lead_evidence', {

@@ -17,6 +17,15 @@ export default () => ({
     retries: parseInt(process.env.OUTBOUND_RETRIES ?? '2', 10),
   },
 
+  sourceProvider: {
+    googlePlacesApiKey: process.env.GOOGLE_PLACES_API_KEY,
+    timeoutMs: parseInt(process.env.SOURCE_PROVIDER_TIMEOUT_MS ?? '10000', 10),
+    concurrency: parseInt(process.env.SOURCE_PROVIDER_CONCURRENCY ?? '2', 10),
+    maxPages: parseInt(process.env.SOURCE_PROVIDER_MAX_PAGES ?? '3', 10),
+    provider: process.env.SOURCE_PROVIDER ?? 'google_places',
+    retainRawData: process.env.SOURCE_PROVIDER_RETAIN_RAW_DATA !== 'false',
+  },
+
   database: {
     url: process.env.DATABASE_URL,
   },
