@@ -29,10 +29,15 @@ export default () => ({
     apiKey: process.env.OPENROUTER_API_KEY,
     model: process.env.OPENROUTER_MODEL,
   },
+
+  auth: {
+    jwtSecret: process.env.JWT_SECRET,
+    jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '1h',
+  },
 });
 
 export function validateEnvironment(config: Record<string, unknown>) {
-  const required = ['DATABASE_URL', 'REDIS_URL'];
+  const required = ['DATABASE_URL', 'REDIS_URL', 'JWT_SECRET'];
   const missing = required.filter((key) => !config[key]);
 
   if (missing.length > 0) {
@@ -61,6 +66,14 @@ export function validateEnvironment(config: Record<string, unknown>) {
 
   if (nodeEnv === 'production' && corsOrigin === '*') {
     throw new Error('CORS_ORIGIN cannot be "*" in production');
+  }
+
+  if (typeof config.JWT_SECRET !== 'string' || config.JWT_SECRET.length < 32) {
+    throw new Error('JWT_SECRET must be at least 32 characters long');
+  }
+
+  if (typeof config.JWT_EXPIRES_IN !== 'undefined' && typeof config.JWT_EXPIRES_IN !== 'string') {
+    throw new Error('JWT_EXPIRES_IN must be a string');
   }
 
   return config;

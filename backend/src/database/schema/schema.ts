@@ -31,6 +31,7 @@ export const users = pgTable('users', {
   id: uuid('id').defaultRandom().primaryKey(),
   email: varchar('email', { length: 320 }).notNull(),
   name: varchar('name', { length: 255 }),
+  passwordHash: text('password_hash').notNull(),
   status: varchar('status', { length: 50 }).default('ACTIVE').notNull(),
   ...timestamps,
 }, (table) => [uniqueIndex('users_email_unique').on(table.email), index('users_status_idx').on(table.status)]);

@@ -10,6 +10,9 @@ import { RedisModule } from './redis/redis.module';
 import { DatabaseModule } from './database/database.module';
 import { QueueModule } from './queue/queue.module';
 import { HealthModule } from './health/health.module';
+import { AuthModule } from './auth/auth.module';
+import { UsersModule } from './users/users.module';
+import { OrganizationsModule } from './organizations/organizations.module';
 
 @Module({
   imports: [
@@ -36,6 +39,9 @@ import { HealthModule } from './health/health.module';
     DatabaseModule,
     QueueModule,
     HealthModule,
+    UsersModule,
+    OrganizationsModule,
+    AuthModule,
   ],
   controllers: [AppController],
   providers: [

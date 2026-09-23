@@ -31,6 +31,7 @@ describe('configuration', () => {
       NODE_ENV: 'production',
       DATABASE_URL: 'postgresql://localhost/leadpilot',
       REDIS_URL: 'redis://localhost:6379',
+      JWT_SECRET: 'development-test-secret-with-at-least-32-characters',
       CORS_ORIGIN: '*',
     })).toThrow('CORS_ORIGIN cannot be "*" in production');
   });
