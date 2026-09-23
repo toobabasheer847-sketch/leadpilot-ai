@@ -6,14 +6,14 @@ import { Job } from 'bullmq';
 export class LeadResearchProcessor extends WorkerHost {
   private readonly logger = new Logger(LeadResearchProcessor.name);
 
-  async process(job: Job<any, any, string>): Promise<any> {
-    this.logger.log(`Processing job ${job.id} of type ${job.name}...`);
-    this.logger.log(`Job Payload: ${JSON.stringify(job.data)}`);
+  async process(job: Job<unknown, unknown, string>): Promise<{ status: string; message: string }> {
+    const startedAt = Date.now();
+    this.logger.log(`Processing job ${job.id} (${job.name}) on lead-research-queue`);
 
    
     await new Promise((resolve) => setTimeout(resolve, 3000));
 
-    this.logger.log(`Job ${job.id} completed successfully!`);
+    this.logger.log(`Job ${job.id} completed with status COMPLETED in ${Date.now() - startedAt}ms`);
 
     return {
       status: 'COMPLETED',
