@@ -4,9 +4,7 @@
 /build
 *.tsbuildinfo
 
-# Drizzle ORM Migration Outputs (Generated Files)
-/drizzle/*.sql
-/drizzle/meta
+# Drizzle ORM migration outputs are committed as the durable schema history.
 
 # Environment Variable Files (CRITICAL - Keeps API keys safe)
 .env

@@ -3,12 +3,13 @@ import { ConfigService } from '@nestjs/config';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import * as schema from './schema/schema';
-
-export const DRIZZLE = 'DRIZZLE_CONNECTION';
+import { DatabaseService } from './database.service';
+import { DRIZZLE } from './database.constants';
 
 @Global()
 @Module({
   providers: [
+    DatabaseService,
     {
       provide: DRIZZLE,
       useFactory: (configService: ConfigService) => {
@@ -19,6 +20,8 @@ export const DRIZZLE = 'DRIZZLE_CONNECTION';
       inject: [ConfigService],
     },
   ],
-  exports: [DRIZZLE],
+  exports: [DRIZZLE, DatabaseService],
 })
 export class DatabaseModule {}
+
+export { DRIZZLE } from './database.constants';

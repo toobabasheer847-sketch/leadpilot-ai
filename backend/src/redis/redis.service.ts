@@ -28,6 +28,6 @@ export class RedisService implements OnModuleDestroy {
   }
 
   async onModuleDestroy() {
-    await this.client.quit();
+    this.client.disconnect();
   }
 }

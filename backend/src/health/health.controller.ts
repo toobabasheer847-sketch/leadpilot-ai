@@ -1,18 +1,16 @@
-import { Controller, Get, Inject } from '@nestjs/common';
+import { Controller, Get } from '@nestjs/common';
 import { Logger } from '@nestjs/common';
-import { DRIZZLE } from '../database/database.module';
-import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { sql } from 'drizzle-orm';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { RedisService } from '../redis/redis.service';
+import { DatabaseService } from '../database/database.service';
 
 @Controller('health')
 export class HealthController {
   private readonly logger = new Logger(HealthController.name);
 
   constructor(
-    @Inject(DRIZZLE) private db: NodePgDatabase<any>,
+    private readonly databaseService: DatabaseService,
     @InjectQueue('lead-research-queue') private leadQueue: Queue,
     private readonly redisService: RedisService,
   ) {}
@@ -24,7 +22,7 @@ export class HealthController {
 
     // Check Database Connection
     try {
-      await this.db.execute(sql`SELECT 1`);
+      await this.databaseService.ping();
       dbStatus = 'up';
     } catch (error: unknown) {
       this.logger.warn(`Database health check failed: ${error instanceof Error ? error.name : 'unknown error'}`);
