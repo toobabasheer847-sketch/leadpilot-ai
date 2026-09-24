@@ -2,18 +2,20 @@ import { Injectable } from '@nestjs/common';
 import { WebsiteContactProvider } from '../providers/website-contact.provider';
 import { ContactCandidate, ContactDiscoveryContext, ContactDiscoveryResult, CompanyLike } from '../types/contact.types';
 import { PersonIdentityMatcherService } from '../matching/person-identity-matcher.service';
+import { PersonCandidateService } from './person-candidate.service';
 
 @Injectable()
 export class PersonDiscoveryService {
   constructor(
     private readonly websiteProvider: WebsiteContactProvider,
     private readonly matcher: PersonIdentityMatcherService,
+    private readonly candidates: PersonCandidateService,
   ) {}
 
   async discover(company: CompanyLike, context: ContactDiscoveryContext): Promise<ContactDiscoveryResult> {
     const candidates: ContactCandidate[] = [];
     const websiteResults = await this.websiteProvider.discover(company, context);
-    candidates.push(...websiteResults.candidates);
+    candidates.push(...websiteResults.candidates.map((candidate) => this.candidates.normalizeCandidate(candidate)));
 
     const deduped: ContactCandidate[] = [];
     for (const candidate of candidates) {

@@ -116,6 +116,9 @@ export class VerificationService {
       { field: 'linkedin', value: contact.linkedinUrl, provider: this.socialProvider },
       { field: 'facebook', value: contact.facebookUrl, provider: this.socialProvider },
       { field: 'instagram', value: contact.instagramUrl, provider: this.socialProvider },
+      { field: 'youtube', value: contact.youtubeUrl, provider: this.socialProvider },
+      { field: 'normalizedRole', value: contact.normalizedRole },
+      { field: 'companyRelationship', value: contact.companyRelationship },
     ];
     return this.persistResults(data, await this.evaluateFields(fields, evidence));
   }

@@ -32,6 +32,6 @@ import { UsageModule } from '../usage/usage.module';
     CompanyEnrichmentProcessor,
     EnrichmentService,
   ],
-  exports: [EnrichmentService, CompanyEnrichmentQueue, WebsiteNormalizerService, WebsiteFetchService],
+  exports: [EnrichmentService, CompanyEnrichmentQueue, WebsiteNormalizerService, WebsiteFetchService, WebsiteDiscoveryService, WebsiteParserService],
 })
 export class EnrichmentModule {}

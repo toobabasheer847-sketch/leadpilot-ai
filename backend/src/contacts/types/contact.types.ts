@@ -13,11 +13,18 @@ export interface ContactEvidenceEntry {
 export interface ContactCandidate {
   fullName: string;
   title: string | null;
+  originalTitle?: string | null;
+  normalizedRole?: string | null;
+  companyRelationship?: string | null;
+  professionalBio?: string | null;
   email?: string | null;
+  emailStatus?: 'FOUND' | 'VERIFIED' | 'NOT_FOUND' | 'UNVERIFIED';
   phone?: string | null;
+  phoneStatus?: 'FOUND' | 'VERIFIED' | 'NOT_FOUND' | 'UNVERIFIED';
   linkedinUrl?: string | null;
   facebookUrl?: string | null;
   instagramUrl?: string | null;
+  youtubeUrl?: string | null;
   companyName: string;
   sourceUrl: string;
   evidence: ContactEvidenceEntry[];
@@ -31,6 +38,7 @@ export interface ContactDiscoveryContext {
   organizationId: string;
   searchExecutionId?: string | null;
   companyWebsite?: string | null;
+  correlationId?: string;
 }
 
 export interface ContactDiscoveryResult {

@@ -7,6 +7,8 @@ export interface ContactDiscoveryJobData {
   companyId: string;
   organizationId: string;
   searchExecutionId?: string | null;
+  idempotencyKey?: string;
+  correlationId?: string;
 }
 
 @Injectable()
@@ -15,6 +17,7 @@ export class ContactDiscoveryQueue {
 
   enqueue(data: ContactDiscoveryJobData): Promise<Job<ContactDiscoveryJobData>> {
     return this.queue.add('CONTACT_DISCOVERY', { ...data, correlationId: this.context.get()?.correlationId }, {
+      jobId: data.idempotencyKey,
       attempts: 3,
       backoff: { type: 'exponential', delay: 2000 },
       removeOnComplete: true,

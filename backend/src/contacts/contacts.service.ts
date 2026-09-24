@@ -7,6 +7,10 @@ import { ContactDiscoveryQueue } from './contact-discovery.queue';
 import { PersonDiscoveryService } from './discovery/person-discovery.service';
 import { ContactEvidenceService } from './verification/contact-evidence.service';
 import { ContactDiscoveryContext } from './types/contact.types';
+import { UsageService } from '../usage/usage.service';
+import { ProviderObservabilityService } from '../common/observability/provider-observability.service';
+import { pipelineJobs } from '../database/schema/schema';
+import { createHash } from 'node:crypto';
 
 @Injectable()
 export class ContactsService {
@@ -15,6 +19,8 @@ export class ContactsService {
     private readonly discovery: PersonDiscoveryService,
     private readonly evidenceService: ContactEvidenceService,
     private readonly queue: ContactDiscoveryQueue,
+    private readonly usage: UsageService,
+    private readonly providerObservability: ProviderObservabilityService,
   ) {}
 
   async enqueueContactDiscovery(companyId: string, organizationId: string, searchExecutionId?: string | null) {
@@ -24,19 +30,32 @@ export class ContactsService {
     )).limit(1);
     if (!company) throw new NotFoundException('Company not found');
 
-    await this.queue.enqueue({ companyId, organizationId, searchExecutionId: searchExecutionId ?? null });
-    return { companyId, status: 'QUEUED' };
+    await this.usage.checkRequestRate(organizationId, undefined, 'CONTACT_DISCOVERY');
+    const idempotencyKey = this.jobKey(companyId, organizationId, searchExecutionId ?? null);
+    const [existingJob] = await this.db.select({ bullJobId: pipelineJobs.bullJobId }).from(pipelineJobs).where(eq(pipelineJobs.bullJobId, idempotencyKey)).limit(1);
+    if (existingJob?.bullJobId) return { companyId, status: 'QUEUED', jobId: existingJob.bullJobId };
+    const job = await this.queue.enqueue({ companyId, organizationId, searchExecutionId: searchExecutionId ?? null, idempotencyKey });
+    await this.db.insert(pipelineJobs).values({ searchExecutionId: searchExecutionId ?? null, jobType: 'CONTACT_DISCOVERY', status: 'QUEUED', bullJobId: idempotencyKey });
+    return { companyId, status: 'QUEUED', jobId: String(job.id) };
   }
 
-  async discoverForCompany(companyId: string, organizationId: string, searchExecutionId?: string | null) {
+  async discoverForCompany(companyId: string, organizationId: string, searchExecutionId?: string | null, correlationId?: string) {
     const [company] = await this.db.select().from(companies).where(and(
       eq(companies.id, companyId),
       eq(companies.organizationId, organizationId),
     )).limit(1);
     if (!company) throw new NotFoundException('Company not found');
 
-    const context: ContactDiscoveryContext = { companyId, organizationId, searchExecutionId: searchExecutionId ?? null, companyWebsite: company.website ?? null };
-    const result = await this.discovery.discover({ id: company.id, name: company.name, website: company.website ?? null }, context);
+    const context: ContactDiscoveryContext = { companyId, organizationId, searchExecutionId: searchExecutionId ?? null, companyWebsite: company.website ?? null, correlationId };
+    await this.usage.checkRequestRate(organizationId, undefined, 'CONTACT_DISCOVERY');
+    let result;
+    try {
+      result = await this.providerObservability.track('website', 'CONTACT_DISCOVERY', async () => ({ value: await this.discovery.discover({ id: company.id, name: company.name, website: company.website ?? null }, context) }));
+    } catch (error) {
+      await this.usage.recordUsage({ organizationId, operation: 'CONTACT_DISCOVERY', provider: 'website', resourceType: 'company', resourceId: companyId, units: 1, status: 'FAILED' });
+      throw error;
+    }
+    await this.usage.recordUsage({ organizationId, operation: 'CONTACT_DISCOVERY', provider: 'website', resourceType: 'company', resourceId: companyId, units: Math.max(1, result.candidates.length), status: 'COMPLETED', metadata: { candidates: result.candidates.length } });
 
     let saved = 0;
     for (const candidate of result.candidates) {
@@ -47,12 +66,16 @@ export class ContactsService {
 
       const [contact] = existing
         ? await this.db.update(companyContacts).set({
-            title: candidate.title,
-            email: candidate.email ?? null,
-            phone: candidate.phone ?? null,
-            linkedinUrl: candidate.linkedinUrl ?? null,
-            facebookUrl: candidate.facebookUrl ?? null,
-            instagramUrl: candidate.instagramUrl ?? null,
+            ...(candidate.title ? { title: candidate.title } : {}),
+            ...(candidate.normalizedRole ? { normalizedRole: candidate.normalizedRole } : {}),
+            ...(candidate.companyRelationship ? { companyRelationship: candidate.companyRelationship } : {}),
+            ...(candidate.professionalBio ? { professionalBio: candidate.professionalBio } : {}),
+            ...(candidate.email ? { email: candidate.email, emailStatus: candidate.emailStatus ?? 'FOUND' } : {}),
+            ...(candidate.phone ? { phone: candidate.phone, phoneStatus: candidate.phoneStatus ?? 'FOUND' } : {}),
+            ...(candidate.linkedinUrl ? { linkedinUrl: candidate.linkedinUrl } : {}),
+            ...(candidate.facebookUrl ? { facebookUrl: candidate.facebookUrl } : {}),
+            ...(candidate.instagramUrl ? { instagramUrl: candidate.instagramUrl } : {}),
+            ...(candidate.youtubeUrl ? { youtubeUrl: candidate.youtubeUrl } : {}),
             source: candidate.sourceUrl,
             status: 'DISCOVERED',
             confidence: '0.8000',
@@ -65,11 +88,17 @@ export class ContactsService {
             firstName: candidate.fullName.split(' ')[0] ?? candidate.fullName,
             lastName: candidate.fullName.split(' ').slice(1).join(' ') || null,
             title: candidate.title,
+            normalizedRole: candidate.normalizedRole ?? null,
+            companyRelationship: candidate.companyRelationship ?? null,
+            professionalBio: candidate.professionalBio ?? null,
             email: candidate.email ?? null,
+            emailStatus: candidate.emailStatus ?? (candidate.email ? 'FOUND' : 'NOT_FOUND'),
             phone: candidate.phone ?? null,
+            phoneStatus: candidate.phoneStatus ?? (candidate.phone ? 'FOUND' : 'NOT_FOUND'),
             linkedinUrl: candidate.linkedinUrl ?? null,
             facebookUrl: candidate.facebookUrl ?? null,
             instagramUrl: candidate.instagramUrl ?? null,
+            youtubeUrl: candidate.youtubeUrl ?? null,
             source: candidate.sourceUrl,
             status: 'DISCOVERED',
             confidence: '0.8000',
@@ -91,6 +120,10 @@ export class ContactsService {
     });
 
     return { companyId, candidates: saved, status: 'COMPLETED' };
+  }
+
+  private jobKey(companyId: string, organizationId: string, searchExecutionId: string | null) {
+    return `contact-discovery:${createHash('sha256').update(`${organizationId}:${companyId}:${searchExecutionId ?? 'direct'}`).digest('hex')}`;
   }
 
   async listForCompany(companyId: string, organizationId: string) {

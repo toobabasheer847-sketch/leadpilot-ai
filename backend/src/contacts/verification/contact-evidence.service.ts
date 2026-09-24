@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { DRIZZLE } from '../../database/database.constants';
 import type { Database } from '../../database/database.types';
 import { leadEvidence, leadVerifications } from '../../database/schema/schema';
@@ -10,21 +11,24 @@ export class ContactEvidenceService {
 
   async persistEvidence(companyId: string, contactId: string, organizationId: string, candidate: ContactCandidate) {
     for (const item of candidate.evidence) {
+      const idempotencyKey = createHash('sha256').update(JSON.stringify({ companyId, contactId, field: item.field, sourceUrl: item.sourceUrl, value: item.value, excerpt: item.evidenceExcerpt })).digest('hex');
       await this.db.insert(leadEvidence).values({
         companyId,
         contactId,
         evidenceType: item.evidenceType,
         sourceUrl: item.sourceUrl,
+        sourceType: 'WEBSITE',
         evidenceText: item.evidenceExcerpt,
         evidenceTimestamp: new Date(item.retrievedAt),
+        idempotencyKey,
         metadata: {
           field: item.field,
           value: item.value,
         },
-      });
+      }).onConflictDoNothing({ target: leadEvidence.idempotencyKey });
     }
 
-    for (const field of ['fullName', 'title', 'email', 'phone', 'linkedinUrl', 'facebookUrl', 'instagramUrl']) {
+    for (const field of ['fullName', 'title', 'normalizedRole', 'companyRelationship', 'email', 'phone', 'linkedinUrl', 'facebookUrl', 'instagramUrl', 'youtubeUrl']) {
       const candidateFields = candidate as unknown as Record<string, string | null | undefined>;
       const value = field === 'fullName' ? candidate.fullName : field === 'title' ? candidate.title : candidateFields[field] ?? null;
       if (!value) continue;

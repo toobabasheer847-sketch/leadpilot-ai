@@ -6,7 +6,9 @@ export class PersonIdentityMatcherService {
   match(first: ContactCandidate, second: ContactCandidate): IdentityMatchResult {
     const signals: string[] = [];
     const sameCompany = first.companyName.toLowerCase() === second.companyName.toLowerCase();
-    const sameWebsite = (first.sourceUrl && second.sourceUrl) && first.sourceUrl.includes('example.test') && second.sourceUrl.includes('example.test');
+    const sameWebsite = (() => {
+      try { return new URL(first.sourceUrl).origin === new URL(second.sourceUrl).origin; } catch { return false; }
+    })();
     const titleMatch = first.title && second.title && first.title.toLowerCase() === second.title.toLowerCase();
     const nameSimilarity = this.nameSimilarity(first.fullName, second.fullName);
 

@@ -1,10 +1,15 @@
 import { WebsiteContactProvider } from './providers/website-contact.provider';
 import { PersonIdentityMatcherService } from './matching/person-identity-matcher.service';
 import { ContactCandidate } from './types/contact.types';
+import { ContactExtractorService } from './extraction/contact-extractor.service';
+import { WebsiteDiscoveryService } from '../enrichment/website/website-discovery.service';
+import { WebsiteNormalizerService } from '../enrichment/website/website-normalizer.service';
+import { ConfigService } from '@nestjs/config';
 
 describe('Contact discovery primitives', () => {
   it('detects founder and CEO titles from website text', () => {
-    const provider = new WebsiteContactProvider();
+    const extractor = new ContactExtractorService({ get: () => ['CEO', 'FOUNDER', 'PRESIDENT'] } as ConfigService);
+    const provider = new WebsiteContactProvider(extractor, {} as WebsiteDiscoveryService, new WebsiteNormalizerService());
     const html = `
       <html><body>
         <a href="/about">About</a>
@@ -43,5 +48,12 @@ describe('Contact discovery primitives', () => {
 
     const result = matcher.match(first, second);
     expect(result.samePerson).toBe(false);
+  });
+
+  it('does not invent people, titles, or emails when a page has no explicit person evidence', () => {
+    const extractor = new ContactExtractorService({ get: () => ['CEO', 'FOUNDER'] } as ConfigService);
+    const provider = new WebsiteContactProvider(extractor, {} as WebsiteDiscoveryService, new WebsiteNormalizerService());
+    const candidates = provider.extractCandidatesFromHtml('https://company.example/about', '<html><body><h1>About our company</h1><p>We serve local businesses.</p></body></html>', 'Actual Company');
+    expect(candidates).toEqual([]);
   });
 });

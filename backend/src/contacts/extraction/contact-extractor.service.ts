@@ -1,8 +1,11 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ContactEvidenceEntry, ContactStatus, VerificationStatus } from '../types/contact.types';
 
 @Injectable()
 export class ContactExtractorService {
+  constructor(private readonly config: ConfigService) {}
+
   normalizeTitle(rawTitle: string | null): string | null {
     if (!rawTitle) return null;
     const cleaned = rawTitle.trim();
@@ -14,6 +17,9 @@ export class ContactExtractorService {
       'Chief Executive': 'CEO',
       'Co-Founder': 'CO_FOUNDER',
       'Managing Director': 'MANAGING_DIRECTOR',
+      'Managing Partner': 'MANAGING_PARTNER',
+      'Partner': 'PARTNER',
+      'Director': 'DIRECTOR',
       'General Manager': 'GENERAL_MANAGER',
       'Founding Partner': 'FOUNDER',
       'Founder': 'FOUNDER',
@@ -33,6 +39,9 @@ export class ContactExtractorService {
     if (upper.includes('PRESIDENT')) return 'PRESIDENT';
     if (upper.includes('OWNER')) return 'OWNER';
     if (upper.includes('MANAGING DIRECTOR')) return 'MANAGING_DIRECTOR';
+    if (upper.includes('MANAGING PARTNER')) return 'MANAGING_PARTNER';
+    if (upper.includes('PARTNER')) return 'PARTNER';
+    if (upper.includes('DIRECTOR')) return 'DIRECTOR';
     if (upper.includes('GENERAL MANAGER')) return 'GENERAL_MANAGER';
     if (upper.includes('PRINCIPAL')) return 'PRINCIPAL';
     if (upper.includes('MANAGER') && !upper.includes('SALES')) return 'MANAGER';
@@ -73,13 +82,19 @@ export class ContactExtractorService {
     return value;
   }
 
-  extractNameTitlePairs(text: string): Array<{ fullName: string; title: string | null }> {
-    const pairs: Array<{ fullName: string; title: string | null }> = [];
+  extractPublicPhone(text: string): string | null {
+    const match = text.match(/(?:\+?\d{1,3}[-.\s])?(?:\(?\d{3}\)?[-.\s])\d{3}[-.\s]\d{4}/);
+    return match?.[0]?.trim() ?? null;
+  }
+
+  extractNameTitlePairs(text: string): Array<{ fullName: string; title: string | null; originalTitle: string | null }> {
+    const pairs: Array<{ fullName: string; title: string | null; originalTitle: string | null }> = [];
     const nameRegex = /([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})/g;
     const names = Array.from(new Set((text.match(nameRegex) ?? [])
       .map((name) => this.normalizeName(name.trim()))
       .filter((name) => name && !/^\d+$/.test(name))));
-    const titlePriority = ['CEO', 'FOUNDER', 'CO_FOUNDER', 'PRESIDENT', 'OWNER', 'MANAGING_DIRECTOR', 'PRINCIPAL', 'GENERAL_MANAGER', 'MANAGER'];
+    const configuredRoles = this.config.get<string[]>('decisionMaker.rolePriorities', []);
+    const titlePriority = configuredRoles.length ? configuredRoles : ['CEO', 'FOUNDER', 'CO_FOUNDER', 'PRESIDENT', 'OWNER', 'MANAGING_PARTNER', 'PARTNER', 'PRINCIPAL', 'MANAGING_DIRECTOR', 'DIRECTOR', 'GENERAL_MANAGER', 'MANAGER'];
 
     for (const name of names) {
       const lowerText = text.toLowerCase();
@@ -91,11 +106,11 @@ export class ContactExtractorService {
       const combined = `${before} ${after}`.toLowerCase();
       const matchedTitles = titlePriority.filter((title) => combined.includes(title.toLowerCase()));
       if (matchedTitles.length === 0) {
-        pairs.push({ fullName: this.normalizeName(name), title: null });
+        pairs.push({ fullName: this.normalizeName(name), title: null, originalTitle: null });
         continue;
       }
       for (const title of matchedTitles) {
-        pairs.push({ fullName: this.normalizeName(name), title: this.normalizeTitle(title) });
+        pairs.push({ fullName: this.normalizeName(name), title: this.normalizeTitle(title), originalTitle: title });
       }
     }
     return pairs;
