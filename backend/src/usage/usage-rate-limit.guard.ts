@@ -15,6 +15,7 @@ export class UsageRateLimitGuard implements CanActivate {
 
   private operation(path: string) {
     if (path.includes('/exports')) return 'EXPORT' as const;
+    if (path.includes('/reverify') || path.includes('/verif')) return 'VERIFICATION' as const;
     if (path.includes('/classif')) return 'AI_CLASSIFICATION' as const;
     if (path.includes('/qualify') || path.includes('/qualification')) return 'QUALIFICATION' as const;
     if (path.includes('/search')) return 'SEARCH' as const;

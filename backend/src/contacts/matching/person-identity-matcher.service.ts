@@ -24,7 +24,10 @@ export class PersonIdentityMatcherService {
       + (Math.min(nameSimilarity, 1) * 0.2),
     );
 
-    const samePerson = sameCompany && nameSimilarity > 0.75 && (titleMatch || sameWebsite || first.sourceUrl === second.sourceUrl);
+    const exactName = this.normalizeName(first.fullName) === this.normalizeName(second.fullName);
+    const sameEmail = Boolean(first.email && second.email && first.email.toLowerCase() === second.email.toLowerCase());
+    const sameProfile = Boolean(first.linkedinUrl && second.linkedinUrl && first.linkedinUrl === second.linkedinUrl);
+    const samePerson = exactName && sameCompany && (Boolean(titleMatch) || sameWebsite || sameEmail || sameProfile);
     return {
       samePerson: Boolean(samePerson),
       confidence: Number(score.toFixed(2)),
@@ -39,5 +42,9 @@ export class PersonIdentityMatcherService {
     const common = a.filter((token) => b.includes(token)).length;
     const union = new Set([...a, ...b]).size;
     return union === 0 ? 0 : common / union;
+  }
+
+  private normalizeName(value: string) {
+    return value.toLowerCase().split(/\s+/).filter(Boolean).join(' ');
   }
 }

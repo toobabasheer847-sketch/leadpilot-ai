@@ -50,6 +50,15 @@ describe('Contact discovery primitives', () => {
     expect(result.samePerson).toBe(false);
   });
 
+  it('does not merge people because their names are similar', () => {
+    const matcher = new PersonIdentityMatcherService();
+    const result = matcher.match(
+      { fullName: 'Ada Example', title: 'Founder', companyName: 'Fixture Northwind Buyers', sourceUrl: 'https://fixture-northwind.test/about', evidence: [], normalizedName: 'ada example', status: 'DISCOVERED', verificationStatus: 'NOT_VERIFIED' },
+      { fullName: 'Ada Examples', title: 'Founder', companyName: 'Fixture Northwind Buyers', sourceUrl: 'https://fixture-northwind.test/about', evidence: [], normalizedName: 'ada examples', status: 'DISCOVERED', verificationStatus: 'NOT_VERIFIED' },
+    );
+    expect(result.samePerson).toBe(false);
+  });
+
   it('does not invent people, titles, or emails when a page has no explicit person evidence', () => {
     const extractor = new ContactExtractorService({ get: () => ['CEO', 'FOUNDER'] } as ConfigService);
     const provider = new WebsiteContactProvider(extractor, {} as WebsiteDiscoveryService, new WebsiteNormalizerService());

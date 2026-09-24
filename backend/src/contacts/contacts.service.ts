@@ -66,20 +66,17 @@ export class ContactsService {
 
       const [contact] = existing
         ? await this.db.update(companyContacts).set({
-            ...(candidate.title ? { title: candidate.title } : {}),
-            ...(candidate.normalizedRole ? { normalizedRole: candidate.normalizedRole } : {}),
-            ...(candidate.companyRelationship ? { companyRelationship: candidate.companyRelationship } : {}),
-            ...(candidate.professionalBio ? { professionalBio: candidate.professionalBio } : {}),
-            ...(candidate.email ? { email: candidate.email, emailStatus: candidate.emailStatus ?? 'FOUND' } : {}),
-            ...(candidate.phone ? { phone: candidate.phone, phoneStatus: candidate.phoneStatus ?? 'FOUND' } : {}),
-            ...(candidate.linkedinUrl ? { linkedinUrl: candidate.linkedinUrl } : {}),
-            ...(candidate.facebookUrl ? { facebookUrl: candidate.facebookUrl } : {}),
-            ...(candidate.instagramUrl ? { instagramUrl: candidate.instagramUrl } : {}),
-            ...(candidate.youtubeUrl ? { youtubeUrl: candidate.youtubeUrl } : {}),
-            source: candidate.sourceUrl,
-            status: 'DISCOVERED',
-            confidence: '0.8000',
-            verificationStatus: 'NOT_VERIFIED',
+            ...(candidate.title && this.sameStoredValue(existing.title, candidate.title) ? { title: candidate.title } : {}),
+            ...(candidate.normalizedRole && this.sameStoredValue(existing.normalizedRole, candidate.normalizedRole) ? { normalizedRole: candidate.normalizedRole } : {}),
+            ...(candidate.companyRelationship && !existing.companyRelationship ? { companyRelationship: candidate.companyRelationship } : {}),
+            ...(candidate.professionalBio && !existing.professionalBio ? { professionalBio: candidate.professionalBio } : {}),
+            ...(candidate.email && this.sameStoredValue(existing.email, candidate.email) ? { email: candidate.email, emailStatus: candidate.emailStatus ?? existing.emailStatus } : {}),
+            ...(candidate.phone && this.sameStoredValue(existing.phone, candidate.phone) ? { phone: candidate.phone, phoneStatus: candidate.phoneStatus ?? existing.phoneStatus } : {}),
+            ...(candidate.linkedinUrl && !existing.linkedinUrl ? { linkedinUrl: candidate.linkedinUrl } : {}),
+            ...(candidate.facebookUrl && !existing.facebookUrl ? { facebookUrl: candidate.facebookUrl } : {}),
+            ...(candidate.instagramUrl && !existing.instagramUrl ? { instagramUrl: candidate.instagramUrl } : {}),
+            ...(candidate.youtubeUrl && !existing.youtubeUrl ? { youtubeUrl: candidate.youtubeUrl } : {}),
+            source: existing.source ?? candidate.sourceUrl,
             updatedAt: new Date(),
           }).where(eq(companyContacts.id, existing.id)).returning()
         : await this.db.insert(companyContacts).values({
@@ -124,6 +121,11 @@ export class ContactsService {
 
   private jobKey(companyId: string, organizationId: string, searchExecutionId: string | null) {
     return `contact-discovery-${createHash('sha256').update(`${organizationId}:${companyId}:${searchExecutionId ?? 'direct'}`).digest('hex')}`;
+  }
+
+  private sameStoredValue(current: string | null, incoming: string | null) {
+    if (!current) return Boolean(incoming);
+    return current.trim().toLowerCase() === (incoming ?? '').trim().toLowerCase();
   }
 
   async listForCompany(companyId: string, organizationId: string) {

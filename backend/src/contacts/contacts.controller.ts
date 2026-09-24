@@ -1,14 +1,18 @@
-import { Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpCode, Param, Post, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../auth/auth.decorators';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { ContactsService } from './contacts.service';
+import { ContactQualityService } from './quality/contact-quality.service';
 import { UsageRateLimitGuard } from '../usage/usage-rate-limit.guard';
 
 @Controller()
 @UseGuards(JwtAuthGuard, UsageRateLimitGuard)
 export class ContactsController {
-  constructor(private readonly contactsService: ContactsService) {}
+  constructor(
+    private readonly contactsService: ContactsService,
+    private readonly contactQuality: ContactQualityService,
+  ) {}
 
   @Post('companies/:companyId/contacts/discover')
   async discover(@Param('companyId') companyId: string, @CurrentUser() user: AuthenticatedUser) {
@@ -22,7 +26,18 @@ export class ContactsController {
 
   @Get('companies/:companyId/contacts')
   async list(@Param('companyId') companyId: string, @CurrentUser() user: AuthenticatedUser) {
-    return this.contactsService.listForCompany(companyId, user.organizationId);
+    return this.contactQuality.list(companyId, user.organizationId);
+  }
+
+  @Get('companies/:companyId/contacts/:contactId')
+  async qualityDetail(@Param('companyId') companyId: string, @Param('contactId') contactId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.contactQuality.detail(companyId, contactId, user.organizationId);
+  }
+
+  @Post('companies/:companyId/contacts/:contactId/reverify')
+  @HttpCode(202)
+  async reverify(@Param('companyId') companyId: string, @Param('contactId') contactId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.contactQuality.enqueue(companyId, contactId, user.organizationId);
   }
 
   @Get('companies/:companyId/decision-makers')

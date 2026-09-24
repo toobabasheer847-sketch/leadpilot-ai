@@ -15,10 +15,14 @@ import { CONTACT_DISCOVERY_PROVIDER } from './providers/contact-provider.interfa
 import { WebsiteContactProvider } from './providers/website-contact.provider';
 import { ContactEvidenceService } from './verification/contact-evidence.service';
 import { EnrichmentModule } from '../enrichment/enrichment.module';
+import { ScoringModule } from '../scoring/scoring.module';
+import { ContactQualityQueue } from './quality/contact-quality.queue';
+import { ContactQualityProcessor } from './quality/contact-quality.processor';
+import { ContactQualityService } from './quality/contact-quality.service';
 import { UsageModule } from '../usage/usage.module';
 
 @Module({
-  imports: [ConfigModule, AuthModule, UsersModule, EnrichmentModule, UsageModule, BullModule.registerQueue({ name: 'contact-discovery-queue' })],
+  imports: [ConfigModule, AuthModule, UsersModule, EnrichmentModule, UsageModule, ScoringModule, BullModule.registerQueue({ name: 'contact-discovery-queue' }), BullModule.registerQueue({ name: 'contact-quality-queue' })],
   controllers: [ContactsController],
   providers: [
     ContactsService,
@@ -30,6 +34,9 @@ import { UsageModule } from '../usage/usage.module';
     ContactEvidenceService,
     ContactDiscoveryQueue,
     ContactDiscoveryProcessor,
+    ContactQualityService,
+    ContactQualityQueue,
+    ContactQualityProcessor,
     {
       provide: CONTACT_DISCOVERY_PROVIDER,
       useExisting: WebsiteContactProvider,
