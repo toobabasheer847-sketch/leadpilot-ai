@@ -123,7 +123,7 @@ export class ContactsService {
   }
 
   private jobKey(companyId: string, organizationId: string, searchExecutionId: string | null) {
-    return `contact-discovery:${createHash('sha256').update(`${organizationId}:${companyId}:${searchExecutionId ?? 'direct'}`).digest('hex')}`;
+    return `contact-discovery-${createHash('sha256').update(`${organizationId}:${companyId}:${searchExecutionId ?? 'direct'}`).digest('hex')}`;
   }
 
   async listForCompany(companyId: string, organizationId: string) {

@@ -15,7 +15,7 @@ export class DeduplicationQueue {
 
   enqueue(data: DeduplicationJobData): Promise<Job<DeduplicationJobData>> {
     return this.queue.add('LEAD_DEDUPLICATION', { ...data, correlationId: this.context.get()?.correlationId }, {
-      jobId: `${data.organizationId}:${data.entityType}:${data.entityId}`,
+      jobId: `${data.organizationId}-${data.entityType}-${data.entityId}`,
       attempts: 3,
       backoff: { type: 'exponential', delay: 2000 },
       removeOnComplete: true,

@@ -14,5 +14,6 @@ import { UsageModule } from '../usage/usage.module';
   imports: [AuthModule, UsersModule, OrganizationsModule, SourcesModule, UsageModule],
   controllers: [SearchController],
   providers: [SearchService, SearchPlanParser, SearchConfigurationRepository, SearchExecutionRepository],
+  exports: [SearchService],
 })
 export class SearchModule {}

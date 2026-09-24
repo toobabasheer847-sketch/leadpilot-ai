@@ -25,6 +25,7 @@ import { ExportsModule } from './exports/exports.module';
 import { UsageModule } from './usage/usage.module';
 import { ObservabilityModule } from './common/observability/observability.module';
 import { QualificationModule } from './qualification/qualification.module';
+import { PipelineModule } from './pipeline/pipeline.module';
 
 @Module({
   imports: [
@@ -66,6 +67,7 @@ import { QualificationModule } from './qualification/qualification.module';
     ExportsModule,
     UsageModule,
     QualificationModule,
+    PipelineModule,
   ],
   controllers: [AppController],
   providers: [

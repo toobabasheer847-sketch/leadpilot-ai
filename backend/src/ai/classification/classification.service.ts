@@ -46,7 +46,7 @@ export class ClassificationService {
       organizationId,
       searchExecutionId,
       criteria,
-      idempotencyKey: force ? `${idempotencyKey}:${Date.now()}` : idempotencyKey,
+      idempotencyKey: force ? `${idempotencyKey}-${Date.now()}` : idempotencyKey,
     });
     await this.audit(organizationId, companyId, 'AI_CLASSIFICATION_STARTED', { jobId: job.id });
     return { status: 'QUEUED' as const, jobId: job.id };

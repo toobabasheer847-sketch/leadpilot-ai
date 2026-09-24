@@ -27,6 +27,7 @@ export class ExportFormatService {
     const location = this.record(company.location);
     const classification = this.record(lead.classification);
     const score = this.record(lead.score);
+    const qualification = this.record(lead.qualification);
     const mapping: Record<ExportField, unknown> = {
       companyName: company.name, website: company.website, domain: company.domain, companyPhone: company.phone, companyEmail: company.email,
       address: location.address, city: location.city, state: location.state, zipCode: location.zipCode, country: location.country,
@@ -34,8 +35,8 @@ export class ExportFormatService {
       linkedin: contact.linkedin, facebook: contact.facebook, instagram: contact.instagram,
       investorType: company.investorType, investmentStrategy: company.investmentStrategy, propertyType: this.stringify(company.propertyTypes), marketsServed: this.stringify(company.marketsServed), companySize: company.companySize,
       classification: classification.decision, classificationConfidence: classification.confidence, score: score.value, scoreBand: score.band,
-      verificationStatus: this.record(lead.verification).status, evidence: this.stringify(lead.evidence), sourceUrls: this.stringify(lead.sourceUrls), duplicateStatus: this.record(lead.duplicate).status,
-      createdAt: lead.createdAt, updatedAt: lead.updatedAt, lastVerifiedAt: company.lastVerifiedAt,
+      qualificationStatus: qualification.status, verificationStatus: this.record(lead.verification).status, evidence: this.stringify(lead.evidence), sourceUrls: this.stringify(lead.sourceUrls), duplicateStatus: this.record(lead.duplicate).status,
+      createdAt: lead.createdAt, updatedAt: lead.updatedAt, lastVerifiedAt: lead.lastVerifiedAt ?? company.lastVerifiedAt,
     };
     return mapping[field] ?? null;
   }

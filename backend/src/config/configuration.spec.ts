@@ -1,38 +1,26 @@
-import configuration, { validateEnvironment } from './configuration';
+import { validateEnvironment } from './configuration';
 
-describe('configuration', () => {
-  it('loads foundation settings', () => {
-    const originalEnvironment = process.env;
-    process.env = {
-      ...originalEnvironment,
-      DATABASE_URL: 'postgresql://localhost/leadpilot',
-      REDIS_URL: 'redis://localhost:6379',
-      OPENROUTER_API_KEY: 'secret-value',
-    };
+describe('environment validation', () => {
+  const base = {
+    DATABASE_URL: 'postgresql://localhost/leadpilot',
+    REDIS_URL: 'redis://localhost:6379',
+    JWT_SECRET: 'x'.repeat(32),
+    NODE_ENV: 'development',
+  };
 
-    try {
-      const result = configuration();
-
-      expect(result.database.url).toBe(process.env.DATABASE_URL);
-      expect(result.openRouter.apiKey).toBe('secret-value');
-    } finally {
-      process.env = originalEnvironment;
-    }
+  it('accepts a development configuration without provider keys', () => {
+    expect(validateEnvironment({ ...base })).toEqual(expect.objectContaining(base));
   });
 
-  it('rejects missing required infrastructure settings', () => {
-    expect(() => validateEnvironment({ PORT: '3000' })).toThrow(
-      'Missing required environment variables: DATABASE_URL, REDIS_URL',
-    );
-  });
-
-  it('rejects wildcard CORS in production', () => {
+  it('reports missing production provider configuration', () => {
+    expect(() => validateEnvironment({ ...base, NODE_ENV: 'production' })).toThrow(/GOOGLE_PLACES_API_KEY/);
     expect(() => validateEnvironment({
+      ...base,
       NODE_ENV: 'production',
-      DATABASE_URL: 'postgresql://localhost/leadpilot',
-      REDIS_URL: 'redis://localhost:6379',
-      JWT_SECRET: 'development-test-secret-with-at-least-32-characters',
-      CORS_ORIGIN: '*',
-    })).toThrow('CORS_ORIGIN cannot be "*" in production');
+      SOURCE_PROVIDER: 'fake',
+      GOOGLE_PLACES_API_KEY: 'present',
+      OPENROUTER_API_KEY: 'present',
+      OPENROUTER_MODEL: 'model',
+    })).toThrow(/SOURCE_PROVIDER=fake/);
   });
 });

@@ -446,6 +446,28 @@ export const duplicateGroups = pgTable('duplicate_groups', {
   index('duplicate_groups_canonical_idx').on(table.canonicalEntityId),
 ]);
 
+export const pipelineExecutions = pgTable('pipeline_executions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'restrict' }),
+  searchId: uuid('search_id').notNull().references(() => searchConfigurations.id, { onDelete: 'restrict' }),
+  searchExecutionId: uuid('search_execution_id').references(() => searchExecutions.id, { onDelete: 'set null' }),
+  status: varchar('status', { length: 50 }).default('QUEUED').notNull(),
+  currentStage: varchar('current_stage', { length: 50 }).notNull(),
+  stageProgress: jsonb('stage_progress').notNull().default({}),
+  startedAt: timestamp('started_at', { withTimezone: true }),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  failedAt: timestamp('failed_at', { withTimezone: true }),
+  errorCode: varchar('error_code', { length: 50 }),
+  errorMessage: text('error_message'),
+  ...timestamps,
+}, (table) => [
+  index('pipeline_executions_org_idx').on(table.organizationId),
+  index('pipeline_executions_search_idx').on(table.searchId),
+  index('pipeline_executions_execution_idx').on(table.searchExecutionId),
+  index('pipeline_executions_status_idx').on(table.status),
+  uniqueIndex('pipeline_executions_active_search_idx').on(table.organizationId, table.searchId).where(sql`${table.status} in ('QUEUED', 'RUNNING')`),
+]);
+
 export const pipelineJobs = pgTable('pipeline_jobs', {
   id: uuid('id').defaultRandom().primaryKey(),
   searchExecutionId: uuid('search_execution_id').references(() => searchExecutions.id, { onDelete: 'set null' }),
@@ -562,6 +584,7 @@ export const leadQualificationsRelations = relations(leadQualifications, ({ one,
 export const qualificationReasonsRelations = relations(qualificationReasons, ({ one }) => ({ qualification: one(leadQualifications, { fields: [qualificationReasons.qualificationId], references: [leadQualifications.id] }), organization: one(organizations, { fields: [qualificationReasons.organizationId], references: [organizations.id] }) }));
 export const qualificationEvidenceRelations = relations(qualificationEvidence, ({ one }) => ({ qualification: one(leadQualifications, { fields: [qualificationEvidence.qualificationId], references: [leadQualifications.id] }), organization: one(organizations, { fields: [qualificationEvidence.organizationId], references: [organizations.id] }), evidence: one(leadEvidence, { fields: [qualificationEvidence.evidenceId], references: [leadEvidence.id] }) }));
 export const leadDuplicatesRelations = relations(leadDuplicates, ({ one }) => ({ company: one(companies, { fields: [leadDuplicates.companyId], references: [companies.id], relationName: 'companyDuplicates' }), duplicateCompany: one(companies, { fields: [leadDuplicates.duplicateCompanyId], references: [companies.id], relationName: 'duplicateCompany' }) }));
+export const pipelineExecutionsRelations = relations(pipelineExecutions, ({ one }) => ({ organization: one(organizations, { fields: [pipelineExecutions.organizationId], references: [organizations.id] }), search: one(searchConfigurations, { fields: [pipelineExecutions.searchId], references: [searchConfigurations.id] }), execution: one(searchExecutions, { fields: [pipelineExecutions.searchExecutionId], references: [searchExecutions.id] }) }));
 export const pipelineJobsRelations = relations(pipelineJobs, ({ one }) => ({ execution: one(searchExecutions, { fields: [pipelineJobs.searchExecutionId], references: [searchExecutions.id] }) }));
 export const exportsRelations = relations(exportsTable, ({ one }) => ({ organization: one(organizations, { fields: [exportsTable.organizationId], references: [organizations.id] }), requestedBy: one(users, { fields: [exportsTable.requestedByUserId], references: [users.id] }), execution: one(searchExecutions, { fields: [exportsTable.searchExecutionId], references: [searchExecutions.id] }) }));
 export const usageEventsRelations = relations(usageEvents, ({ one }) => ({ organization: one(organizations, { fields: [usageEvents.organizationId], references: [organizations.id] }), user: one(users, { fields: [usageEvents.userId], references: [users.id] }) }));

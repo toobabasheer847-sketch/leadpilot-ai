@@ -128,7 +128,7 @@ export class EnrichmentService {
   }
 
   private jobKey(companyId: string, organizationId: string, searchExecutionId: string | null) {
-    return `company-enrichment:${createHash('sha256').update(`${organizationId}:${companyId}:${searchExecutionId ?? 'direct'}`).digest('hex')}`;
+    return `company-enrichment-${createHash('sha256').update(`${organizationId}:${companyId}:${searchExecutionId ?? 'direct'}`).digest('hex')}`;
   }
 
   async getCompany(companyId: string, organizationId: string) {

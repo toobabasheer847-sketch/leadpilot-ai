@@ -28,6 +28,14 @@ describe('SearchPlanParser', () => {
     });
   });
 
+  it('reads company size and decision-maker roles from alternate phrasing', () => {
+    const plan = parser.parse('Find cash home buyers in Texas with company size 1-50 and identify their CEO, founder, president, or owner.');
+    expect(plan.leadTypes).toContain('cash_home_buyer');
+    expect(plan.locations).toEqual([{ country: 'US', state: 'Texas' }]);
+    expect(plan.companySize).toEqual({ min: 1, max: 50 });
+    expect(plan.requiredRoles).toEqual(expect.arrayContaining(['CEO', 'Founder', 'President', 'Owner']));
+  });
+
   it('does not invent criteria for an unsupported prompt', () => {
     const plan = parser.parse('Find excellent businesses with strong reputations.');
     expect(plan.industry).toEqual([]);

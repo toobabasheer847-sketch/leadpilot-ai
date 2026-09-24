@@ -145,6 +145,19 @@ export function validateEnvironment(config: Record<string, unknown>) {
     throw new Error('CORS_ORIGIN cannot be "*" in production');
   }
 
+  if (nodeEnv === 'production') {
+    const sourceProvider = typeof config.SOURCE_PROVIDER === 'string' ? config.SOURCE_PROVIDER : 'google_places';
+    if (sourceProvider === 'fake' || sourceProvider === 'fake_source') {
+      throw new Error('SOURCE_PROVIDER=fake is not allowed in production');
+    }
+    if (sourceProvider === 'google_places' && !config.GOOGLE_PLACES_API_KEY) {
+      throw new Error('GOOGLE_PLACES_API_KEY is required when SOURCE_PROVIDER=google_places in production');
+    }
+    if (!config.OPENROUTER_API_KEY || !config.OPENROUTER_MODEL) {
+      throw new Error('OPENROUTER_API_KEY and OPENROUTER_MODEL are required in production');
+    }
+  }
+
   if (typeof config.JWT_SECRET !== 'string' || config.JWT_SECRET.length < 32) {
     throw new Error('JWT_SECRET must be at least 32 characters long');
   }

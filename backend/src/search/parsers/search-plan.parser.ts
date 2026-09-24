@@ -92,8 +92,8 @@ export class SearchPlanParser {
   }
 
   private parseCompanySize(prompt: string) {
-    const range = prompt.match(/\b(\d+)\s*(?:to|-|–)\s*(\d+)\s*employees?\b/i);
-    if (range) {
+    const range = prompt.match(/\b(?:company\s+size\s+)?(\d+)\s*(?:to|-|–)\s*(\d+)(?:\s*employees?)?\b/i);
+    if (range && (/\bemployees?\b/i.test(prompt) || /\bcompany\s+size\b/i.test(prompt))) {
       return { min: Number(range[1]), max: Number(range[2]) };
     }
 

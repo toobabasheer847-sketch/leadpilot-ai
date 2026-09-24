@@ -12,7 +12,7 @@ export class LeadResearchQueue {
 
   enqueueSystemTest(jobKey: string, data: Record<string, unknown> = {}): Promise<Job> {
     return this.queue.add('system-test', { ...data, correlationId: this.context.get()?.correlationId }, {
-      jobId: `system-test:${jobKey}`,
+      jobId: `system-test-${jobKey}`,
     });
   }
 }
