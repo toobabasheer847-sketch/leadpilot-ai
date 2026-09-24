@@ -15,7 +15,7 @@ export class ListLeadsDto {
   @IsOptional() @Type(() => Number) @Min(0) @Max(100) minScore?: number;
   @IsOptional() @Type(() => Number) @Min(0) @Max(100) maxScore?: number;
   @IsOptional() @IsIn(['LOW', 'MEDIUM', 'HIGH', 'VERY_HIGH']) scoreBand?: string;
-  @IsOptional() @IsIn(['VERIFIED', 'SUPPORTED', 'UNVERIFIED', 'NOT_FOUND', 'CONFLICT', 'INVALID']) verificationStatus?: string;
+  @IsOptional() @IsIn(['VERIFIED', 'SUPPORTED', 'UNVERIFIED', 'NOT_FOUND', 'CONFLICT', 'NEEDS_REVIEW', 'INVALID', 'PARTIALLY_VERIFIED']) verificationStatus?: string;
   @IsOptional() @IsString() search?: string;
   @IsOptional() @IsString() companyName?: string;
   @IsOptional() @IsString() website?: string;

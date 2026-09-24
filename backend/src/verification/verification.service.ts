@@ -4,7 +4,7 @@ import { and, desc, eq, isNull, like, max } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { DRIZZLE } from '../database/database.constants';
 import type { Database } from '../database/database.types';
-import { auditLogs, companies, companyContacts, companyLocations, companySocialProfiles, leadEvidence, leadVerifications, sourceRecords } from '../database/schema/schema';
+import { auditLogs, companies, companyContacts, companyLocations, companySocialProfiles, leadEvidence, leadVerifications, sourceRecords, verificationConflicts } from '../database/schema/schema';
 import { VerificationQueue } from './verification.queue';
 import {
   EMAIL_VERIFICATION_PROVIDER,
@@ -13,9 +13,11 @@ import {
   WEBSITE_VERIFICATION_PROVIDER,
 } from './providers/verification-provider.interface';
 import type { VerificationProvider } from './providers/verification-provider.interface';
-import type { VerificationEvidence, VerificationInput, VerificationJobData, VerificationResult, VerificationSignal } from './types/verification.types';
+import type { VerificationConflictLog, VerificationEvidence, VerificationInput, VerificationJobData, VerificationResult, VerificationSignal } from './types/verification.types';
 import { normalizeState } from './utils/location-normalizer';
 import { UsageService } from '../usage/usage.service';
+import { ConflictEngineService } from './conflict/conflict-engine.service';
+import { CrossSourceEntityMatcherService } from './matching/cross-source-entity-matcher.service';
 
 @Injectable()
 export class VerificationService {
@@ -28,6 +30,8 @@ export class VerificationService {
     @Inject(SOCIAL_VERIFICATION_PROVIDER) private readonly socialProvider: VerificationProvider,
     private readonly usage: UsageService,
     private readonly config: ConfigService,
+    private readonly conflictEngine: ConflictEngineService,
+    private readonly entityMatcher: CrossSourceEntityMatcherService,
   ) {}
 
   async enqueueCompany(companyId: string, organizationId: string, force = false, searchExecutionId: string | null = null) {
@@ -59,15 +63,22 @@ export class VerificationService {
     const contacts = await this.db.select().from(companyContacts).where(eq(companyContacts.companyId, companyId));
     const verifications = await this.db.select().from(leadVerifications).where(and(eq(leadVerifications.companyId, companyId), eq(leadVerifications.organizationId, organizationId))).orderBy(desc(leadVerifications.checkedAt));
     const evidence = await this.db.select().from(leadEvidence).where(eq(leadEvidence.companyId, companyId));
-    const sources = await this.db.select().from(sourceRecords).where(eq(sourceRecords.companyId, companyId));
+    const sources = await this.db.select().from(sourceRecords).where(and(eq(sourceRecords.companyId, companyId), eq(sourceRecords.organizationId, organizationId)));
+    const conflicts = await this.db.select().from(verificationConflicts).where(and(eq(verificationConflicts.companyId, companyId), eq(verificationConflicts.organizationId, organizationId), eq(verificationConflicts.requiresReview, true))).orderBy(desc(verificationConflicts.createdAt));
+    const fields = this.latestFieldBreakdown(verifications);
+    const now = new Date();
     return {
       company,
       people: contacts,
       verificationStatus: this.aggregateStatus(verifications.map((row) => row.status)),
+      fields,
       evidenceCount: evidence.length,
       sourceCount: new Set([...evidence.map((row) => row.canonicalUrl ?? row.sourceUrl), ...sources.map((row) => row.sourceUrl)]).size,
-      conflicts: verifications.filter((row) => row.status === 'CONFLICT'),
-      lastVerifiedAt: verifications[0]?.checkedAt ?? null,
+      conflicts,
+      requiresReview: conflicts.length > 0 || verifications.some((row) => row.status === 'CONFLICT' || row.status === 'NEEDS_REVIEW'),
+      lastVerifiedAt: company.lastVerifiedAt ?? verifications[0]?.checkedAt ?? null,
+      nextReverificationAt: company.nextReverificationAt ?? null,
+      reVerificationDue: company.nextReverificationAt ? company.nextReverificationAt <= now : false,
     };
   }
 
@@ -84,6 +95,15 @@ export class VerificationService {
 
   private async enqueue(companyId: string, contactId: string | null, organizationId: string, force: boolean, searchExecutionId: string | null) {
     await this.usage.checkRequestRate(organizationId, undefined, 'VERIFICATION');
+    const company = await this.findCompany(companyId, organizationId);
+    if (!force && company.nextReverificationAt && company.nextReverificationAt > new Date()) {
+      const [latestEvidence] = await this.db.select({ retrievedAt: max(leadEvidence.evidenceTimestamp) }).from(leadEvidence).where(and(eq(leadEvidence.companyId, companyId), contactId ? eq(leadEvidence.contactId, contactId) : isNull(leadEvidence.contactId)));
+      const version = latestEvidence?.retrievedAt?.toISOString() ?? 'empty';
+      const baseKey = this.buildKey(organizationId, companyId, contactId, version);
+      const [existing] = await this.db.select({ id: leadVerifications.id }).from(leadVerifications)
+        .where(and(eq(leadVerifications.organizationId, organizationId), like(leadVerifications.idempotencyKey, `${baseKey}:%`))).limit(1);
+      if (existing) return { status: 'EXISTS' as const, verificationId: existing.id, nextReverificationAt: company.nextReverificationAt };
+    }
     const [latestEvidence] = await this.db.select({ retrievedAt: max(leadEvidence.evidenceTimestamp) }).from(leadEvidence).where(and(eq(leadEvidence.companyId, companyId), contactId ? eq(leadEvidence.contactId, contactId) : isNull(leadEvidence.contactId)));
     const version = force ? Date.now().toString() : latestEvidence?.retrievedAt?.toISOString() ?? 'empty';
     const baseKey = this.buildKey(organizationId, companyId, contactId, version);
@@ -93,7 +113,7 @@ export class VerificationService {
       if (existing) return { status: 'EXISTS' as const, verificationId: existing.id };
     }
     const job = await this.queue.enqueue({ companyId, contactId, organizationId, searchExecutionId, force, idempotencyKey: baseKey });
-    await this.audit(organizationId, companyId, 'LEAD_VERIFICATION_STARTED', { jobId: job.id, contactId });
+    await this.audit(organizationId, companyId, 'MULTI_SOURCE_VERIFICATION_STARTED', { jobId: job.id, contactId });
     return { status: 'QUEUED' as const, jobId: job.id };
   }
 
@@ -101,16 +121,19 @@ export class VerificationService {
     const company = await this.findCompany(data.companyId, data.organizationId);
     const contact = data.contactId ? await this.findContact(data.contactId, data.organizationId) : null;
     const evidence = await this.loadEvidence(company.id, contact?.id ?? null);
+    const entityMatch = data.contactId ? null : await this.matchCrossSourceEntities(company.id, data.organizationId);
     const rows = data.contactId
       ? await this.verifyContactFields(company, contact!, evidence, data)
-      : await this.verifyCompanyFields(company, evidence, data);
-    await this.usage.recordUsage({ organizationId: data.organizationId, operation: 'VERIFICATION', provider: 'stored-evidence', resourceType: data.contactId ? 'contact' : 'company', resourceId: data.contactId ?? data.companyId, units: Math.max(1, rows.length), status: 'COMPLETED', metadata: { conflicts: rows.filter((row) => row.status === 'CONFLICT').length } });
+      : await this.verifyCompanyFields(company, evidence, data, entityMatch?.conflicts ?? []);
+    const conflictCount = rows.filter((row) => row.status === 'CONFLICT' || row.status === 'NEEDS_REVIEW').length + (entityMatch?.conflicts.length ?? 0);
+    await this.usage.recordUsage({ organizationId: data.organizationId, operation: 'VERIFICATION', provider: 'stored-evidence', resourceType: data.contactId ? 'contact' : 'company', resourceId: data.contactId ?? data.companyId, units: Math.max(1, rows.length), status: 'COMPLETED', metadata: { conflicts: conflictCount } });
     if (contact) await this.updateContactQuality(contact.id, rows.map((row) => ({ field: row.field, value: row.fieldValue, status: row.status })));
-    await this.audit(data.organizationId, company.id, 'LEAD_VERIFICATION_COMPLETED', { contactId: data.contactId, count: rows.length });
+    else await this.updateCompanyQuality(company.id, rows.map((row) => row.status), entityMatch);
+    await this.audit(data.organizationId, company.id, 'MULTI_SOURCE_VERIFICATION_COMPLETED', { contactId: data.contactId, count: rows.length, conflicts: conflictCount, sameEntity: entityMatch?.sameEntity ?? null });
     return rows;
   }
 
-  private async verifyCompanyFields(company: typeof companies.$inferSelect, evidence: VerificationEvidence[], data: VerificationJobData) {
+  private async verifyCompanyFields(company: typeof companies.$inferSelect, evidence: VerificationEvidence[], data: VerificationJobData, entityConflicts: VerificationConflictLog[]) {
     const [location] = await this.db.select().from(companyLocations).where(eq(companyLocations.companyId, company.id)).limit(1);
     const fields: Array<{ field: string; value: string | null; provider?: VerificationProvider }> = [
       { field: 'companyName', value: company.name },
@@ -129,14 +152,36 @@ export class VerificationService {
     ];
     const socialProfiles = await this.db.select().from(companySocialProfiles).where(eq(companySocialProfiles.companyId, company.id));
     for (const profile of socialProfiles) fields.push({ field: profile.platform, value: profile.profileUrl, provider: this.socialProvider });
-    return this.persistResults(data, await this.evaluateFields(fields, evidence));
+    const results = await this.evaluateFields(fields, evidence);
+    for (const conflict of entityConflicts) {
+      await this.persistConflict(data, conflict);
+      const existing = results.find((row) => row.field === conflict.fieldName);
+      if (existing && existing.status !== 'NEEDS_REVIEW' && existing.status !== 'CONFLICT') {
+        existing.status = 'NEEDS_REVIEW';
+        existing.verificationType = 'CROSS_SOURCE_MATCH';
+        existing.conflict = conflict;
+        existing.metadata = { ...existing.metadata, requiresReview: true, conflict };
+      } else if (!existing) {
+        results.push({
+          field: conflict.fieldName,
+          value: (company[conflict.fieldName as keyof typeof company] as string | null | undefined) ?? conflict.valueA,
+          status: 'NEEDS_REVIEW',
+          verificationType: 'CROSS_SOURCE_MATCH',
+          provider: 'stored-evidence',
+          conflict,
+          metadata: { requiresReview: true, conflict },
+          checkedAt: new Date().toISOString(),
+        });
+      }
+    }
+    return this.persistResults(data, results);
   }
 
   private async verifyContactFields(company: typeof companies.$inferSelect, contact: typeof companyContacts.$inferSelect, evidence: VerificationEvidence[], data: VerificationJobData) {
     const fields: Array<{ field: string; value: string | null; provider?: VerificationProvider }> = [
       { field: 'fullName', value: contact.fullName },
       { field: 'title', value: contact.title },
-      { field: 'companyRelationship', value: company.name },
+      { field: 'companyRelationship', value: contact.companyRelationship ?? company.name },
       { field: 'email', value: contact.email, provider: this.emailProvider },
       { field: 'phone', value: contact.phone, provider: this.phoneProvider },
       { field: 'linkedin', value: contact.linkedinUrl, provider: this.socialProvider },
@@ -144,7 +189,6 @@ export class VerificationService {
       { field: 'instagram', value: contact.instagramUrl, provider: this.socialProvider },
       { field: 'youtube', value: contact.youtubeUrl, provider: this.socialProvider },
       { field: 'normalizedRole', value: contact.normalizedRole },
-      { field: 'companyRelationship', value: contact.companyRelationship },
     ];
     return this.persistResults(data, await this.evaluateFields(fields, evidence));
   }
@@ -153,9 +197,9 @@ export class VerificationService {
     const results: VerificationResult[] = [];
     for (const field of fields) {
       const input: VerificationInput = { field: field.field, value: field.value, evidence };
-      const evidenceSignal = this.localEvidenceSignal(input);
+      const evidenceSignal = this.conflictEngine.evaluateField(input, (item) => this.sourcePriority(item));
       const providerSignal = field.provider ? await field.provider.verify(input) : evidenceSignal;
-      const signal = evidenceSignal.status === 'CONFLICT' || evidenceSignal.status === 'VERIFIED' || (evidenceSignal.status === 'SUPPORTED' && providerSignal.status === 'UNVERIFIED')
+      const signal: VerificationSignal = evidenceSignal.status === 'NEEDS_REVIEW' || evidenceSignal.status === 'CONFLICT' || evidenceSignal.status === 'VERIFIED' || (evidenceSignal.status === 'SUPPORTED' && providerSignal.status === 'UNVERIFIED')
         ? { ...evidenceSignal, provider: providerSignal.provider }
         : providerSignal;
       results.push({ field: field.field, value: field.value, ...signal, checkedAt: new Date().toISOString() });
@@ -163,60 +207,11 @@ export class VerificationService {
     return results;
   }
 
-  private localEvidenceSignal(input: VerificationInput): VerificationSignal {
-    if (!input.value) return { status: 'NOT_FOUND', verificationType: 'SOURCE_EVIDENCE', provider: 'stored-evidence' };
-    const fieldEvidence = input.evidence.filter((item) => this.metadata(item).field === input.field);
-    const independentSources = new Map<string, Set<string>>();
-    for (const item of fieldEvidence) {
-      const value = this.evidenceValue(item);
-      if (!value) continue;
-      const source = this.sourceKey(item);
-      const values = independentSources.get(this.normalize(input.field, value)) ?? new Set<string>();
-      values.add(source);
-      independentSources.set(this.normalize(input.field, value), values);
-    }
-    const fieldValues = new Set(independentSources.keys());
-    if (fieldValues.size > 1) {
-      return {
-        status: 'CONFLICT',
-        verificationType: 'CROSS_SOURCE_MATCH',
-        provider: 'stored-evidence',
-        metadata: { evidenceIds: fieldEvidence.map((item) => item.id), values: [...fieldValues], sourceCount: independentSources.size },
-      };
-    }
-    const matches = input.evidence.filter((item) => this.evidenceMatches(item, input.field, input.value!));
-    const distinctValues = new Set(matches.map((item) => this.evidenceValue(item) ?? input.value));
-    if (distinctValues.size > 1) return { status: 'CONFLICT', verificationType: 'CROSS_SOURCE_MATCH', provider: 'stored-evidence', metadata: { evidenceIds: matches.map((item) => item.id) } };
-    const matchingValue = this.normalize(input.field, input.value);
-    const sourceCount = independentSources.get(matchingValue)?.size ?? 0;
-    if (matches[0]) return { status: sourceCount >= 2 ? 'VERIFIED' : 'SUPPORTED', verificationType: 'SOURCE_EVIDENCE', provider: 'stored-evidence', evidenceId: matches[0].id, confidence: sourceCount >= 2 ? 0.9 : 0.75, metadata: { sourceCount, sourcePriority: this.sourcePriority(matches[0]) } };
-    return { status: 'UNVERIFIED', verificationType: 'SOURCE_EVIDENCE', provider: 'stored-evidence' };
-  }
-
-  private evidenceMatches(item: VerificationEvidence, field: string, value: string) {
-    const metadata = this.metadata(item);
-    if (metadata.field === field && typeof metadata.value === 'string') return this.normalize(field, metadata.value) === this.normalize(field, value);
-    if (field === 'email') return item.evidenceText.toLowerCase().includes(value.toLowerCase());
-    if (field === 'phone') return item.evidenceText.replace(/\D/g, '').includes(value.replace(/\D/g, ''));
-    return item.evidenceText.toLowerCase().includes(value.toLowerCase());
-  }
-
-  private evidenceValue(item: VerificationEvidence) {
-    const value = this.metadata(item).value;
-    return typeof value === 'string' ? value : null;
-  }
-
-  private normalize(field: string, value: string) {
-    return field === 'email' ? value.toLowerCase().trim() : field === 'phone' ? value.replace(/\D/g, '') : value.toLowerCase().trim();
-  }
-
-  private metadata(item: VerificationEvidence) {
-    return typeof item.metadata === 'object' && item.metadata !== null ? item.metadata as Record<string, unknown> : {};
-  }
-
   private async persistResults(data: VerificationJobData, results: VerificationResult[]) {
     const stored = [];
     for (const result of results) {
+      if (result.conflict) await this.persistConflict(data, result.conflict);
+      const status = result.status === 'NEEDS_REVIEW' ? 'NEEDS_REVIEW' : result.status;
       const idempotencyKey = `${data.idempotencyKey}:${result.field}`;
       const [row] = await this.db.insert(leadVerifications).values({
         companyId: data.companyId,
@@ -225,23 +220,57 @@ export class VerificationService {
         fieldName: result.field,
         field: result.field,
         fieldValue: result.value,
-        verificationStatus: result.status,
-        status: result.status,
+        verificationStatus: status === 'NEEDS_REVIEW' ? 'CONFLICT' : status,
+        status,
         verificationType: result.verificationType,
         provider: result.provider,
         evidenceId: result.evidenceId ?? null,
         confidence: result.confidence?.toFixed(4) ?? null,
         checkedAt: new Date(result.checkedAt),
-        metadata: result.metadata ?? null,
+        metadata: {
+          ...result.metadata,
+          requiresReview: status === 'NEEDS_REVIEW' || status === 'CONFLICT',
+          provenance: result.provenance ?? null,
+        },
         idempotencyKey,
-        verificationSource: result.provider,
-        verificationUrl: null,
-        verifiedAt: result.status === 'VERIFIED' || result.status === 'SUPPORTED' ? new Date(result.checkedAt) : null,
-        notes: null,
+        verificationSource: result.provenance?.sourceType ?? result.provider,
+        verificationUrl: result.provenance?.sourceUrl ?? null,
+        verifiedAt: status === 'VERIFIED' || status === 'SUPPORTED' ? new Date(result.checkedAt) : null,
+        notes: result.provenance?.evidenceExcerpt ?? null,
       }).onConflictDoNothing({ target: [leadVerifications.organizationId, leadVerifications.idempotencyKey] }).returning();
       if (row) stored.push(row);
     }
     return stored;
+  }
+
+  private async persistConflict(data: VerificationJobData, conflict: VerificationConflictLog) {
+    const idempotencyKey = this.conflictEngine.conflictIdempotencyKey(data.organizationId, data.companyId, data.contactId, conflict);
+    await this.db.insert(verificationConflicts).values({
+      organizationId: data.organizationId,
+      companyId: data.companyId,
+      contactId: data.contactId,
+      fieldName: conflict.fieldName,
+      valueA: conflict.valueA,
+      valueB: conflict.valueB,
+      sourceTypeA: conflict.sourceTypeA,
+      sourceUrlA: conflict.sourceUrlA,
+      retrievedAtA: conflict.retrievedAtA,
+      evidenceExcerptA: conflict.evidenceExcerptA,
+      sourceTypeB: conflict.sourceTypeB,
+      sourceUrlB: conflict.sourceUrlB,
+      retrievedAtB: conflict.retrievedAtB,
+      evidenceExcerptB: conflict.evidenceExcerptB,
+      status: 'CONFLICT',
+      requiresReview: true,
+      resolutionStatus: 'OPEN',
+      idempotencyKey,
+    }).onConflictDoNothing({ target: [verificationConflicts.organizationId, verificationConflicts.idempotencyKey] });
+  }
+
+  private async matchCrossSourceEntities(companyId: string, organizationId: string) {
+    const sources = await this.db.select().from(sourceRecords).where(and(eq(sourceRecords.companyId, companyId), eq(sourceRecords.organizationId, organizationId)));
+    const claims = sources.map((source) => this.entityMatcher.extractClaim(source));
+    return this.entityMatcher.match(claims);
   }
 
   private async loadEvidence(companyId: string, contactId: string | null) {
@@ -279,10 +308,6 @@ export class VerificationService {
     return this.db.insert(auditLogs).values({ organizationId, entityId, action, entityType: 'verification', metadata });
   }
 
-  private sourceKey(item: VerificationEvidence) {
-    return `${item.provider ?? item.sourceType ?? 'unknown'}:${item.canonicalUrl ?? item.sourceUrl}`;
-  }
-
   private sourcePriority(item: VerificationEvidence) {
     const priorities = this.config.get<Record<string, unknown>>('verification.sourcePriorities', {});
     const value = priorities[item.provider ?? item.sourceType ?? ''] ?? 0;
@@ -291,20 +316,58 @@ export class VerificationService {
 
   private aggregateStatus(statuses: string[]) {
     if (!statuses.length || statuses.every((status) => status === 'NOT_FOUND')) return 'NOT_FOUND';
-    if (statuses.includes('CONFLICT')) return 'CONFLICT';
+    if (statuses.some((status) => status === 'CONFLICT' || status === 'NEEDS_REVIEW')) return 'NEEDS_REVIEW';
     if (statuses.every((status) => status === 'VERIFIED')) return 'VERIFIED';
     if (statuses.some((status) => status === 'VERIFIED' || status === 'SUPPORTED')) return 'SUPPORTED';
     return 'UNVERIFIED';
   }
 
+  private latestFieldBreakdown(verifications: Array<typeof leadVerifications.$inferSelect>) {
+    const latest = new Map<string, typeof leadVerifications.$inferSelect>();
+    for (const row of verifications) {
+      const key = `${row.contactId ?? 'company'}:${row.fieldName || row.field}`;
+      if (!latest.has(key)) latest.set(key, row);
+    }
+    return [...latest.values()].map((row) => ({
+      fieldName: row.fieldName || row.field,
+      fieldValue: row.fieldValue,
+      status: row.status,
+      verificationStatus: row.verificationStatus,
+      contactId: row.contactId,
+      confidence: row.confidence,
+      checkedAt: row.checkedAt,
+      provenance: {
+        sourceType: row.verificationSource,
+        sourceUrl: row.verificationUrl,
+        retrievedAt: row.verifiedAt,
+        evidenceExcerpt: row.notes,
+      },
+      metadata: row.metadata,
+    }));
+  }
+
+  private async updateCompanyQuality(companyId: string, statuses: string[], entityMatch: { sameEntity: boolean; confidence: number } | null) {
+    const days = this.config.get<number>('verification.reVerifyAfterDays', 30);
+    const now = new Date();
+    const next = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+    const status = this.aggregateStatus(statuses);
+    await this.db.update(companies).set({
+      verificationStatus: status === 'NEEDS_REVIEW' ? 'NEEDS_REVIEW' : status === 'VERIFIED' ? 'VERIFIED' : status === 'SUPPORTED' ? 'PARTIALLY_VERIFIED' : status === 'NOT_FOUND' ? 'NOT_FOUND' : 'UNVERIFIED',
+      lastVerifiedAt: now,
+      nextReverificationAt: next,
+      updatedAt: now,
+    }).where(eq(companies.id, companyId));
+    void entityMatch;
+  }
+
   private async updateContactQuality(contactId: string, rows: Array<{ field: string; value: string | null; status: string }>) {
-    const conflict = rows.some((row) => row.status === 'CONFLICT');
+    const conflict = rows.some((row) => row.status === 'CONFLICT' || row.status === 'NEEDS_REVIEW');
     const coreFields = ['fullName', 'title', 'companyRelationship'];
     const coreVerified = coreFields.every((field) => rows.some((row) => row.field === field && (row.status === 'VERIFIED' || row.status === 'SUPPORTED')));
     const email = rows.find((row) => row.field === 'email');
     const phone = rows.find((row) => row.field === 'phone');
     await this.db.update(companyContacts).set({
-      verificationStatus: conflict ? 'CONFLICT' : coreVerified ? 'VERIFIED' : 'PARTIALLY_VERIFIED',
+      verificationStatus: conflict ? 'NEEDS_REVIEW' : coreVerified ? 'VERIFIED' : 'PARTIALLY_VERIFIED',
       status: conflict ? 'NOT_VERIFIED' : coreVerified ? 'VERIFIED' : 'PARTIALLY_VERIFIED',
       emailStatus: email?.status === 'VERIFIED' ? 'VERIFIED' : email?.status === 'NOT_FOUND' ? 'NOT_FOUND' : email?.value ? 'UNVERIFIED' : 'NOT_FOUND',
       phoneStatus: phone?.status === 'VERIFIED' ? 'VERIFIED' : phone?.status === 'NOT_FOUND' ? 'NOT_FOUND' : phone?.value ? 'UNVERIFIED' : 'NOT_FOUND',

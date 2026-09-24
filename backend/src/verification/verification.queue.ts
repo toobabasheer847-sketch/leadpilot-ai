@@ -9,7 +9,7 @@ export class VerificationQueue {
   constructor(@InjectQueue('lead-verification-queue') private readonly queue: Queue, private readonly context: RequestContextService) {}
 
   enqueue(data: VerificationJobData): Promise<Job<VerificationJobData>> {
-    return this.queue.add('LEAD_VERIFICATION', { ...data, correlationId: this.context.get()?.correlationId }, {
+    return this.queue.add('MULTI_SOURCE_VERIFICATION', { ...data, correlationId: this.context.get()?.correlationId }, {
       jobId: data.idempotencyKey,
       attempts: 3,
       backoff: { type: 'exponential', delay: 2000 },

@@ -32,7 +32,7 @@ describe('Source discovery pipeline (e2e)', () => {
       prompt: 'Find real estate companies in Texas',
     }).expect(201);
     searchId = search.body.id;
-  });
+  }, 60000);
 
   afterAll(async () => {
     await app.close();

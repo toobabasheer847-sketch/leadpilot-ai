@@ -111,11 +111,13 @@ export const companies = pgTable('companies', {
   canonicalCompanyId: uuid('canonical_company_id'),
   verificationStatus: varchar('verification_status', { length: 50 }).default('NOT_VERIFIED').notNull(),
   lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true }),
+  nextReverificationAt: timestamp('next_reverification_at', { withTimezone: true }),
   ...timestamps,
 }, (table) => [
   index('companies_org_idx').on(table.organizationId),
   index('companies_name_idx').on(table.name),
   index('companies_verification_status_idx').on(table.verificationStatus),
+  index('companies_next_reverification_idx').on(table.nextReverificationAt),
   uniqueIndex('companies_org_place_unique').on(table.organizationId, table.googlePlaceId),
 ]);
 
@@ -287,6 +289,36 @@ export const leadVerifications = pgTable('lead_verifications', {
   uniqueIndex('lead_verifications_idempotency_unique').on(table.organizationId, table.idempotencyKey),
 ]);
 
+export const verificationConflicts = pgTable('verification_conflicts', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'restrict' }),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  contactId: uuid('contact_id').references(() => companyContacts.id, { onDelete: 'set null' }),
+  fieldName: varchar('field_name', { length: 100 }).notNull(),
+  valueA: text('value_a').notNull(),
+  valueB: text('value_b').notNull(),
+  sourceTypeA: varchar('source_type_a', { length: 100 }),
+  sourceUrlA: text('source_url_a'),
+  retrievedAtA: timestamp('retrieved_at_a', { withTimezone: true }),
+  evidenceExcerptA: text('evidence_excerpt_a'),
+  sourceTypeB: varchar('source_type_b', { length: 100 }),
+  sourceUrlB: text('source_url_b'),
+  retrievedAtB: timestamp('retrieved_at_b', { withTimezone: true }),
+  evidenceExcerptB: text('evidence_excerpt_b'),
+  status: varchar('status', { length: 50 }).notNull().default('CONFLICT'),
+  requiresReview: boolean('requires_review').notNull().default(true),
+  resolutionStatus: varchar('resolution_status', { length: 50 }).notNull().default('OPEN'),
+  idempotencyKey: varchar('idempotency_key', { length: 512 }).notNull(),
+  ...timestamps,
+}, (table) => [
+  index('verification_conflicts_company_idx').on(table.companyId),
+  index('verification_conflicts_contact_idx').on(table.contactId),
+  index('verification_conflicts_org_idx').on(table.organizationId),
+  index('verification_conflicts_field_idx').on(table.fieldName),
+  index('verification_conflicts_requires_review_idx').on(table.requiresReview),
+  uniqueIndex('verification_conflicts_idempotency_unique').on(table.organizationId, table.idempotencyKey),
+]);
+
 export const leadScores = pgTable('lead_scores', {
   id: uuid('id').defaultRandom().primaryKey(),
   companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
@@ -454,14 +486,15 @@ export const usersRelations = relations(users, ({ many }) => ({ memberships: man
 export const organizationMembersRelations = relations(organizationMembers, ({ one }) => ({ organization: one(organizations, { fields: [organizationMembers.organizationId], references: [organizations.id] }), user: one(users, { fields: [organizationMembers.userId], references: [users.id] }) }));
 export const searchConfigurationsRelations = relations(searchConfigurations, ({ one, many }) => ({ organization: one(organizations, { fields: [searchConfigurations.organizationId], references: [organizations.id] }), createdBy: one(users, { fields: [searchConfigurations.createdByUserId], references: [users.id] }), executions: many(searchExecutions) }));
 export const searchExecutionsRelations = relations(searchExecutions, ({ one, many }) => ({ configuration: one(searchConfigurations, { fields: [searchExecutions.searchConfigurationId], references: [searchConfigurations.id] }), organization: one(organizations, { fields: [searchExecutions.organizationId], references: [organizations.id] }), sourceRecords: many(sourceRecords), pipelineJobs: many(pipelineJobs), exports: many(exportsTable) }));
-export const companiesRelations = relations(companies, ({ one, many }) => ({ organization: one(organizations, { fields: [companies.organizationId], references: [organizations.id] }), locations: many(companyLocations), contacts: many(companyContacts), socialProfiles: many(companySocialProfiles), sourceRecords: many(sourceRecords), evidence: many(leadEvidence), classifications: many(leadClassifications), verifications: many(leadVerifications), duplicates: many(leadDuplicates, { relationName: 'companyDuplicates' }), duplicateOf: many(leadDuplicates, { relationName: 'duplicateCompany' }) }));
+export const companiesRelations = relations(companies, ({ one, many }) => ({ organization: one(organizations, { fields: [companies.organizationId], references: [organizations.id] }), locations: many(companyLocations), contacts: many(companyContacts), socialProfiles: many(companySocialProfiles), sourceRecords: many(sourceRecords), evidence: many(leadEvidence), classifications: many(leadClassifications), verifications: many(leadVerifications), conflicts: many(verificationConflicts), duplicates: many(leadDuplicates, { relationName: 'companyDuplicates' }), duplicateOf: many(leadDuplicates, { relationName: 'duplicateCompany' }) }));
 export const companyLocationsRelations = relations(companyLocations, ({ one }) => ({ company: one(companies, { fields: [companyLocations.companyId], references: [companies.id] }) }));
-export const companyContactsRelations = relations(companyContacts, ({ one, many }) => ({ company: one(companies, { fields: [companyContacts.companyId], references: [companies.id] }), evidence: many(leadEvidence), verifications: many(leadVerifications) }));
+export const companyContactsRelations = relations(companyContacts, ({ one, many }) => ({ company: one(companies, { fields: [companyContacts.companyId], references: [companies.id] }), evidence: many(leadEvidence), verifications: many(leadVerifications), conflicts: many(verificationConflicts) }));
 export const companySocialProfilesRelations = relations(companySocialProfiles, ({ one }) => ({ company: one(companies, { fields: [companySocialProfiles.companyId], references: [companies.id] }) }));
 export const sourceRecordsRelations = relations(sourceRecords, ({ one, many }) => ({ organization: one(organizations, { fields: [sourceRecords.organizationId], references: [organizations.id] }), execution: one(searchExecutions, { fields: [sourceRecords.searchExecutionId], references: [searchExecutions.id] }), company: one(companies, { fields: [sourceRecords.companyId], references: [companies.id] }), evidence: many(leadEvidence) }));
 export const leadEvidenceRelations = relations(leadEvidence, ({ one }) => ({ company: one(companies, { fields: [leadEvidence.companyId], references: [companies.id] }), contact: one(companyContacts, { fields: [leadEvidence.contactId], references: [companyContacts.id] }), sourceRecord: one(sourceRecords, { fields: [leadEvidence.sourceRecordId], references: [sourceRecords.id] }) }));
 export const leadClassificationsRelations = relations(leadClassifications, ({ one }) => ({ company: one(companies, { fields: [leadClassifications.companyId], references: [companies.id] }) }));
 export const leadVerificationsRelations = relations(leadVerifications, ({ one }) => ({ company: one(companies, { fields: [leadVerifications.companyId], references: [companies.id] }), contact: one(companyContacts, { fields: [leadVerifications.contactId], references: [companyContacts.id] }) }));
+export const verificationConflictsRelations = relations(verificationConflicts, ({ one }) => ({ organization: one(organizations, { fields: [verificationConflicts.organizationId], references: [organizations.id] }), company: one(companies, { fields: [verificationConflicts.companyId], references: [companies.id] }), contact: one(companyContacts, { fields: [verificationConflicts.contactId], references: [companyContacts.id] }) }));
 export const leadDuplicatesRelations = relations(leadDuplicates, ({ one }) => ({ company: one(companies, { fields: [leadDuplicates.companyId], references: [companies.id], relationName: 'companyDuplicates' }), duplicateCompany: one(companies, { fields: [leadDuplicates.duplicateCompanyId], references: [companies.id], relationName: 'duplicateCompany' }) }));
 export const pipelineJobsRelations = relations(pipelineJobs, ({ one }) => ({ execution: one(searchExecutions, { fields: [pipelineJobs.searchExecutionId], references: [searchExecutions.id] }) }));
 export const exportsRelations = relations(exportsTable, ({ one }) => ({ organization: one(organizations, { fields: [exportsTable.organizationId], references: [organizations.id] }), requestedBy: one(users, { fields: [exportsTable.requestedByUserId], references: [users.id] }), execution: one(searchExecutions, { fields: [exportsTable.searchExecutionId], references: [searchExecutions.id] }) }));

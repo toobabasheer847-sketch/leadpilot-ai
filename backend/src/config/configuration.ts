@@ -66,6 +66,7 @@ export default () => ({
         return {};
       }
     })(),
+    reVerifyAfterDays: parseInt(process.env.VERIFICATION_REVERIFY_AFTER_DAYS ?? '30', 10),
   },
 
   website: {

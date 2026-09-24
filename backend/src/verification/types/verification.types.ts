@@ -1,4 +1,4 @@
-export type VerificationStatus = 'VERIFIED' | 'SUPPORTED' | 'UNVERIFIED' | 'NOT_FOUND' | 'CONFLICT' | 'INVALID';
+export type VerificationStatus = 'VERIFIED' | 'SUPPORTED' | 'UNVERIFIED' | 'NOT_FOUND' | 'CONFLICT' | 'NEEDS_REVIEW' | 'INVALID';
 export type VerificationType = 'SOURCE_EVIDENCE' | 'SYNTAX_CHECK' | 'DOMAIN_CHECK' | 'PROVIDER_CHECK' | 'CROSS_SOURCE_MATCH' | 'MANUAL_REVIEW';
 
 export interface VerificationEvidence {
@@ -19,6 +19,32 @@ export interface VerificationInput {
   evidence: VerificationEvidence[];
 }
 
+export interface FieldClaim {
+  value: string;
+  sourceType: string;
+  sourceUrl: string;
+  retrievedAt: Date | null;
+  evidenceExcerpt: string;
+  evidenceId?: string;
+  provider?: string | null;
+}
+
+export interface VerificationConflictLog {
+  fieldName: string;
+  valueA: string;
+  valueB: string;
+  sourceTypeA: string;
+  sourceUrlA: string;
+  retrievedAtA: Date | null;
+  evidenceExcerptA: string;
+  sourceTypeB: string;
+  sourceUrlB: string;
+  retrievedAtB: Date | null;
+  evidenceExcerptB: string;
+  status: 'CONFLICT';
+  requiresReview: true;
+}
+
 export interface VerificationSignal {
   status: VerificationStatus;
   verificationType: VerificationType;
@@ -26,6 +52,13 @@ export interface VerificationSignal {
   evidenceId?: string;
   confidence?: number;
   metadata?: Record<string, unknown>;
+  conflict?: VerificationConflictLog;
+  provenance?: {
+    sourceType: string | null;
+    sourceUrl: string | null;
+    retrievedAt: Date | null;
+    evidenceExcerpt: string | null;
+  };
 }
 
 export interface VerificationResult extends VerificationSignal {
@@ -42,4 +75,21 @@ export interface VerificationJobData {
   force: boolean;
   idempotencyKey: string;
   correlationId?: string;
+}
+
+export interface EntityMatchClaim {
+  sourceRecordId: string;
+  sourceType: string;
+  sourceUrl: string;
+  retrievedAt: Date;
+  name: string | null;
+  website: string | null;
+  phone: string | null;
+}
+
+export interface CrossSourceEntityMatchResult {
+  sameEntity: boolean;
+  confidence: number;
+  signals: string[];
+  conflicts: VerificationConflictLog[];
 }

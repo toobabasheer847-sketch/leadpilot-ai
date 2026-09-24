@@ -12,11 +12,22 @@ export class ContactEvidenceService {
   async persistEvidence(companyId: string, contactId: string, organizationId: string, candidate: ContactCandidate) {
     for (const item of candidate.evidence) {
       const idempotencyKey = createHash('sha256').update(JSON.stringify({ companyId, contactId, field: item.field, sourceUrl: item.sourceUrl, value: item.value, excerpt: item.evidenceExcerpt })).digest('hex');
+      const canonicalUrl = (() => {
+        try {
+          const parsed = new URL(item.sourceUrl);
+          parsed.hash = '';
+          parsed.hostname = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+          return `${parsed.protocol}//${parsed.hostname}`;
+        } catch {
+          return item.sourceUrl;
+        }
+      })();
       await this.db.insert(leadEvidence).values({
         companyId,
         contactId,
         evidenceType: item.evidenceType,
         sourceUrl: item.sourceUrl,
+        canonicalUrl,
         sourceType: 'WEBSITE',
         provider: 'official_website',
         evidenceText: item.evidenceExcerpt,
@@ -25,6 +36,10 @@ export class ContactEvidenceService {
         metadata: {
           field: item.field,
           value: item.value,
+          sourceType: 'WEBSITE',
+          sourceUrl: item.sourceUrl,
+          retrievedAt: item.retrievedAt,
+          evidenceExcerpt: item.evidenceExcerpt,
         },
       }).onConflictDoNothing({ target: leadEvidence.idempotencyKey });
     }

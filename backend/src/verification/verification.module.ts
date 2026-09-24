@@ -19,6 +19,8 @@ import {
   WEBSITE_VERIFICATION_PROVIDER,
 } from './providers/verification-provider.interface';
 import { UsageModule } from '../usage/usage.module';
+import { ConflictEngineService } from './conflict/conflict-engine.service';
+import { CrossSourceEntityMatcherService } from './matching/cross-source-entity-matcher.service';
 
 @Module({
   imports: [ConfigModule, AuthModule, UsersModule, OrganizationsModule, UsageModule, BullModule.registerQueue({ name: 'lead-verification-queue' })],
@@ -27,6 +29,8 @@ import { UsageModule } from '../usage/usage.module';
     VerificationService,
     VerificationQueue,
     VerificationProcessor,
+    ConflictEngineService,
+    CrossSourceEntityMatcherService,
     EmailVerificationProvider,
     PhoneVerificationProvider,
     WebsiteVerificationProvider,

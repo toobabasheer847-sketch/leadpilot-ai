@@ -119,7 +119,7 @@ export class ContactExtractorService {
   chooseStatus(verificationStatus: VerificationStatus): ContactStatus {
     if (verificationStatus === 'VERIFIED') return 'VERIFIED';
     if (verificationStatus === 'SUPPORTED') return 'PARTIALLY_VERIFIED';
-    if (verificationStatus === 'CONFLICT') return 'NOT_VERIFIED';
+    if (verificationStatus === 'CONFLICT' || verificationStatus === 'NEEDS_REVIEW') return 'NOT_VERIFIED';
     if (verificationStatus === 'NOT_FOUND') return 'NOT_FOUND';
     return 'DISCOVERED';
   }

@@ -60,7 +60,7 @@ export function calculateDeterministicScore(company: ScoreCompany, contact: Scor
     const item = verification(field);
     if (item?.status === 'VERIFIED') return { points: max, reason: `${label} is verified.`, evidenceId: item.evidenceId ?? undefined };
     if (item?.status === 'SUPPORTED') return { points: Math.ceil(max / 2), reason: `${label} is supported by evidence.`, evidenceId: item.evidenceId ?? undefined };
-    if (item?.status === 'CONFLICT' || item?.status === 'INVALID') return { points: -Math.ceil(max / 2), reason: `${label} has conflicting or invalid verification evidence.`, evidenceId: item.evidenceId ?? undefined };
+    if (item?.status === 'CONFLICT' || item?.status === 'NEEDS_REVIEW' || item?.status === 'INVALID') return { points: -Math.ceil(max / 2), reason: `${label} has conflicting or invalid verification evidence.`, evidenceId: item.evidenceId ?? undefined };
     return { points: 0, reason: `${label} is not verified; missing data is not penalized.` };
   };
 
@@ -113,7 +113,7 @@ export function calculateDeterministicScore(company: ScoreCompany, contact: Scor
   const sourceTypes = [...new Set(evidence.map((item) => item.evidenceType))];
   add('source_diversity', sourceTypes.length, Math.min(SCORING_WEIGHTS.sourceDiversity, sourceTypes.length), `${sourceTypes.length} independent evidence source type(s) are available.`);
 
-  const conflicts = verifications.filter((item) => item.status === 'CONFLICT' || item.status === 'INVALID').length;
+  const conflicts = verifications.filter((item) => item.status === 'CONFLICT' || item.status === 'NEEDS_REVIEW' || item.status === 'INVALID').length;
   add('conflicting_evidence', conflicts, conflicts > 0 ? -CONFLICT_PENALTY : 0, conflicts > 0 ? `${conflicts} field(s) contain conflicting or invalid evidence.` : 'No conflicting verification evidence was found.');
 
   const expectedFields = 11;

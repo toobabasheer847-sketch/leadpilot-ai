@@ -31,6 +31,9 @@ export class EvidenceRepository {
           value: item.value,
           sourceUrl: item.sourceUrl,
           evidenceType: item.evidenceType,
+          sourceType: 'WEBSITE',
+          retrievedAt: item.retrievedAt,
+          evidenceExcerpt: item.evidenceExcerpt || item.value,
         },
       }).returning();
       if (record) {

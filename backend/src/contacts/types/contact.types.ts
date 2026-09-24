@@ -1,5 +1,5 @@
 export type ContactStatus = 'DISCOVERED' | 'PARTIALLY_VERIFIED' | 'VERIFIED' | 'NOT_VERIFIED' | 'NOT_FOUND';
-export type VerificationStatus = 'VERIFIED' | 'SUPPORTED' | 'NOT_FOUND' | 'CONFLICT' | 'NOT_VERIFIED';
+export type VerificationStatus = 'VERIFIED' | 'SUPPORTED' | 'NOT_FOUND' | 'CONFLICT' | 'NEEDS_REVIEW' | 'NOT_VERIFIED';
 
 export interface ContactEvidenceEntry {
   field: string;
