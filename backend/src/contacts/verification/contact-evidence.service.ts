@@ -18,6 +18,7 @@ export class ContactEvidenceService {
         evidenceType: item.evidenceType,
         sourceUrl: item.sourceUrl,
         sourceType: 'WEBSITE',
+        provider: 'official_website',
         evidenceText: item.evidenceExcerpt,
         evidenceTimestamp: new Date(item.retrievedAt),
         idempotencyKey,

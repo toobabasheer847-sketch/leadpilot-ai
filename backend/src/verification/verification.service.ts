@@ -1,9 +1,10 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { and, desc, eq, isNull, like } from 'drizzle-orm';
+import { ConfigService } from '@nestjs/config';
+import { and, desc, eq, isNull, like, max } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { DRIZZLE } from '../database/database.constants';
 import type { Database } from '../database/database.types';
-import { auditLogs, companies, companyContacts, companyLocations, companySocialProfiles, leadEvidence, leadVerifications } from '../database/schema/schema';
+import { auditLogs, companies, companyContacts, companyLocations, companySocialProfiles, leadEvidence, leadVerifications, sourceRecords } from '../database/schema/schema';
 import { VerificationQueue } from './verification.queue';
 import {
   EMAIL_VERIFICATION_PROVIDER,
@@ -14,6 +15,7 @@ import {
 import type { VerificationProvider } from './providers/verification-provider.interface';
 import type { VerificationEvidence, VerificationInput, VerificationJobData, VerificationResult, VerificationSignal } from './types/verification.types';
 import { normalizeState } from './utils/location-normalizer';
+import { UsageService } from '../usage/usage.service';
 
 @Injectable()
 export class VerificationService {
@@ -24,6 +26,8 @@ export class VerificationService {
     @Inject(PHONE_VERIFICATION_PROVIDER) private readonly phoneProvider: VerificationProvider,
     @Inject(WEBSITE_VERIFICATION_PROVIDER) private readonly websiteProvider: VerificationProvider,
     @Inject(SOCIAL_VERIFICATION_PROVIDER) private readonly socialProvider: VerificationProvider,
+    private readonly usage: UsageService,
+    private readonly config: ConfigService,
   ) {}
 
   async enqueueCompany(companyId: string, organizationId: string, force = false, searchExecutionId: string | null = null) {
@@ -50,6 +54,23 @@ export class VerificationService {
       .orderBy(desc(leadVerifications.checkedAt));
   }
 
+  async summaryCompany(companyId: string, organizationId: string) {
+    const company = await this.findCompany(companyId, organizationId);
+    const contacts = await this.db.select().from(companyContacts).where(eq(companyContacts.companyId, companyId));
+    const verifications = await this.db.select().from(leadVerifications).where(and(eq(leadVerifications.companyId, companyId), eq(leadVerifications.organizationId, organizationId))).orderBy(desc(leadVerifications.checkedAt));
+    const evidence = await this.db.select().from(leadEvidence).where(eq(leadEvidence.companyId, companyId));
+    const sources = await this.db.select().from(sourceRecords).where(eq(sourceRecords.companyId, companyId));
+    return {
+      company,
+      people: contacts,
+      verificationStatus: this.aggregateStatus(verifications.map((row) => row.status)),
+      evidenceCount: evidence.length,
+      sourceCount: new Set([...evidence.map((row) => row.canonicalUrl ?? row.sourceUrl), ...sources.map((row) => row.sourceUrl)]).size,
+      conflicts: verifications.filter((row) => row.status === 'CONFLICT'),
+      lastVerifiedAt: verifications[0]?.checkedAt ?? null,
+    };
+  }
+
   async getById(verificationId: string, organizationId: string) {
     const [result] = await this.db.select().from(leadVerifications)
       .where(and(eq(leadVerifications.id, verificationId), eq(leadVerifications.organizationId, organizationId))).limit(1);
@@ -62,7 +83,10 @@ export class VerificationService {
   }
 
   private async enqueue(companyId: string, contactId: string | null, organizationId: string, force: boolean, searchExecutionId: string | null) {
-    const baseKey = this.buildKey(organizationId, companyId, contactId, force ? Date.now().toString() : 'current');
+    await this.usage.checkRequestRate(organizationId, undefined, 'VERIFICATION');
+    const [latestEvidence] = await this.db.select({ retrievedAt: max(leadEvidence.evidenceTimestamp) }).from(leadEvidence).where(and(eq(leadEvidence.companyId, companyId), contactId ? eq(leadEvidence.contactId, contactId) : isNull(leadEvidence.contactId)));
+    const version = force ? Date.now().toString() : latestEvidence?.retrievedAt?.toISOString() ?? 'empty';
+    const baseKey = this.buildKey(organizationId, companyId, contactId, version);
     if (!force) {
       const [existing] = await this.db.select({ id: leadVerifications.id }).from(leadVerifications)
         .where(and(eq(leadVerifications.organizationId, organizationId), like(leadVerifications.idempotencyKey, `${baseKey}:%`))).limit(1);
@@ -80,6 +104,8 @@ export class VerificationService {
     const rows = data.contactId
       ? await this.verifyContactFields(company, contact!, evidence, data)
       : await this.verifyCompanyFields(company, evidence, data);
+    await this.usage.recordUsage({ organizationId: data.organizationId, operation: 'VERIFICATION', provider: 'stored-evidence', resourceType: data.contactId ? 'contact' : 'company', resourceId: data.contactId ?? data.companyId, units: Math.max(1, rows.length), status: 'COMPLETED', metadata: { conflicts: rows.filter((row) => row.status === 'CONFLICT').length } });
+    if (contact) await this.updateContactQuality(contact.id, rows.map((row) => ({ field: row.field, value: row.fieldValue, status: row.status })));
     await this.audit(data.organizationId, company.id, 'LEAD_VERIFICATION_COMPLETED', { contactId: data.contactId, count: rows.length });
     return rows;
   }
@@ -110,7 +136,7 @@ export class VerificationService {
     const fields: Array<{ field: string; value: string | null; provider?: VerificationProvider }> = [
       { field: 'fullName', value: contact.fullName },
       { field: 'title', value: contact.title },
-      { field: 'companyAssociation', value: company.name },
+      { field: 'companyRelationship', value: company.name },
       { field: 'email', value: contact.email, provider: this.emailProvider },
       { field: 'phone', value: contact.phone, provider: this.phoneProvider },
       { field: 'linkedin', value: contact.linkedinUrl, provider: this.socialProvider },
@@ -127,7 +153,11 @@ export class VerificationService {
     const results: VerificationResult[] = [];
     for (const field of fields) {
       const input: VerificationInput = { field: field.field, value: field.value, evidence };
-      const signal = field.provider ? await field.provider.verify(input) : this.localEvidenceSignal(input);
+      const evidenceSignal = this.localEvidenceSignal(input);
+      const providerSignal = field.provider ? await field.provider.verify(input) : evidenceSignal;
+      const signal = evidenceSignal.status === 'CONFLICT' || evidenceSignal.status === 'VERIFIED' || (evidenceSignal.status === 'SUPPORTED' && providerSignal.status === 'UNVERIFIED')
+        ? { ...evidenceSignal, provider: providerSignal.provider }
+        : providerSignal;
       results.push({ field: field.field, value: field.value, ...signal, checkedAt: new Date().toISOString() });
     }
     return results;
@@ -136,19 +166,30 @@ export class VerificationService {
   private localEvidenceSignal(input: VerificationInput): VerificationSignal {
     if (!input.value) return { status: 'NOT_FOUND', verificationType: 'SOURCE_EVIDENCE', provider: 'stored-evidence' };
     const fieldEvidence = input.evidence.filter((item) => this.metadata(item).field === input.field);
-    const fieldValues = new Set(fieldEvidence.map((item) => this.evidenceValue(item)).filter((value): value is string => Boolean(value)).map((value) => this.normalize(input.field, value)));
+    const independentSources = new Map<string, Set<string>>();
+    for (const item of fieldEvidence) {
+      const value = this.evidenceValue(item);
+      if (!value) continue;
+      const source = this.sourceKey(item);
+      const values = independentSources.get(this.normalize(input.field, value)) ?? new Set<string>();
+      values.add(source);
+      independentSources.set(this.normalize(input.field, value), values);
+    }
+    const fieldValues = new Set(independentSources.keys());
     if (fieldValues.size > 1) {
       return {
         status: 'CONFLICT',
         verificationType: 'CROSS_SOURCE_MATCH',
         provider: 'stored-evidence',
-        metadata: { evidenceIds: fieldEvidence.map((item) => item.id) },
+        metadata: { evidenceIds: fieldEvidence.map((item) => item.id), values: [...fieldValues], sourceCount: independentSources.size },
       };
     }
     const matches = input.evidence.filter((item) => this.evidenceMatches(item, input.field, input.value!));
     const distinctValues = new Set(matches.map((item) => this.evidenceValue(item) ?? input.value));
     if (distinctValues.size > 1) return { status: 'CONFLICT', verificationType: 'CROSS_SOURCE_MATCH', provider: 'stored-evidence', metadata: { evidenceIds: matches.map((item) => item.id) } };
-    if (matches[0]) return { status: 'SUPPORTED', verificationType: 'SOURCE_EVIDENCE', provider: 'stored-evidence', evidenceId: matches[0].id, confidence: 0.75 };
+    const matchingValue = this.normalize(input.field, input.value);
+    const sourceCount = independentSources.get(matchingValue)?.size ?? 0;
+    if (matches[0]) return { status: sourceCount >= 2 ? 'VERIFIED' : 'SUPPORTED', verificationType: 'SOURCE_EVIDENCE', provider: 'stored-evidence', evidenceId: matches[0].id, confidence: sourceCount >= 2 ? 0.9 : 0.75, metadata: { sourceCount, sourcePriority: this.sourcePriority(matches[0]) } };
     return { status: 'UNVERIFIED', verificationType: 'SOURCE_EVIDENCE', provider: 'stored-evidence' };
   }
 
@@ -197,7 +238,7 @@ export class VerificationService {
         verificationUrl: null,
         verifiedAt: result.status === 'VERIFIED' || result.status === 'SUPPORTED' ? new Date(result.checkedAt) : null,
         notes: null,
-      }).returning();
+      }).onConflictDoNothing({ target: [leadVerifications.organizationId, leadVerifications.idempotencyKey] }).returning();
       if (row) stored.push(row);
     }
     return stored;
@@ -211,6 +252,9 @@ export class VerificationService {
       evidenceText: leadEvidence.evidenceText,
       metadata: leadEvidence.metadata,
       retrievedAt: leadEvidence.evidenceTimestamp,
+      canonicalUrl: leadEvidence.canonicalUrl,
+      sourceType: leadEvidence.sourceType,
+      provider: leadEvidence.provider,
     }).from(leadEvidence).where(and(eq(leadEvidence.companyId, companyId), contactId ? eq(leadEvidence.contactId, contactId) : isNull(leadEvidence.contactId)));
     return rows;
   }
@@ -233,5 +277,39 @@ export class VerificationService {
 
   private audit(organizationId: string, entityId: string, action: string, metadata: unknown) {
     return this.db.insert(auditLogs).values({ organizationId, entityId, action, entityType: 'verification', metadata });
+  }
+
+  private sourceKey(item: VerificationEvidence) {
+    return `${item.provider ?? item.sourceType ?? 'unknown'}:${item.canonicalUrl ?? item.sourceUrl}`;
+  }
+
+  private sourcePriority(item: VerificationEvidence) {
+    const priorities = this.config.get<Record<string, unknown>>('verification.sourcePriorities', {});
+    const value = priorities[item.provider ?? item.sourceType ?? ''] ?? 0;
+    return Number.isFinite(Number(value)) ? Number(value) : 0;
+  }
+
+  private aggregateStatus(statuses: string[]) {
+    if (!statuses.length || statuses.every((status) => status === 'NOT_FOUND')) return 'NOT_FOUND';
+    if (statuses.includes('CONFLICT')) return 'CONFLICT';
+    if (statuses.every((status) => status === 'VERIFIED')) return 'VERIFIED';
+    if (statuses.some((status) => status === 'VERIFIED' || status === 'SUPPORTED')) return 'SUPPORTED';
+    return 'UNVERIFIED';
+  }
+
+  private async updateContactQuality(contactId: string, rows: Array<{ field: string; value: string | null; status: string }>) {
+    const conflict = rows.some((row) => row.status === 'CONFLICT');
+    const coreFields = ['fullName', 'title', 'companyRelationship'];
+    const coreVerified = coreFields.every((field) => rows.some((row) => row.field === field && (row.status === 'VERIFIED' || row.status === 'SUPPORTED')));
+    const email = rows.find((row) => row.field === 'email');
+    const phone = rows.find((row) => row.field === 'phone');
+    await this.db.update(companyContacts).set({
+      verificationStatus: conflict ? 'CONFLICT' : coreVerified ? 'VERIFIED' : 'PARTIALLY_VERIFIED',
+      status: conflict ? 'NOT_VERIFIED' : coreVerified ? 'VERIFIED' : 'PARTIALLY_VERIFIED',
+      emailStatus: email?.status === 'VERIFIED' ? 'VERIFIED' : email?.status === 'NOT_FOUND' ? 'NOT_FOUND' : email?.value ? 'UNVERIFIED' : 'NOT_FOUND',
+      phoneStatus: phone?.status === 'VERIFIED' ? 'VERIFIED' : phone?.status === 'NOT_FOUND' ? 'NOT_FOUND' : phone?.value ? 'UNVERIFIED' : 'NOT_FOUND',
+      lastVerifiedAt: new Date(),
+      updatedAt: new Date(),
+    }).where(eq(companyContacts.id, contactId));
   }
 }

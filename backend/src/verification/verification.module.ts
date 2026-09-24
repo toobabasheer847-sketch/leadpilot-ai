@@ -18,9 +18,10 @@ import {
   SOCIAL_VERIFICATION_PROVIDER,
   WEBSITE_VERIFICATION_PROVIDER,
 } from './providers/verification-provider.interface';
+import { UsageModule } from '../usage/usage.module';
 
 @Module({
-  imports: [ConfigModule, AuthModule, UsersModule, OrganizationsModule, BullModule.registerQueue({ name: 'lead-verification-queue' })],
+  imports: [ConfigModule, AuthModule, UsersModule, OrganizationsModule, UsageModule, BullModule.registerQueue({ name: 'lead-verification-queue' })],
   controllers: [VerificationController],
   providers: [
     VerificationService,

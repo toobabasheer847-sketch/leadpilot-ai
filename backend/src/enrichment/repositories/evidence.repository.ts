@@ -22,6 +22,7 @@ export class EvidenceRepository {
         sourceUrl: item.sourceUrl || sourceUrl,
         canonicalUrl: canonicalUrl ?? null,
         sourceType: 'WEBSITE',
+        provider: 'official_website',
         evidenceText: item.evidenceExcerpt || item.value,
         evidenceTimestamp: item.retrievedAt ? new Date(item.retrievedAt) : new Date(),
         idempotencyKey,

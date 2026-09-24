@@ -57,6 +57,17 @@ export default () => ({
     rolePriorities: (process.env.DECISION_MAKER_ROLE_PRIORITIES ?? 'CEO,FOUNDER,CO_FOUNDER,PRESIDENT,OWNER,MANAGING_PARTNER,PARTNER,PRINCIPAL,MANAGING_DIRECTOR,DIRECTOR,GENERAL_MANAGER,MANAGER').split(',').map((role) => role.trim().toUpperCase()).filter(Boolean),
   },
 
+  verification: {
+    sourcePriorities: (() => {
+      try {
+        const parsed = JSON.parse(process.env.VERIFICATION_SOURCE_PRIORITIES_JSON ?? '{}');
+        return typeof parsed === 'object' && parsed !== null ? parsed : {};
+      } catch {
+        return {};
+      }
+    })(),
+  },
+
   website: {
     fetchTimeoutMs: parseInt(process.env.WEBSITE_FETCH_TIMEOUT_MS ?? '10000', 10),
     maxResponseBytes: parseInt(process.env.WEBSITE_MAX_RESPONSE_BYTES ?? '5000000', 10),

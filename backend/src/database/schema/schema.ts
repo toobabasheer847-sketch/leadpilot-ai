@@ -213,6 +213,7 @@ export const leadEvidence = pgTable('lead_evidence', {
   sourceUrl: text('source_url').notNull(),
   canonicalUrl: text('canonical_url'),
   sourceType: varchar('source_type', { length: 100 }).default('WEBSITE').notNull(),
+  provider: varchar('provider', { length: 100 }),
   evidenceText: text('evidence_text').notNull(),
   evidenceTimestamp: timestamp('evidence_timestamp', { withTimezone: true }),
   idempotencyKey: varchar('idempotency_key', { length: 512 }),

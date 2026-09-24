@@ -8,6 +8,9 @@ export interface VerificationEvidence {
   evidenceText: string;
   metadata: unknown;
   retrievedAt: Date | null;
+  canonicalUrl?: string | null;
+  sourceType?: string | null;
+  provider?: string | null;
 }
 
 export interface VerificationInput {
@@ -38,4 +41,5 @@ export interface VerificationJobData {
   searchExecutionId: string | null;
   force: boolean;
   idempotencyKey: string;
+  correlationId?: string;
 }

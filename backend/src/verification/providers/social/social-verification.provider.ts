@@ -8,7 +8,7 @@ export class SocialVerificationProvider implements VerificationProvider {
     if (!input.value) return { status: 'NOT_FOUND', verificationType: 'SOURCE_EVIDENCE', provider: 'local-social' };
     try {
       const host = new URL(input.value).hostname.toLowerCase();
-      if (!['linkedin.com', 'www.linkedin.com', 'facebook.com', 'www.facebook.com', 'instagram.com', 'www.instagram.com'].includes(host)) throw new Error('Unsupported social host');
+      if (!['linkedin.com', 'www.linkedin.com', 'facebook.com', 'www.facebook.com', 'instagram.com', 'www.instagram.com', 'youtube.com', 'www.youtube.com', 'youtu.be'].includes(host)) throw new Error('Unsupported social host');
     } catch {
       return { status: 'INVALID', verificationType: 'SYNTAX_CHECK', provider: 'local-social' };
     }
