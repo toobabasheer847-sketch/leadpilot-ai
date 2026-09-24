@@ -14,6 +14,7 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { SearchModule } from './search/search.module';
+import { EnrichmentModule } from './enrichment/enrichment.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { SearchModule } from './search/search.module';
     OrganizationsModule,
     AuthModule,
     SearchModule,
+    EnrichmentModule,
   ],
   controllers: [AppController],
   providers: [

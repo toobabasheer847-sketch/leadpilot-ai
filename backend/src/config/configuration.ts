@@ -39,6 +39,13 @@ export default () => ({
     model: process.env.OPENROUTER_MODEL,
   },
 
+  website: {
+    fetchTimeoutMs: parseInt(process.env.WEBSITE_FETCH_TIMEOUT_MS ?? '10000', 10),
+    maxResponseBytes: parseInt(process.env.WEBSITE_MAX_RESPONSE_BYTES ?? '5000000', 10),
+    fetchConcurrency: parseInt(process.env.WEBSITE_FETCH_CONCURRENCY ?? '2', 10),
+    maxPagesPerCompany: parseInt(process.env.WEBSITE_MAX_PAGES_PER_COMPANY ?? '5', 10),
+  },
+
   auth: {
     jwtSecret: process.env.JWT_SECRET,
     jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '1h',
@@ -83,6 +90,26 @@ export function validateEnvironment(config: Record<string, unknown>) {
 
   if (typeof config.JWT_EXPIRES_IN !== 'undefined' && typeof config.JWT_EXPIRES_IN !== 'string') {
     throw new Error('JWT_EXPIRES_IN must be a string');
+  }
+
+  const websiteFetchTimeoutMs = Number(config.WEBSITE_FETCH_TIMEOUT_MS ?? 10000);
+  if (!Number.isInteger(websiteFetchTimeoutMs) || websiteFetchTimeoutMs < 1000 || websiteFetchTimeoutMs > 60000) {
+    throw new Error('WEBSITE_FETCH_TIMEOUT_MS must be an integer between 1000 and 60000');
+  }
+
+  const websiteMaxResponseBytes = Number(config.WEBSITE_MAX_RESPONSE_BYTES ?? 5000000);
+  if (!Number.isInteger(websiteMaxResponseBytes) || websiteMaxResponseBytes < 10000 || websiteMaxResponseBytes > 100000000) {
+    throw new Error('WEBSITE_MAX_RESPONSE_BYTES must be between 10000 and 100000000');
+  }
+
+  const websiteFetchConcurrency = Number(config.WEBSITE_FETCH_CONCURRENCY ?? 2);
+  if (!Number.isInteger(websiteFetchConcurrency) || websiteFetchConcurrency < 1 || websiteFetchConcurrency > 10) {
+    throw new Error('WEBSITE_FETCH_CONCURRENCY must be between 1 and 10');
+  }
+
+  const websiteMaxPagesPerCompany = Number(config.WEBSITE_MAX_PAGES_PER_COMPANY ?? 5);
+  if (!Number.isInteger(websiteMaxPagesPerCompany) || websiteMaxPagesPerCompany < 1 || websiteMaxPagesPerCompany > 25) {
+    throw new Error('WEBSITE_MAX_PAGES_PER_COMPANY must be between 1 and 25');
   }
 
   return config;
