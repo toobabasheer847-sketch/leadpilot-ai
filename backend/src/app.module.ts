@@ -18,6 +18,7 @@ import { EnrichmentModule } from './enrichment/enrichment.module';
 import { ContactsModule } from './contacts/contacts.module';
 import { ClassificationModule } from './ai/classification/classification.module';
 import { VerificationModule } from './verification/verification.module';
+import { ScoringModule } from './scoring/scoring.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { VerificationModule } from './verification/verification.module';
     ContactsModule,
     ClassificationModule,
     VerificationModule,
+    ScoringModule,
   ],
   controllers: [AppController],
   providers: [

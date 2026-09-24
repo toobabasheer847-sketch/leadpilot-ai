@@ -269,6 +269,28 @@ export const leadVerifications = pgTable('lead_verifications', {
   uniqueIndex('lead_verifications_idempotency_unique').on(table.organizationId, table.idempotencyKey),
 ]);
 
+export const leadScores = pgTable('lead_scores', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  contactId: uuid('contact_id').references(() => companyContacts.id, { onDelete: 'set null' }),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'restrict' }),
+  searchExecutionId: uuid('search_execution_id').references(() => searchExecutions.id, { onDelete: 'set null' }),
+  score: integer('score').notNull(),
+  band: varchar('band', { length: 20 }).notNull(),
+  version: varchar('version', { length: 30 }).notNull(),
+  breakdown: jsonb('breakdown').notNull(),
+  idempotencyKey: varchar('idempotency_key', { length: 512 }).notNull(),
+  calculatedAt: timestamp('calculated_at', { withTimezone: true }).defaultNow().notNull(),
+  ...timestamps,
+}, (table) => [
+  index('lead_scores_company_idx').on(table.companyId),
+  index('lead_scores_contact_idx').on(table.contactId),
+  index('lead_scores_org_idx').on(table.organizationId),
+  index('lead_scores_score_idx').on(table.score),
+  uniqueIndex('lead_scores_idempotency_unique').on(table.organizationId, table.idempotencyKey),
+  check('lead_scores_score_check', sql`${table.score} >= 0 and ${table.score} <= 100`),
+]);
+
 export const leadDuplicates = pgTable('lead_duplicates', {
   id: uuid('id').defaultRandom().primaryKey(),
   companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
