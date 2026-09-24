@@ -21,6 +21,7 @@ import { VerificationModule } from './verification/verification.module';
 import { ScoringModule } from './scoring/scoring.module';
 import { DeduplicationModule } from './deduplication/deduplication.module';
 import { LeadsModule } from './leads/leads.module';
+import { ExportsModule } from './exports/exports.module';
 
 @Module({
   imports: [
@@ -58,6 +59,7 @@ import { LeadsModule } from './leads/leads.module';
     ScoringModule,
     DeduplicationModule,
     LeadsModule,
+    ExportsModule,
   ],
   controllers: [AppController],
   providers: [

@@ -54,6 +54,11 @@ export default () => ({
     maxPagesPerCompany: parseInt(process.env.WEBSITE_MAX_PAGES_PER_COMPANY ?? '5', 10),
   },
 
+  export: {
+    storagePath: process.env.EXPORT_STORAGE_PATH ?? './storage/exports',
+    retentionDays: parseInt(process.env.EXPORT_RETENTION_DAYS ?? '7', 10),
+  },
+
   auth: {
     jwtSecret: process.env.JWT_SECRET,
     jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '1h',

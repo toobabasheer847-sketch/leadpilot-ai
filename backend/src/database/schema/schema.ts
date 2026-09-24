@@ -354,11 +354,21 @@ export const exportsTable = pgTable('exports', {
   requestedByUserId: uuid('requested_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
   searchExecutionId: uuid('search_execution_id').references(() => searchExecutions.id, { onDelete: 'set null' }),
   format: varchar('format', { length: 20 }).notNull(),
-  status: varchar('status', { length: 50 }).default('PENDING').notNull(),
+  status: varchar('status', { length: 50 }).default('QUEUED').notNull(),
+  filters: jsonb('filters').notNull().default({}),
+  fields: jsonb('fields').notNull().default([]),
+  fileName: varchar('file_name', { length: 255 }),
+  filePath: text('file_path'),
+  fileSize: integer('file_size'),
+  rowCount: integer('row_count'),
+  errorMessage: text('error_message'),
+  startedAt: timestamp('started_at', { withTimezone: true }),
   fileUrl: text('file_url'),
   completedAt: timestamp('completed_at', { withTimezone: true }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+  idempotencyKey: varchar('idempotency_key', { length: 512 }),
   ...timestamps,
-}, (table) => [index('exports_org_idx').on(table.organizationId), index('exports_requested_by_idx').on(table.requestedByUserId), index('exports_status_idx').on(table.status)]);
+}, (table) => [index('exports_org_idx').on(table.organizationId), index('exports_requested_by_idx').on(table.requestedByUserId), index('exports_status_idx').on(table.status), index('exports_created_at_idx').on(table.createdAt), index('exports_idempotency_idx').on(table.organizationId, table.idempotencyKey)]);
 
 export const usageEvents = pgTable('usage_events', {
   id: uuid('id').defaultRandom().primaryKey(),

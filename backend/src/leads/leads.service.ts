@@ -7,7 +7,7 @@ import { companies, companyContacts, companyLocations, companySocialProfiles, le
 import { normalizeDomain } from '../deduplication/normalization/normalization';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import type { ListExecutionsDto } from './dto/list-executions.dto';
-import type { ListLeadsDto } from './dto/list-leads.dto';
+import { ListLeadsDto } from './dto/list-leads.dto';
 
 type CompanyRow = typeof companies.$inferSelect;
 
@@ -117,7 +117,7 @@ export class LeadsService {
   private async hydrate(rows: CompanyRow[], organizationId: string) {
     const ids = rows.map((row) => row.id);
     if (!ids.length) return [];
-    const [locations, contacts, socials, classifications, scores, verifications, duplicates] = await Promise.all([
+    const [locations, contacts, socials, classifications, scores, verifications, duplicates, evidenceRows, sourceRows] = await Promise.all([
       this.db.select().from(companyLocations).where(inArray(companyLocations.companyId, ids)),
       this.db.select().from(companyContacts).where(inArray(companyContacts.companyId, ids)),
       this.db.select().from(companySocialProfiles).where(inArray(companySocialProfiles.companyId, ids)),
@@ -125,6 +125,8 @@ export class LeadsService {
       this.db.select().from(leadScores).where(and(eq(leadScores.organizationId, organizationId), inArray(leadScores.companyId, ids))).orderBy(desc(leadScores.calculatedAt)),
       this.db.select().from(leadVerifications).where(and(eq(leadVerifications.organizationId, organizationId), inArray(leadVerifications.companyId, ids))),
       this.db.select().from(leadDuplicates).where(and(eq(leadDuplicates.organizationId, organizationId), eq(leadDuplicates.entityType, 'COMPANY'), or(inArray(leadDuplicates.entityAId, ids), inArray(leadDuplicates.entityBId, ids)))),
+      this.db.select().from(leadEvidence).where(inArray(leadEvidence.companyId, ids)),
+      this.db.select().from(sourceRecords).where(and(eq(sourceRecords.organizationId, organizationId), inArray(sourceRecords.companyId, ids))),
     ]);
     return rows.map((company) => {
       const location = locations.find((item) => item.companyId === company.id && item.isPrimary) ?? locations.find((item) => item.companyId === company.id) ?? null;
@@ -133,8 +135,20 @@ export class LeadsService {
       const score = scores.find((item) => item.companyId === company.id && item.contactId === null) ?? null;
       const verification = verifications.find((item) => item.companyId === company.id && item.contactId === null) ?? null;
       const duplicate = duplicates.find((item) => item.entityAId === company.id || item.entityBId === company.id) ?? null;
-      return { id: company.id, company: { id: company.id, name: company.name, website: company.website, domain: normalizeDomain(company.website), phone: company.phone, location: location ? { city: location.city, state: location.state, zipCode: location.postalCode, country: location.country } : null }, contact: contact ? { id: contact.id, name: contact.fullName, title: contact.title, email: contact.email, phone: contact.phone, linkedin: contact.linkedinUrl, facebook: contact.facebookUrl, instagram: contact.instagramUrl } : null, socialProfiles: socials.filter((item) => item.companyId === company.id), classification: classification ? { decision: classification.decision, confidence: classification.confidence ? Number(classification.confidence) : null } : null, score: score ? { value: score.score, band: score.band, breakdown: score.breakdown } : null, verification: verification ? { status: verification.status, field: verification.field } : null, duplicate: duplicate ? { status: duplicate.status, matchType: duplicate.matchType, confidence: duplicate.confidence ? Number(duplicate.confidence) : null } : { status: 'NO_DUPLICATE' }, createdAt: company.createdAt, updatedAt: company.updatedAt };
+      return { id: company.id, company: { id: company.id, name: company.name, website: company.website, domain: normalizeDomain(company.website), phone: company.phone, email: company.email, description: company.description, investorType: company.investorType, investmentStrategy: company.investmentStrategy, propertyTypes: company.propertyTypes, marketsServed: company.marketsServed, companySize: company.employeeCount ?? company.employeeRange, location: location ? { city: location.city, state: location.state, zipCode: location.postalCode, country: location.country, address: location.addressLine1 } : null }, contact: contact ? { id: contact.id, name: contact.fullName, title: contact.title, email: contact.email, phone: contact.phone, linkedin: contact.linkedinUrl, facebook: contact.facebookUrl, instagram: contact.instagramUrl } : null, socialProfiles: socials.filter((item) => item.companyId === company.id), classification: classification ? { decision: classification.decision, confidence: classification.confidence ? Number(classification.confidence) : null } : null, score: score ? { value: score.score, band: score.band, breakdown: score.breakdown } : null, verification: verification ? { status: verification.status, field: verification.field } : null, duplicate: duplicate ? { status: duplicate.status, matchType: duplicate.matchType, confidence: duplicate.confidence ? Number(duplicate.confidence) : null } : { status: 'NO_DUPLICATE' }, evidence: evidenceRows.filter((item) => item.companyId === company.id), sourceUrls: sourceRows.filter((item) => item.companyId === company.id).map((item) => item.sourceUrl), createdAt: company.createdAt, updatedAt: company.updatedAt, lastVerifiedAt: company.lastVerifiedAt };
     });
+  }
+
+  async forEachExportBatch(user: AuthenticatedUser, filters: ListLeadsDto, onBatch: (rows: Awaited<ReturnType<LeadsService['list']>>['data']) => Promise<void>) {
+    const batchSize = 100;
+    let page = 1;
+    while (true) {
+      const result = await this.list(user, Object.assign(new ListLeadsDto(), filters, { page, limit: batchSize }));
+      if (!result.data.length) break;
+      await onBatch(result.data);
+      if (result.data.length < batchSize) break;
+      page += 1;
+    }
   }
 
   private uniqueIds(ids: string[]) { return [...new Set(ids)]; }
