@@ -23,6 +23,7 @@ import { DeduplicationModule } from './deduplication/deduplication.module';
 import { LeadsModule } from './leads/leads.module';
 import { ExportsModule } from './exports/exports.module';
 import { UsageModule } from './usage/usage.module';
+import { ObservabilityModule } from './common/observability/observability.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { UsageModule } from './usage/usage.module';
       }),
     }),
     CommonModule,
+    ObservabilityModule,
     RedisModule,
     DatabaseModule,
     QueueModule,

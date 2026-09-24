@@ -5,6 +5,11 @@ export default () => ({
 
   apiPrefix: process.env.API_PREFIX ?? 'api/v1',
 
+  metrics: {
+    enabled: process.env.METRICS_ENABLED !== 'false',
+    logLevel: process.env.LOG_LEVEL ?? 'info',
+  },
+
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:3000,http://localhost:5173',
 
   throttler: {

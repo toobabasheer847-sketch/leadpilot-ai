@@ -4,15 +4,19 @@ import {
   ExceptionFilter,
   HttpException,
   HttpStatus,
-  Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
+import { MetricsService } from './observability/metrics.service';
+import { StructuredLoggerService } from './observability/structured-logger.service';
 
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
-  private readonly logger = new Logger(GlobalExceptionFilter.name);
-  private readonly configService = new ConfigService();
+  constructor(
+    private readonly configService: ConfigService = new ConfigService(),
+    private readonly structuredLogger?: StructuredLoggerService,
+    private readonly metrics?: MetricsService,
+  ) {}
 
   catch(exception: unknown, host: ArgumentsHost) {
     const context = host.switchToHttp();
@@ -25,7 +29,8 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const isProduction = this.configService.get('nodeEnv', process.env.NODE_ENV) === 'production';
 
     if (status >= 500) {
-      this.logger.error(`Request ${requestId} failed with status ${status}`);
+      this.structuredLogger?.error('http.request.failed', { status, method: request.method, route: request.route?.path ?? request.path, errorType: exception instanceof Error ? exception.name : 'UnknownError' });
+      this.metrics?.increment('http_errors_total', { method: request.method, status: String(status) });
     }
 
     const message = status >= 500 && isProduction
@@ -34,9 +39,11 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         ? exception.getResponse()
         : 'Internal server error';
 
+    const errorResponse = exception instanceof HttpException && status < 500 ? exception.getResponse() : undefined;
     response.status(status).json({
       statusCode: status,
-      message,
+      code: status >= 500 ? 'INTERNAL_SERVER_ERROR' : undefined,
+      message: errorResponse ?? message,
       timestamp: new Date().toISOString(),
       path: request.originalUrl,
       requestId,

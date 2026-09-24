@@ -6,11 +6,18 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/global-exception.filter';
 import { RequestIdMiddleware } from './common/request-id.middleware';
+import { MetricsService } from './common/observability/metrics.service';
+import { RequestContextService } from './common/observability/request-context.service';
+import { StructuredLoggerService } from './common/observability/structured-logger.service';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
-  const requestIdMiddleware = new RequestIdMiddleware();
+  const requestIdMiddleware = new RequestIdMiddleware(
+    app.get(RequestContextService),
+    app.get(MetricsService),
+    app.get(StructuredLoggerService),
+  );
 
   app.use(helmet());
   app.use(requestIdMiddleware.use.bind(requestIdMiddleware));
@@ -31,7 +38,11 @@ async function bootstrap() {
       transform: true,
     }),
   );
-  app.useGlobalFilters(new GlobalExceptionFilter());
+  app.useGlobalFilters(new GlobalExceptionFilter(
+    configService,
+    app.get(StructuredLoggerService),
+    app.get(MetricsService),
+  ));
 
   const port = parseInt(
     process.env.PORT ?? '3000',
@@ -40,9 +51,7 @@ async function bootstrap() {
 
   await app.listen(port);
 
-  console.log(
-    `LeadPilot AI backend running on http://localhost:${port}`,
-  );
+  app.get(StructuredLoggerService).info('application.started', { port });
 }
 
 void bootstrap();

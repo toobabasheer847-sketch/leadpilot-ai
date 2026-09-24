@@ -1,5 +1,5 @@
-import { Controller, Get } from '@nestjs/common';
-import { Logger } from '@nestjs/common';
+import { Controller, Get, HttpStatus, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { RedisService } from '../redis/redis.service';
@@ -7,8 +7,6 @@ import { DatabaseService } from '../database/database.service';
 
 @Controller('health')
 export class HealthController {
-  private readonly logger = new Logger(HealthController.name);
-
   constructor(
     private readonly databaseService: DatabaseService,
     @InjectQueue('lead-research-queue') private leadQueue: Queue,
@@ -17,34 +15,42 @@ export class HealthController {
 
   @Get()
   async checkHealth() {
-    let dbStatus = 'down';
-    let redisStatus = 'down';
+    const dbStatus = await this.databaseStatus();
+    const redisStatus = await this.redisStatus();
+    const queueStatus = await this.queueStatus();
+    const dependenciesUp = dbStatus === 'up' && redisStatus === 'up' && queueStatus === 'up';
+    return { status: dependenciesUp ? 'ok' : 'degraded', timestamp: new Date().toISOString(), services: { application: 'up', database: dbStatus, redis: redisStatus, queue: queueStatus } };
+  }
 
-    // Check Database Connection
+  @Get('live')
+  live() {
+    return { status: 'ok', timestamp: new Date().toISOString() };
+  }
+
+  @Get('ready')
+  async ready(@Res({ passthrough: true }) response: Response) {
+    const health = await this.checkHealth();
+    if (health.status !== 'ok') response.status(HttpStatus.SERVICE_UNAVAILABLE);
+    return health;
+  }
+
+  private async databaseStatus() {
     try {
       await this.databaseService.ping();
-      dbStatus = 'up';
-    } catch (error: unknown) {
-      this.logger.warn(`Database health check failed: ${error instanceof Error ? error.name : 'unknown error'}`);
-      dbStatus = 'down';
-    }
+      return 'up';
+    } catch { return 'down'; }
+  }
 
-    // Check Redis Connection via BullMQ Queue
+  private async redisStatus() {
+    try {
+      return (await this.redisService.ping()) ? 'up' : 'down';
+    } catch { return 'down'; }
+  }
+
+  private async queueStatus() {
     try {
       await this.leadQueue.getJobCounts();
-      redisStatus = (await this.redisService.ping()) ? 'up' : 'down';
-    } catch (error: unknown) {
-      this.logger.warn(`Redis health check failed: ${error instanceof Error ? error.name : 'unknown error'}`);
-      redisStatus = 'down';
-    }
-
-    return {
-      status: dbStatus === 'up' && redisStatus === 'up' ? 'ok' : 'degraded',
-      timestamp: new Date().toISOString(),
-      services: {
-        database: dbStatus,
-        redis: redisStatus,
-      },
-    };
+      return 'up';
+    } catch { return 'down'; }
   }
 }

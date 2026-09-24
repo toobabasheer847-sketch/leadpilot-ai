@@ -11,8 +11,10 @@ describe('HealthController', () => {
     expect(result).toEqual(expect.objectContaining({
       status: 'degraded',
       services: {
+        application: 'up',
         database: 'down',
         redis: 'down',
+        queue: 'down',
       },
     }));
     expect(JSON.stringify(result)).not.toContain('secret');
