@@ -77,7 +77,7 @@ export class ContactsService {
           }).returning();
 
       if (contact) {
-        await this.evidenceService.persistEvidence(companyId, contact.id, candidate);
+        await this.evidenceService.persistEvidence(companyId, contact.id, organizationId, candidate);
         saved += 1;
       }
     }

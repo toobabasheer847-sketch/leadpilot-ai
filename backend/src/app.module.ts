@@ -17,6 +17,7 @@ import { SearchModule } from './search/search.module';
 import { EnrichmentModule } from './enrichment/enrichment.module';
 import { ContactsModule } from './contacts/contacts.module';
 import { ClassificationModule } from './ai/classification/classification.module';
+import { VerificationModule } from './verification/verification.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { ClassificationModule } from './ai/classification/classification.module'
     EnrichmentModule,
     ContactsModule,
     ClassificationModule,
+    VerificationModule,
   ],
   controllers: [AppController],
   providers: [

@@ -243,15 +243,31 @@ export const leadVerifications = pgTable('lead_verifications', {
   id: uuid('id').defaultRandom().primaryKey(),
   companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
   contactId: uuid('contact_id').references(() => companyContacts.id, { onDelete: 'set null' }),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'restrict' }),
   fieldName: varchar('field_name', { length: 100 }).notNull(),
+  field: varchar('field', { length: 100 }).notNull().default('unknown'),
   fieldValue: text('field_value'),
   verificationStatus: varchar('verification_status', { length: 50 }).notNull(),
+  status: varchar('status', { length: 50 }).notNull().default('NOT_FOUND'),
+  verificationType: varchar('verification_type', { length: 50 }).notNull().default('SOURCE_EVIDENCE'),
+  provider: varchar('provider', { length: 100 }),
+  evidenceId: uuid('evidence_id').references(() => leadEvidence.id, { onDelete: 'set null' }),
+  confidence: numeric('confidence', { precision: 5, scale: 4 }),
+  checkedAt: timestamp('checked_at', { withTimezone: true }).defaultNow().notNull(),
+  metadata: jsonb('metadata'),
+  idempotencyKey: varchar('idempotency_key', { length: 512 }).notNull().default('legacy'),
   verificationSource: varchar('verification_source', { length: 255 }),
   verificationUrl: text('verification_url'),
   verifiedAt: timestamp('verified_at', { withTimezone: true }),
   notes: text('notes'),
   ...timestamps,
-}, (table) => [index('lead_verifications_company_idx').on(table.companyId), index('lead_verifications_contact_idx').on(table.contactId), index('lead_verifications_status_idx').on(table.verificationStatus)]);
+}, (table) => [
+  index('lead_verifications_company_idx').on(table.companyId),
+  index('lead_verifications_contact_idx').on(table.contactId),
+  index('lead_verifications_status_idx').on(table.verificationStatus),
+  index('lead_verifications_org_idx').on(table.organizationId),
+  uniqueIndex('lead_verifications_idempotency_unique').on(table.organizationId, table.idempotencyKey),
+]);
 
 export const leadDuplicates = pgTable('lead_duplicates', {
   id: uuid('id').defaultRandom().primaryKey(),

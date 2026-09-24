@@ -8,7 +8,7 @@ import { ContactCandidate, ContactEvidenceEntry } from '../types/contact.types';
 export class ContactEvidenceService {
   constructor(@Inject(DRIZZLE) private readonly db: Database) {}
 
-  async persistEvidence(companyId: string, contactId: string, candidate: ContactCandidate) {
+  async persistEvidence(companyId: string, contactId: string, organizationId: string, candidate: ContactCandidate) {
     for (const item of candidate.evidence) {
       await this.db.insert(leadEvidence).values({
         companyId,
@@ -31,13 +31,19 @@ export class ContactEvidenceService {
       await this.db.insert(leadVerifications).values({
         companyId,
         contactId,
+        organizationId,
+        field: field,
         fieldName: field,
         fieldValue: String(value),
         verificationStatus: candidate.verificationStatus === 'VERIFIED' ? 'VERIFIED' : 'SUPPORTED',
+        status: candidate.verificationStatus === 'VERIFIED' ? 'VERIFIED' : 'SUPPORTED',
+        verificationType: 'SOURCE_EVIDENCE',
+        provider: 'contact-discovery',
+        idempotencyKey: `contact-discovery:${contactId}:${field}`,
         verificationSource: candidate.sourceUrl,
         verificationUrl: candidate.sourceUrl,
         verifiedAt: new Date(),
-      });
+      }).onConflictDoNothing({ target: [leadVerifications.organizationId, leadVerifications.idempotencyKey] });
     }
   }
 
