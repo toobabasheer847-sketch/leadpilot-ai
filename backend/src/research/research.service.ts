@@ -15,7 +15,7 @@ import type { SourceEvidence } from '../enrichment/website/website.types';
 import { ContactQualityService } from '../contacts/quality/contact-quality.service';
 import { UsageService } from '../usage/usage.service';
 import { VerificationService } from '../verification/verification.service';
-import { DeepResearchJobData, ResearchQueue } from './research.queue';
+import { DeepResearchJobData, ResearchQueue, deepResearchJobId } from './research.queue';
 import {
   acceptAiClaim,
   validatedResearchClaims,
@@ -27,6 +27,7 @@ import {
   extractPageLinks,
   extractVisibleText,
   planResearchPages,
+  parseSupportedAddress,
   researchStopReason,
 } from './research.planner';
 
@@ -48,18 +49,28 @@ export class ResearchService {
   ) {}
 
   async start(companyId: string, organizationId: string) {
+    const queued = await this.queueExecution(companyId, organizationId);
+    return { researchExecutionId: queued.researchExecutionId, status: queued.status };
+  }
+
+  async enqueueTracked(companyId: string, organizationId: string) {
+    const queued = await this.queueExecution(companyId, organizationId);
+    return queued.jobId;
+  }
+
+  private async queueExecution(companyId: string, organizationId: string) {
     const company = await this.findCompany(companyId, organizationId);
     const [active] = await this.db.select().from(researchExecutions).where(and(
       eq(researchExecutions.companyId, company.id),
       eq(researchExecutions.organizationId, organizationId),
       inArray(researchExecutions.status, ['QUEUED', 'RUNNING']),
     )).orderBy(desc(researchExecutions.createdAt)).limit(1);
-    if (active) return { researchExecutionId: active.id, status: active.status };
+    if (active) return { researchExecutionId: active.id, status: active.status, jobId: deepResearchJobId(organizationId, company.id, active.id) };
     const [created] = await this.db.insert(researchExecutions).values({ organizationId, companyId: company.id, status: 'QUEUED' }).returning();
-    const jobId = `deep-research-${createHash('sha256').update(`${organizationId}-${company.id}-${created.id}`).digest('hex')}`;
+    const jobId = deepResearchJobId(organizationId, company.id, created.id);
     await this.queue.enqueue({ organizationId, companyId: company.id, researchExecutionId: created.id }, jobId);
     this.logger.info('job.deep_research.queued', { jobId, organizationId, companyId: company.id, researchExecutionId: created.id });
-    return { researchExecutionId: created.id, status: 'QUEUED' as const };
+    return { researchExecutionId: created.id, status: 'QUEUED' as const, jobId };
   }
 
   async list(companyId: string, organizationId: string) {
@@ -195,6 +206,7 @@ export class ResearchService {
     for (const page of pages) {
       const parsed = this.parser.parsePage(page.url, page.html);
       evidence.push(...parsed.evidence.map((entry) => ({ ...entry, sourceUrl: page.url, retrievedAt })));
+      this.appendSupportedFacts(page, parsed, evidence, retrievedAt);
       for (const email of extractLiteralEmails(page.text)) {
         evidence.push({ field: 'email', value: email, sourceUrl: page.url, evidenceExcerpt: email, retrievedAt, evidenceType: 'CONTACT_PAGE' });
       }
@@ -218,6 +230,32 @@ export class ResearchService {
       return { evidence, people, socials, personEmails, personPhones, missingEmail: true };
     }
     return { evidence, people, socials, personEmails, personPhones, missingEmail: false };
+  }
+
+  private appendSupportedFacts(page: { url: string; text: string }, parsed: ReturnType<WebsiteParserService['parsePage']>, evidence: SourceEvidence[], retrievedAt: string) {
+    const haystack = page.text.toLowerCase().replace(/\s+/g, ' ');
+    const supported = (value?: string | null) => {
+      const needle = value?.toLowerCase().replace(/\s+/g, ' ').trim();
+      return Boolean(needle && haystack.includes(needle));
+    };
+    const facts: Array<[string, string | null | undefined, SourceEvidence['evidenceType']]> = [
+      ['services', parsed.services?.[0], 'SERVICES_PAGE'],
+      ['marketsServed', parsed.marketsServed?.[0], 'WEBSITE'],
+      ['propertyTypes', parsed.propertyTypes?.[0], 'WEBSITE'],
+      ['investmentStrategy', parsed.investmentStrategy, 'INVESTMENT_PAGE'],
+      ['address', parsed.address, 'CONTACT_PAGE'],
+    ];
+    for (const [field, value, evidenceType] of facts) {
+      if (!value || !supported(value)) continue;
+      evidence.push({ field, value, sourceUrl: page.url, evidenceExcerpt: value, retrievedAt, evidenceType });
+    }
+    if (!parsed.address || !supported(parsed.address)) return;
+    const location = parseSupportedAddress(parsed.address);
+    if (!location) return;
+    for (const [field, value] of [['city', location.city], ['state', location.state], ['postalCode', location.postalCode]] as const) {
+      if (!value) continue;
+      evidence.push({ field, value, sourceUrl: page.url, evidenceExcerpt: parsed.address, retrievedAt, evidenceType: 'CONTACT_PAGE' });
+    }
   }
 
   private async aiClaims(pages: Array<{ url: string; text: string }>, maxChars: number) {
@@ -246,16 +284,34 @@ export class ResearchService {
     const description = collected.evidence.find((entry) => entry.field === 'description')?.value;
     const email = collected.evidence.find((entry) => (entry.field === 'email' || entry.field === 'publicEmail') && !collected.personEmails.some((item) => item.email === entry.value))?.value;
     const phone = collected.evidence.find((entry) => entry.field === 'phone')?.value;
+    const investmentStrategy = collected.evidence.find((entry) => entry.field === 'investmentStrategy')?.value;
+    const marketsServed = [...new Set(collected.evidence.filter((entry) => entry.field === 'marketsServed').map((entry) => entry.value))];
+    const propertyTypes = [...new Set(collected.evidence.filter((entry) => entry.field === 'propertyTypes').map((entry) => entry.value))];
     await this.db.update(companies).set({
       ...(company.description ? {} : description ? { description } : {}),
       ...(company.email ? {} : email ? { email } : {}),
       ...(company.phone ? {} : phone ? { phone } : {}),
+      ...(company.investmentStrategy ? {} : investmentStrategy ? { investmentStrategy } : {}),
+      ...(company.marketsServed ? {} : marketsServed.length ? { marketsServed } : {}),
+      ...(company.propertyTypes ? {} : propertyTypes.length ? { propertyTypes } : {}),
       updatedAt: new Date(),
     }).where(eq(companies.id, company.id));
     const address = collected.evidence.find((entry) => entry.field === 'address')?.value;
-    if (!address) return;
+    const city = collected.evidence.find((entry) => entry.field === 'city')?.value ?? null;
+    const state = collected.evidence.find((entry) => entry.field === 'state')?.value ?? null;
+    const postalCode = collected.evidence.find((entry) => entry.field === 'postalCode')?.value ?? null;
+    if (!address && !city && !state && !postalCode) return;
     const [existing] = await this.db.select({ id: companyLocations.id }).from(companyLocations).where(eq(companyLocations.companyId, company.id)).limit(1);
-    if (!existing) await this.db.insert(companyLocations).values({ companyId: company.id, addressLine1: address, isPrimary: true });
+    if (!existing) {
+      await this.db.insert(companyLocations).values({
+        companyId: company.id,
+        ...(address ? { addressLine1: address.slice(0, 255) } : {}),
+        ...(city ? { city: city.slice(0, 120) } : {}),
+        ...(state ? { state: state.slice(0, 100) } : {}),
+        ...(postalCode ? { postalCode: postalCode.slice(0, 20) } : {}),
+        isPrimary: true,
+      });
+    }
   }
 
   private async persistSocialProfiles(companyId: string, socials: Array<{ platform: string; url: string }>) {

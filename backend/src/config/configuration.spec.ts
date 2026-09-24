@@ -12,15 +12,21 @@ describe('environment validation', () => {
     expect(validateEnvironment({ ...base })).toEqual(expect.objectContaining(base));
   });
 
-  it('reports missing production provider configuration', () => {
-    expect(() => validateEnvironment({ ...base, NODE_ENV: 'production' })).toThrow(/GOOGLE_PLACES_API_KEY/);
+  it('allows production website research without Google Places and rejects the fake provider', () => {
+    expect(validateEnvironment({
+      ...base,
+      NODE_ENV: 'production',
+      SOURCE_PROVIDER: 'google_places',
+      OPENROUTER_API_KEY: 'present',
+      OPENROUTER_MODEL: 'configured-model',
+    })).toEqual(expect.objectContaining({ NODE_ENV: 'production', SOURCE_PROVIDER: 'google_places' }));
+    expect(() => validateEnvironment({ ...base, NODE_ENV: 'production' })).toThrow(/OPENROUTER_API_KEY/);
     expect(() => validateEnvironment({
       ...base,
       NODE_ENV: 'production',
       SOURCE_PROVIDER: 'fake',
-      GOOGLE_PLACES_API_KEY: 'present',
       OPENROUTER_API_KEY: 'present',
-      OPENROUTER_MODEL: 'model',
+      OPENROUTER_MODEL: 'configured-model',
     })).toThrow(/SOURCE_PROVIDER=fake/);
   });
 });

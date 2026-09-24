@@ -11,6 +11,7 @@ export const PIPELINE_STAGES = [
   'COMPANY_PERSISTENCE',
   'WEBSITE_DISCOVERY',
   'ENRICHMENT',
+  'DEEP_RESEARCH',
   'DECISION_MAKER_DISCOVERY',
   'CLASSIFICATION',
   'VERIFICATION',
@@ -29,6 +30,7 @@ export const STAGE_PROGRESS_KEYS = {
   COMPANY_PERSISTENCE: 'companyPersistence',
   WEBSITE_DISCOVERY: 'websiteDiscovery',
   ENRICHMENT: 'enrichment',
+  DEEP_RESEARCH: 'deepResearch',
   DECISION_MAKER_DISCOVERY: 'decisionMakerDiscovery',
   CLASSIFICATION: 'classification',
   VERIFICATION: 'verification',
@@ -53,6 +55,7 @@ export type PipelineErrorCode = (typeof PIPELINE_ERROR_CODES)[number];
 export const TRACKED_QUEUES = {
   websiteDiscovery: 'company-enrichment-queue',
   enrichment: 'company-enrichment-queue',
+  deepResearch: 'lead-research-queue',
   decisionMakerDiscovery: 'contact-discovery-queue',
   classification: 'ai-classification-queue',
   verification: 'lead-verification-queue',

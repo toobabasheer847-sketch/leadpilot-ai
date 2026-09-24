@@ -164,9 +164,6 @@ export function validateEnvironment(config: Record<string, unknown>) {
     if (sourceProvider === 'fake' || sourceProvider === 'fake_source') {
       throw new Error('SOURCE_PROVIDER=fake is not allowed in production');
     }
-    if (sourceProvider === 'google_places' && !config.GOOGLE_PLACES_API_KEY) {
-      throw new Error('GOOGLE_PLACES_API_KEY is required when SOURCE_PROVIDER=google_places in production');
-    }
     if (!config.OPENROUTER_API_KEY || !config.OPENROUTER_MODEL) {
       throw new Error('OPENROUTER_API_KEY and OPENROUTER_MODEL are required in production');
     }

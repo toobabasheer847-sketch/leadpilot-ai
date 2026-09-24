@@ -11,6 +11,7 @@ import {
   normalizeResearchPhone,
   normalizeResearchUrl,
   planResearchPages,
+  parseSupportedAddress,
   researchStopReason,
   scorePageRelevance,
   validatedResearchClaims,
@@ -84,5 +85,7 @@ describe('deep research planning', () => {
     expect(researchStopReason({ timedOut: false, quotaReached: false, pagesProcessed: 8, maxPages: 8, pendingRelevant: 2, hasDescription: false, hasContact: false, pendingLeadership: 1 })).toBe('PAGE_BUDGET');
     expect(researchStopReason({ timedOut: false, quotaReached: false, pagesProcessed: 2, maxPages: 8, pendingRelevant: 1, hasDescription: true, hasContact: true, pendingLeadership: 0 })).toBe('SUFFICIENT_EVIDENCE');
     expect(researchStopReason({ timedOut: false, quotaReached: false, pagesProcessed: 1, maxPages: 8, pendingRelevant: 0, hasDescription: false, hasContact: false, pendingLeadership: 0 })).toBe('RELEVANT_PAGES_EXHAUSTED');
+    expect(parseSupportedAddress('100 Public Street, Austin, TX 78701')).toEqual({ address: '100 Public Street', city: 'Austin', state: 'TX', postalCode: '78701' });
+    expect(parseSupportedAddress('call the office')).toBeNull();
   });
 });

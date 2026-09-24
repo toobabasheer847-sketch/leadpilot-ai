@@ -8,6 +8,7 @@ import { VerificationService } from '../verification/verification.service';
 import { DeduplicationService } from '../deduplication/deduplication.service';
 import { ScoringService } from '../scoring/scoring.service';
 import { QualificationService } from '../qualification/qualification.service';
+import { ResearchService } from '../research/research.service';
 import { TRACKED_QUEUES, type PipelineErrorCode, type WorkStage } from './pipeline.constants';
 import { PipelineJobInspector } from './pipeline.job-inspector';
 import { classifyPipelineError, nextWorkStage, progressKey, withStageState } from './pipeline.progress';
@@ -19,6 +20,7 @@ type TrackedKey = keyof typeof TRACKED_QUEUES;
 const KEY_TO_STAGE: Record<TrackedKey, WorkStage> = {
   websiteDiscovery: 'WEBSITE_DISCOVERY',
   enrichment: 'ENRICHMENT',
+  deepResearch: 'DEEP_RESEARCH',
   decisionMakerDiscovery: 'DECISION_MAKER_DISCOVERY',
   classification: 'CLASSIFICATION',
   verification: 'VERIFICATION',
@@ -38,6 +40,7 @@ export class PipelineStageRunner {
     private readonly deduplication: DeduplicationService,
     private readonly scoring: ScoringService,
     private readonly qualification: QualificationService,
+    private readonly research: ResearchService,
     private readonly jobs: PipelineJobInspector,
   ) {}
 
@@ -50,6 +53,8 @@ export class PipelineStageRunner {
         return this.tickTracked(row, progress, 'websiteDiscovery');
       case 'ENRICHMENT':
         return this.finishTracked(progress, 'enrichment', progress.jobs.websiteDiscovery ?? []);
+      case 'DEEP_RESEARCH':
+        return this.tickTracked(row, progress, 'deepResearch');
       case 'DECISION_MAKER_DISCOVERY':
         return this.tickTracked(row, progress, 'decisionMakerDiscovery');
       case 'CLASSIFICATION':
@@ -131,6 +136,9 @@ export class PipelineStageRunner {
   }
 
   private async dispatchCompany(row: PipelineExecutionRow, key: TrackedKey, companyId: string): Promise<string | null> {
+    if (key === 'deepResearch') {
+      return this.research.enqueueTracked(companyId, row.organizationId);
+    }
     if (key === 'decisionMakerDiscovery') {
       const result = await this.contacts.enqueueContactDiscovery(companyId, row.organizationId, row.searchExecutionId);
       return result.jobId ? String(result.jobId) : null;

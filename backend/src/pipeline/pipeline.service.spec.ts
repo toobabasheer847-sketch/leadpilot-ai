@@ -7,6 +7,7 @@ import {
   classifyPipelineError,
   initialProgress,
   parseProgress,
+  nextWorkStage,
   pipelineJobId,
   shouldRetryPipelineFailure,
 } from './pipeline.progress';
@@ -172,6 +173,12 @@ describe('pipeline orchestration', () => {
     expect(classifyPipelineError(new Error('OpenRouter is not configured'))).toMatchObject({ code: 'CONFIGURATION_ERROR', retryable: false });
   });
 
+  it('runs deep website research after enrichment in the existing pipeline', () => {
+    expect(nextWorkStage('ENRICHMENT')).toBe('DEEP_RESEARCH');
+    expect(nextWorkStage('DEEP_RESEARCH')).toBe('DECISION_MAKER_DISCOVERY');
+    expect(pipelineJobId('pipeline-1', 'DEEP_RESEARCH')).toBe('lead-pipeline-pipeline-1-deep-research');
+    expect(pipelineJobId('pipeline-1', 'DEEP_RESEARCH')).not.toContain(':');
+  });
   it('builds deterministic job ids without colons', () => {
     const first = pipelineJobId('pipeline-1', 'SOURCE_DISCOVERY', 0);
     const second = pipelineJobId('pipeline-1', 'SOURCE_DISCOVERY', 2);
@@ -211,6 +218,7 @@ function config(values: Record<string, unknown>) {
 function runnerWith(repository: Record<string, unknown>) {
   return new PipelineStageRunner(
     repository as never,
+    {} as never,
     {} as never,
     {} as never,
     {} as never,

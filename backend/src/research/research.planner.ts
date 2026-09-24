@@ -180,6 +180,13 @@ export function classifyPageFailure(message: string): 'PERMANENT' | 'TRANSIENT' 
   return 'TRANSIENT';
 }
 
+export function parseSupportedAddress(value: string) {
+  const trimmed = value.replace(/\s+/g, ' ').trim();
+  const match = trimmed.match(/^(.*?),\s*([A-Za-z][A-Za-z .'-]{1,60}),\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?$/);
+  if (!match) return null;
+  return { address: match[1].trim(), city: match[2].trim(), state: match[3], postalCode: match[4] };
+}
+
 export function researchStopReason(input: { timedOut: boolean; quotaReached: boolean; pagesProcessed: number; maxPages: number; pendingRelevant: number; hasDescription: boolean; hasContact: boolean; pendingLeadership: number }): ResearchStopReason {
   if (input.timedOut) return 'TIMEOUT';
   if (input.quotaReached) return 'QUOTA';

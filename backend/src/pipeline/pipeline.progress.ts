@@ -20,6 +20,7 @@ export function emptyStageMap(): StageMap {
     companyPersistence: 'PENDING',
     websiteDiscovery: 'PENDING',
     enrichment: 'PENDING',
+    deepResearch: 'PENDING',
     decisionMakerDiscovery: 'PENDING',
     classification: 'PENDING',
     verification: 'PENDING',

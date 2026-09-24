@@ -26,7 +26,7 @@ export class WebsiteFetchService {
   }
 
   async fetchPage(url: string, options?: { timeoutMs?: number; retries?: number }): Promise<WebsiteFetchResult> {
-    const normalized = this.normalizer.normalizeUrl(url);
+    const normalized = this.normalizer.normalizeUrl(this.publicHttpsUrl(url));
     if (!normalized) {
       throw new Error('Invalid website URL.');
     }
@@ -235,6 +235,18 @@ export class WebsiteFetchService {
       chunks.push(chunk);
     }
     return Buffer.concat(chunks).toString('utf8');
+  }
+
+  private publicHttpsUrl(url: string) {
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.toLowerCase();
+      const loopback = host === 'localhost' || host.endsWith('.localhost') || host === '127.0.0.1' || host === '::1';
+      if (parsed.protocol === 'http:' && !loopback) parsed.protocol = 'https:';
+      return parsed.toString();
+    } catch {
+      return url;
+    }
   }
 
   private allowsLoopbackFixtures() {

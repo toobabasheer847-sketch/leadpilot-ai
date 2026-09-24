@@ -9,6 +9,7 @@ import { VerificationModule } from '../verification/verification.module';
 import { DeduplicationModule } from '../deduplication/deduplication.module';
 import { ScoringModule } from '../scoring/scoring.module';
 import { QualificationModule } from '../qualification/qualification.module';
+import { ResearchModule } from '../research/research.module';
 import { UsageModule } from '../usage/usage.module';
 import { LEAD_PIPELINE_QUEUE } from './pipeline.constants';
 import { PipelineController } from './pipeline.controller';
@@ -31,6 +32,7 @@ import { PipelineService } from './pipeline.service';
     DeduplicationModule,
     ScoringModule,
     QualificationModule,
+    ResearchModule,
     BullModule.registerQueue(
       { name: LEAD_PIPELINE_QUEUE },
       { name: 'company-enrichment-queue' },
@@ -40,6 +42,7 @@ import { PipelineService } from './pipeline.service';
       { name: 'lead-deduplication-queue' },
       { name: 'lead-scoring-queue' },
       { name: 'lead-qualification-queue' },
+      { name: 'lead-research-queue' },
     ),
   ],
   controllers: [PipelineController],

@@ -17,6 +17,7 @@ export class PipelineJobInspector {
     @InjectQueue('lead-deduplication-queue') deduplication: Queue,
     @InjectQueue('lead-scoring-queue') scoring: Queue,
     @InjectQueue('lead-qualification-queue') qualification: Queue,
+    @InjectQueue('lead-research-queue') research: Queue,
   ) {
     this.queues = {
       'company-enrichment-queue': enrichment,
@@ -26,6 +27,7 @@ export class PipelineJobInspector {
       'lead-deduplication-queue': deduplication,
       'lead-scoring-queue': scoring,
       'lead-qualification-queue': qualification,
+      'lead-research-queue': research,
     };
   }
 

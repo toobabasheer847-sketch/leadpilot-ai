@@ -1,7 +1,12 @@
+import { createHash } from 'node:crypto';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Job, Queue } from 'bullmq';
+
+export function deepResearchJobId(organizationId: string, companyId: string, researchExecutionId: string) {
+  return `deep-research-${createHash('sha256').update(`${organizationId}-${companyId}-${researchExecutionId}`).digest('hex')}`;
+}
 
 export interface DeepResearchJobData {
   organizationId: string;

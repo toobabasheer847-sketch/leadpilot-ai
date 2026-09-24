@@ -24,6 +24,14 @@ describe('Phase 17 website controls', () => {
     expect(normalizer.normalizeUrl('javascript:alert(1)')).toBeNull();
   });
 
+  it('fetches public http websites over https and keeps loopback fixtures on http', async () => {
+    const service = fetcher();
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('<html></html>', { status: 200, headers: { 'content-type': 'text/html' } }));
+    await service.fetchPage('http://example.test/about');
+    expect(fetchMock.mock.calls[0][0]).toBe('https://example.test/about');
+    await expect(service.fetchPage('http://127.0.0.1/')).rejects.toThrow('Blocked private or internal IP');
+  });
+
   it('blocks localhost and private IP targets before network access', async () => {
     const service = fetcher();
     await expect(service.fetchPage('http://127.0.0.1/')).rejects.toThrow('Blocked private or internal IP');
