@@ -24,5 +24,13 @@ export interface SearchPlan {
     titles: string[];
     fields: string[];
   };
+  /** Explicit required company/contact fields for qualification (dynamic). */
+  requiredFields?: string[];
+  /** Explicit optional fields reported but never disqualifying alone. */
+  optionalFields?: string[];
+  /** Alias of contactRequirements.titles for qualification. */
+  requiredRoles?: string[];
+  /** Soft score floor; never overrides required criteria failures. */
+  minimumScore?: number;
   unresolvedCriteria: UnresolvedCriterion[];
 }

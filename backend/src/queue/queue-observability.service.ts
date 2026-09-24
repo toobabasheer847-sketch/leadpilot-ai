@@ -14,6 +14,7 @@ const QUEUES = [
   'lead-scoring-queue',
   'source-discovery-queue',
   'lead-verification-queue',
+  'lead-qualification-queue',
 ];
 
 @Injectable()

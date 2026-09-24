@@ -24,6 +24,7 @@ import { LeadsModule } from './leads/leads.module';
 import { ExportsModule } from './exports/exports.module';
 import { UsageModule } from './usage/usage.module';
 import { ObservabilityModule } from './common/observability/observability.module';
+import { QualificationModule } from './qualification/qualification.module';
 
 @Module({
   imports: [
@@ -64,6 +65,7 @@ import { ObservabilityModule } from './common/observability/observability.module
     LeadsModule,
     ExportsModule,
     UsageModule,
+    QualificationModule,
   ],
   controllers: [AppController],
   providers: [

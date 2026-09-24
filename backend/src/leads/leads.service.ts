@@ -3,7 +3,7 @@ import { and, asc, count, desc, eq, gte, ilike, inArray, lte, or, sql } from 'dr
 import type { Database } from '../database/database.types';
 import { Inject } from '@nestjs/common';
 import { DRIZZLE } from '../database/database.constants';
-import { companies, companyContacts, companyLocations, companySocialProfiles, leadClassifications, leadDuplicates, leadEvidence, leadScores, leadVerifications, searchConfigurations, searchExecutions, sourceRecords } from '../database/schema/schema';
+import { companies, companyContacts, companyLocations, companySocialProfiles, leadClassifications, leadDuplicates, leadEvidence, leadQualifications, leadScores, leadVerifications, searchConfigurations, searchExecutions, sourceRecords } from '../database/schema/schema';
 import { normalizeDomain } from '../deduplication/normalization/normalization';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import type { ListExecutionsDto } from './dto/list-executions.dto';
@@ -67,7 +67,7 @@ export class LeadsService {
     const detail = await this.detail(user, id);
     const breakdown = detail.score?.breakdown;
     const dataCompleteness = typeof breakdown === 'object' && breakdown !== null && 'completenessPercentage' in breakdown && typeof breakdown.completenessPercentage === 'number' ? breakdown.completenessPercentage : 0;
-    return { classification: detail.classification, score: detail.score, verification: detail.verification, evidence: detail.evidence, duplicates: detail.duplicate, decisionMaker: detail.contact, dataCompleteness };
+    return { classification: detail.classification, score: detail.score, verification: detail.verification, qualification: detail.qualification, evidence: detail.evidence, duplicates: detail.duplicate, decisionMaker: detail.contact, dataCompleteness };
   }
 
   async listExecutions(user: AuthenticatedUser, filters: ListExecutionsDto) {
@@ -110,6 +110,10 @@ export class LeadsService {
       const rows = await this.db.select({ companyId: leadDuplicates.entityAId }).from(leadDuplicates).where(and(eq(leadDuplicates.organizationId, organizationId), eq(leadDuplicates.entityType, 'COMPANY'), eq(leadDuplicates.status, filters.duplicateStatus)));
       sets.push(this.uniqueIds(rows.map((row) => row.companyId)));
     }
+    if (filters.qualificationStatus) {
+      const rows = await this.db.select({ companyId: leadQualifications.companyId }).from(leadQualifications).where(and(eq(leadQualifications.organizationId, organizationId), eq(leadQualifications.status, filters.qualificationStatus), filters.searchExecutionId ? eq(leadQualifications.searchExecutionId, filters.searchExecutionId) : undefined));
+      sets.push(this.uniqueIds(rows.map((row) => row.companyId)));
+    }
     if (!sets.length) return null;
     return sets[0].filter((id) => sets.every((set) => set.includes(id)));
   }
@@ -117,7 +121,7 @@ export class LeadsService {
   private async hydrate(rows: CompanyRow[], organizationId: string) {
     const ids = rows.map((row) => row.id);
     if (!ids.length) return [];
-    const [locations, contacts, socials, classifications, scores, verifications, duplicates, evidenceRows, sourceRows] = await Promise.all([
+    const [locations, contacts, socials, classifications, scores, verifications, duplicates, evidenceRows, sourceRows, qualifications] = await Promise.all([
       this.db.select().from(companyLocations).where(inArray(companyLocations.companyId, ids)),
       this.db.select().from(companyContacts).where(inArray(companyContacts.companyId, ids)),
       this.db.select().from(companySocialProfiles).where(inArray(companySocialProfiles.companyId, ids)),
@@ -127,6 +131,7 @@ export class LeadsService {
       this.db.select().from(leadDuplicates).where(and(eq(leadDuplicates.organizationId, organizationId), eq(leadDuplicates.entityType, 'COMPANY'), or(inArray(leadDuplicates.entityAId, ids), inArray(leadDuplicates.entityBId, ids)))),
       this.db.select().from(leadEvidence).where(inArray(leadEvidence.companyId, ids)),
       this.db.select().from(sourceRecords).where(and(eq(sourceRecords.organizationId, organizationId), inArray(sourceRecords.companyId, ids))),
+      this.db.select().from(leadQualifications).where(and(eq(leadQualifications.organizationId, organizationId), inArray(leadQualifications.companyId, ids))).orderBy(desc(leadQualifications.evaluatedAt)),
     ]);
     return rows.map((company) => {
       const location = locations.find((item) => item.companyId === company.id && item.isPrimary) ?? locations.find((item) => item.companyId === company.id) ?? null;
@@ -135,7 +140,8 @@ export class LeadsService {
       const score = scores.find((item) => item.companyId === company.id && item.contactId === null) ?? null;
       const verification = verifications.find((item) => item.companyId === company.id && item.contactId === null) ?? null;
       const duplicate = duplicates.find((item) => item.entityAId === company.id || item.entityBId === company.id) ?? null;
-      return { id: company.id, company: { id: company.id, name: company.name, website: company.website, domain: normalizeDomain(company.website), phone: company.phone, email: company.email, description: company.description, investorType: company.investorType, investmentStrategy: company.investmentStrategy, propertyTypes: company.propertyTypes, marketsServed: company.marketsServed, companySize: company.employeeCount ?? company.employeeRange, location: location ? { city: location.city, state: location.state, zipCode: location.postalCode, country: location.country, address: location.addressLine1 } : null }, contact: contact ? { id: contact.id, name: contact.fullName, title: contact.title, email: contact.email, phone: contact.phone, linkedin: contact.linkedinUrl, facebook: contact.facebookUrl, instagram: contact.instagramUrl } : null, socialProfiles: socials.filter((item) => item.companyId === company.id), classification: classification ? { decision: classification.decision, confidence: classification.confidence ? Number(classification.confidence) : null } : null, score: score ? { value: score.score, band: score.band, breakdown: score.breakdown } : null, verification: verification ? { status: verification.status, field: verification.field } : null, duplicate: duplicate ? { status: duplicate.status, matchType: duplicate.matchType, confidence: duplicate.confidence ? Number(duplicate.confidence) : null } : { status: 'NO_DUPLICATE' }, evidence: evidenceRows.filter((item) => item.companyId === company.id), sourceUrls: sourceRows.filter((item) => item.companyId === company.id).map((item) => item.sourceUrl), createdAt: company.createdAt, updatedAt: company.updatedAt, lastVerifiedAt: company.lastVerifiedAt };
+      const qualification = qualifications.find((item) => item.companyId === company.id) ?? null;
+      return { id: company.id, company: { id: company.id, name: company.name, website: company.website, domain: normalizeDomain(company.website), phone: company.phone, email: company.email, description: company.description, investorType: company.investorType, investmentStrategy: company.investmentStrategy, propertyTypes: company.propertyTypes, marketsServed: company.marketsServed, companySize: company.employeeCount ?? company.employeeRange, location: location ? { city: location.city, state: location.state, zipCode: location.postalCode, country: location.country, address: location.addressLine1 } : null }, contact: contact ? { id: contact.id, name: contact.fullName, title: contact.title, email: contact.email, phone: contact.phone, linkedin: contact.linkedinUrl, facebook: contact.facebookUrl, instagram: contact.instagramUrl } : null, socialProfiles: socials.filter((item) => item.companyId === company.id), classification: classification ? { decision: classification.decision, confidence: classification.confidence ? Number(classification.confidence) : null } : null, score: score ? { value: score.score, band: score.band, breakdown: score.breakdown } : null, verification: verification ? { status: verification.status, field: verification.field } : null, qualification: qualification ? { status: qualification.status, score: qualification.score, scoreBand: qualification.scoreBand, qualifiedReasons: qualification.qualifiedReasons, disqualifiedReasons: qualification.disqualifiedReasons, needsReviewReasons: qualification.needsReviewReasons, missingOptional: qualification.missingOptional, criterionResults: qualification.criterionResults, evaluatedAt: qualification.evaluatedAt } : null, duplicate: duplicate ? { status: duplicate.status, matchType: duplicate.matchType, confidence: duplicate.confidence ? Number(duplicate.confidence) : null } : { status: 'NO_DUPLICATE' }, evidence: evidenceRows.filter((item) => item.companyId === company.id), sourceUrls: sourceRows.filter((item) => item.companyId === company.id).map((item) => item.sourceUrl), createdAt: company.createdAt, updatedAt: company.updatedAt, lastVerifiedAt: company.lastVerifiedAt };
     });
   }
 

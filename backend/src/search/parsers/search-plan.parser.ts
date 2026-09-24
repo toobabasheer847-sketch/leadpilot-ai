@@ -54,6 +54,9 @@ export class SearchPlanParser {
     const companyFields = COMPANY_FIELDS.filter((field) => lowerPrompt.includes(field));
     const contactFields = CONTACT_FIELDS.filter((field) => lowerPrompt.includes(field));
     const titles = this.collectMatches(lowerPrompt, CONTACT_TITLES);
+    const requiredFields = this.parseRequiredFields(lowerPrompt, companyFields, contactFields);
+    const optionalFields = this.parseOptionalFields(lowerPrompt, companyFields, contactFields, requiredFields);
+    const minimumScore = this.parseMinimumScore(lowerPrompt);
     const unresolvedCriteria = this.parseUnresolved(normalizedPrompt, lowerPrompt, industry, leadTypes, locations, companySize);
 
     return {
@@ -68,6 +71,10 @@ export class SearchPlanParser {
           fields: ['name', ...contactFields],
         },
       } : {}),
+      ...(requiredFields.length ? { requiredFields } : {}),
+      ...(optionalFields.length ? { optionalFields } : {}),
+      ...(titles.length ? { requiredRoles: titles } : {}),
+      ...(minimumScore !== undefined ? { minimumScore } : {}),
       unresolvedCriteria,
     };
   }
@@ -117,6 +124,42 @@ export class SearchPlanParser {
       });
     }
     return unresolvedCriteria;
+  }
+
+  private parseRequiredFields(prompt: string, companyFields: string[], contactFields: string[]) {
+    const required = new Set<string>();
+    const mentioned = [...companyFields, ...contactFields];
+    for (const field of mentioned) {
+      if (new RegExp(`\\b(only|must|require[sd]?|with verified|verified)\\b[^.]{0,40}\\b${this.escape(field)}\\b`, 'i').test(prompt)
+        || new RegExp(`\\b${this.escape(field)}\\b[^.]{0,40}\\b(required|only|must|verified)\\b`, 'i').test(prompt)) {
+        required.add(field);
+      }
+    }
+    if (/\bonly leads with verified email\b|\bverified email(?:s)? only\b|\bmust have (?:a )?verified email\b/i.test(prompt)) {
+      required.add('email');
+    }
+    if (/\b(require[sd]?|must have|with)\b[^.]{0,40}\b(website)\b/i.test(prompt)) required.add('website');
+    return [...required];
+  }
+
+  private parseOptionalFields(prompt: string, companyFields: string[], contactFields: string[], requiredFields: string[]) {
+    const optional = new Set<string>();
+    for (const field of [...companyFields, ...contactFields]) {
+      if (requiredFields.includes(field)) continue;
+      if (new RegExp(`\\boptional\\b[^.]{0,30}\\b${this.escape(field)}\\b`, 'i').test(prompt)
+        || new RegExp(`\\b${this.escape(field)}\\b[^.]{0,30}\\boptional\\b`, 'i').test(prompt)
+        || prompt.includes(field)) {
+        optional.add(field);
+      }
+    }
+    return [...optional];
+  }
+
+  private parseMinimumScore(prompt: string) {
+    const match = prompt.match(/\b(?:minimum|min)\s+score\s*(?:of\s*)?(\d{1,3})\b/i);
+    if (!match) return undefined;
+    const value = Number(match[1]);
+    return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : undefined;
   }
 
   private collectMatches(prompt: string, terms: Array<[string, string]>) {

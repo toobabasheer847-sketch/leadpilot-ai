@@ -10,6 +10,7 @@ export class ListLeadsDto {
   @IsOptional() @IsIn(['asc', 'desc']) sortOrder: 'asc' | 'desc' = 'desc';
   @IsOptional() @IsUUID() organizationId?: string;
   @IsOptional() @IsUUID() searchExecutionId?: string;
+  @IsOptional() @IsIn(['QUALIFIED', 'NOT_QUALIFIED', 'NEEDS_REVIEW']) qualificationStatus?: string;
   @IsOptional() @IsIn(['QUALIFIED', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE']) classification?: string;
   @IsOptional() @Type(() => Number) @Min(0) @Max(1) classificationConfidence?: number;
   @IsOptional() @Type(() => Number) @Min(0) @Max(100) minScore?: number;
