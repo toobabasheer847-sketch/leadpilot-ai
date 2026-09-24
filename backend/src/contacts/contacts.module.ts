@@ -42,6 +42,6 @@ import { UsageModule } from '../usage/usage.module';
       useExisting: WebsiteContactProvider,
     },
   ],
-  exports: [ContactsService, ContactDiscoveryQueue],
+  exports: [ContactsService, ContactDiscoveryQueue, ContactQualityService],
 })
 export class ContactsModule {}

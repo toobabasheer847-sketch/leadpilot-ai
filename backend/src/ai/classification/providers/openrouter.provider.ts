@@ -54,4 +54,38 @@ export class OpenRouterProvider implements LlmProvider {
     this.logger.warn('OpenRouter classification failed after retries');
     throw lastError instanceof Error ? lastError : new Error('OpenRouter classification failed');
   }
+
+  async completeJson(system: string, user: string): Promise<unknown> {
+    const apiKey = this.config.get<string>('openRouter.apiKey');
+    const model = this.config.get<string>('openRouter.model');
+    const baseUrl = this.config.get<string>('openRouter.baseUrl', 'https://openrouter.ai/api/v1');
+    const timeoutMs = this.config.get<number>('openRouter.timeoutMs', 20000);
+    const retries = this.config.get<number>('openRouter.retries', 2);
+    if (!apiKey || !model) throw new Error('OpenRouter is not configured');
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      try {
+        const response = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            temperature: 0,
+            response_format: { type: 'json_object' },
+            messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+          }),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (!response.ok) throw new Error(`OpenRouter request failed with status ${response.status}`);
+        const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+        const content = payload.choices?.[0]?.message?.content;
+        if (!content) throw new Error('OpenRouter returned an empty response');
+        return JSON.parse(content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim());
+      } catch (error) {
+        lastError = error;
+        if (attempt < retries && !(error instanceof Error && error.message.includes('not configured'))) continue;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('OpenRouter extraction failed');
+  }
 }

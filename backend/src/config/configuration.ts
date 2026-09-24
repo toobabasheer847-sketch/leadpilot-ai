@@ -84,6 +84,16 @@ export default () => ({
     respectRobots: process.env.WEBSITE_RESPECT_ROBOTS !== 'false',
   },
 
+  deepResearch: {
+    maxPages: parseInt(process.env.DEEP_RESEARCH_MAX_PAGES ?? '8', 10),
+    maxDepth: parseInt(process.env.DEEP_RESEARCH_MAX_DEPTH ?? '1', 10),
+    timeoutMs: parseInt(process.env.DEEP_RESEARCH_TIMEOUT_MS ?? '120000', 10),
+    requestTimeoutMs: parseInt(process.env.DEEP_RESEARCH_REQUEST_TIMEOUT_MS ?? '10000', 10),
+    concurrency: parseInt(process.env.DEEP_RESEARCH_CONCURRENCY ?? '2', 10),
+    maxRetries: parseInt(process.env.DEEP_RESEARCH_MAX_RETRIES ?? '2', 10),
+    maxContentChars: parseInt(process.env.DEEP_RESEARCH_MAX_CONTENT_CHARS ?? '8000', 10),
+  },
+
   export: {
     storagePath: process.env.EXPORT_STORAGE_PATH ?? './storage/exports',
     retentionDays: parseInt(process.env.EXPORT_RETENTION_DAYS ?? '7', 10),
@@ -187,6 +197,21 @@ export function validateEnvironment(config: Record<string, unknown>) {
   const websiteMaxResponseBytes = Number(config.WEBSITE_MAX_RESPONSE_BYTES ?? 5000000);
   if (!Number.isInteger(websiteMaxResponseBytes) || websiteMaxResponseBytes < 10000 || websiteMaxResponseBytes > 100000000) {
     throw new Error('WEBSITE_MAX_RESPONSE_BYTES must be between 10000 and 100000000');
+  }
+
+  const researchLimits: Array<[string, number, number]> = [
+    ['DEEP_RESEARCH_MAX_PAGES', 1, 50],
+    ['DEEP_RESEARCH_MAX_DEPTH', 0, 5],
+    ['DEEP_RESEARCH_TIMEOUT_MS', 1000, 600000],
+    ['DEEP_RESEARCH_REQUEST_TIMEOUT_MS', 1000, 60000],
+    ['DEEP_RESEARCH_CONCURRENCY', 1, 5],
+    ['DEEP_RESEARCH_MAX_RETRIES', 0, 5],
+  ];
+  for (const [key, min, max] of researchLimits) {
+    const value = Number(config[key] ?? (key === 'DEEP_RESEARCH_MAX_PAGES' ? 8 : key === 'DEEP_RESEARCH_MAX_DEPTH' ? 1 : key === 'DEEP_RESEARCH_TIMEOUT_MS' ? 120000 : key === 'DEEP_RESEARCH_REQUEST_TIMEOUT_MS' ? 10000 : key === 'DEEP_RESEARCH_CONCURRENCY' ? 2 : 2));
+    if (!Number.isInteger(value) || value < min || value > max) {
+      throw new Error(`${key} must be an integer between ${min} and ${max}`);
+    }
   }
 
   const websiteFetchConcurrency = Number(config.WEBSITE_FETCH_CONCURRENCY ?? 2);

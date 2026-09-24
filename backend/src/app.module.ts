@@ -26,6 +26,7 @@ import { UsageModule } from './usage/usage.module';
 import { ObservabilityModule } from './common/observability/observability.module';
 import { QualificationModule } from './qualification/qualification.module';
 import { PipelineModule } from './pipeline/pipeline.module';
+import { ResearchModule } from './research/research.module';
 
 @Module({
   imports: [
@@ -68,6 +69,7 @@ import { PipelineModule } from './pipeline/pipeline.module';
     UsageModule,
     QualificationModule,
     PipelineModule,
+    ResearchModule,
   ],
   controllers: [AppController],
   providers: [

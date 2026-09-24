@@ -25,20 +25,22 @@ export class WebsiteFetchService {
     this.respectRobots = configService.get<boolean>('website.respectRobots', true);
   }
 
-  async fetchPage(url: string): Promise<WebsiteFetchResult> {
+  async fetchPage(url: string, options?: { timeoutMs?: number; retries?: number }): Promise<WebsiteFetchResult> {
     const normalized = this.normalizer.normalizeUrl(url);
     if (!normalized) {
       throw new Error('Invalid website URL.');
     }
+    const timeoutMs = options?.timeoutMs ?? this.timeoutMs;
+    const retries = options?.retries ?? this.retries;
 
     const safeUrl = await this.validatePublicUrl(normalized);
-    if (!(await this.isAllowedByRobots(safeUrl))) throw new Error('Website disallowed by robots.txt.');
+    if (!(await this.isAllowedByRobots(safeUrl, timeoutMs))) throw new Error('Website disallowed by robots.txt.');
     let currentUrl = safeUrl;
     let redirectCount = 0;
 
-    for (let attempt = 0; attempt <= this.retries; attempt += 1) {
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
       try {
-        const response = await this.requestPage(currentUrl);
+        const response = await this.requestPage(currentUrl, timeoutMs);
 
         if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
           if (redirectCount >= this.maxRedirects) {
@@ -47,7 +49,7 @@ export class WebsiteFetchService {
 
           const nextUrl = this.resolveLocation(currentUrl, response.headers.location);
           const validated = await this.validatePublicUrl(nextUrl);
-          if (!(await this.isAllowedByRobots(validated))) throw new Error('Website disallowed by robots.txt.');
+          if (!(await this.isAllowedByRobots(validated, timeoutMs))) throw new Error('Website disallowed by robots.txt.');
           redirectCount += 1;
           currentUrl = validated;
           attempt -= 1;
@@ -80,7 +82,7 @@ export class WebsiteFetchService {
           redirectCount,
         };
       } catch (error) {
-        if (this.shouldRetry(error) && attempt < this.retries) {
+        if (this.shouldRetry(error) && attempt < retries) {
           continue;
         }
         throw error;
@@ -90,9 +92,9 @@ export class WebsiteFetchService {
     throw new Error('Website fetch failed after retries.');
   }
 
-  private async requestPage(url: string): Promise<{ statusCode: number; headers: Record<string, string>; body: string }> {
+  private async requestPage(url: string, timeoutMs = this.timeoutMs): Promise<{ statusCode: number; headers: Record<string, string>; body: string }> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = await fetch(url, {
@@ -151,10 +153,11 @@ export class WebsiteFetchService {
     }
 
     const hostname = parsed.hostname.toLowerCase();
-    if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
+    const loopbackFixture = this.allowsLoopbackFixtures() && (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '127.0.0.1' || hostname === '::1');
+    if ((hostname === 'localhost' || hostname.endsWith('.localhost')) && !loopbackFixture) {
       throw new Error('Localhost targets are blocked.');
     }
-    if (isIP(hostname) && this.isBlockedIp(hostname)) {
+    if (isIP(hostname) && this.isBlockedIp(hostname) && !(loopbackFixture && this.isLoopbackAddress(hostname))) {
       throw new Error('Blocked private or internal IP.');
     }
 
@@ -164,7 +167,7 @@ export class WebsiteFetchService {
 
     const addresses = await this.resolveHostAddresses(hostname);
     for (const address of addresses) {
-      if (this.isBlockedIp(address)) {
+      if (this.isBlockedIp(address) && !(this.allowsLoopbackFixtures() && this.isLoopbackAddress(address))) {
         throw new Error(`Blocked private or internal IP: ${address}`);
       }
     }
@@ -234,7 +237,16 @@ export class WebsiteFetchService {
     return Buffer.concat(chunks).toString('utf8');
   }
 
-  private async isAllowedByRobots(url: string): Promise<boolean> {
+  private allowsLoopbackFixtures() {
+    const nodeEnv = this.configService.get<string>('nodeEnv', 'production');
+    return nodeEnv === 'development' || nodeEnv === 'test';
+  }
+
+  private isLoopbackAddress(address: string) {
+    return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+  }
+
+  private async isAllowedByRobots(url: string, timeoutMs = this.timeoutMs): Promise<boolean> {
     if (!this.respectRobots) return true;
     const parsed = new URL(url);
     const origin = parsed.origin;
@@ -242,7 +254,7 @@ export class WebsiteFetchService {
     if (cached) return !this.isDisallowedPath(parsed.pathname, cached);
     try {
       const robotsUrl = await this.validatePublicUrl(`${origin}/robots.txt`);
-      const response = await fetch(robotsUrl, { signal: AbortSignal.timeout(this.timeoutMs), redirect: 'error', headers: { 'User-Agent': 'LeadPilotBot/1.0' } });
+      const response = await fetch(robotsUrl, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error', headers: { 'User-Agent': 'LeadPilotBot/1.0' } });
       if (!response.ok) return true;
       const rules = (await this.readBody(response)).split(/\r?\n/).map((line) => line.trim()).filter((line) => /^disallow\s*:/i.test(line)).map((line) => line.replace(/^disallow\s*:/i, '').trim()).filter(Boolean);
       this.robotsRules.set(origin, rules);

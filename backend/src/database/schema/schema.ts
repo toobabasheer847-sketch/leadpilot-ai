@@ -481,6 +481,32 @@ export const pipelineJobs = pgTable('pipeline_jobs', {
   ...timestamps,
 }, (table) => [index('pipeline_jobs_execution_idx').on(table.searchExecutionId), index('pipeline_jobs_type_idx').on(table.jobType), index('pipeline_jobs_status_idx').on(table.status), index('pipeline_jobs_bull_id_idx').on(table.bullJobId)]);
 
+export const researchExecutions = pgTable('research_executions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'restrict' }),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  status: varchar('status', { length: 20 }).notNull().default('QUEUED'),
+  startedAt: timestamp('started_at', { withTimezone: true }),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  failedAt: timestamp('failed_at', { withTimezone: true }),
+  pagesDiscovered: integer('pages_discovered').notNull().default(0),
+  pagesProcessed: integer('pages_processed').notNull().default(0),
+  fieldsExtracted: integer('fields_extracted').notNull().default(0),
+  fieldsVerified: integer('fields_verified').notNull().default(0),
+  conflictsFound: integer('conflicts_found').notNull().default(0),
+  stopReason: varchar('stop_reason', { length: 80 }),
+  errorCode: varchar('error_code', { length: 50 }),
+  errorMessage: text('error_message'),
+  pageFailures: jsonb('page_failures').notNull().default([]),
+  extractedFields: jsonb('extracted_fields').notNull().default([]),
+  ...timestamps,
+}, (table) => [
+  index('research_executions_org_idx').on(table.organizationId),
+  index('research_executions_company_idx').on(table.companyId),
+  index('research_executions_status_idx').on(table.status),
+  check('research_executions_status_check', sql`${table.status} in ('QUEUED', 'RUNNING', 'COMPLETED', 'PARTIAL', 'FAILED')`),
+]);
+
 export const exportsTable = pgTable('exports', {
   id: uuid('id').defaultRandom().primaryKey(),
   organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'restrict' }),

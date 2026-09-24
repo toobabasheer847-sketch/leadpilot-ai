@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigService } from '@nestjs/config';
-import { LeadResearchProcessor } from './lead-research.processor';
 import { LeadResearchQueue } from './lead-research.queue';
 import { QueueObservabilityService } from './queue-observability.service';
 
@@ -26,7 +25,7 @@ import { QueueObservabilityService } from './queue-observability.service';
       name: 'lead-research-queue',
     }),
   ],
-  providers: [LeadResearchProcessor, LeadResearchQueue, QueueObservabilityService],
+  providers: [LeadResearchQueue, QueueObservabilityService],
   exports: [BullModule, LeadResearchQueue],
 })
 export class QueueModule {}
