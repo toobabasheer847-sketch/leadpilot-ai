@@ -15,9 +15,10 @@ import { WebsiteDiscoveryService } from './website/website-discovery.service';
 import { WebsiteFetchService } from './website/website-fetch.service';
 import { WebsiteNormalizerService } from './website/website-normalizer.service';
 import { WebsiteParserService } from './website/website-parser.service';
+import { UsageModule } from '../usage/usage.module';
 
 @Module({
-  imports: [ConfigModule, AuthModule, UsersModule, OrganizationsModule, BullModule.registerQueue({ name: 'company-enrichment-queue' })],
+  imports: [ConfigModule, AuthModule, UsersModule, OrganizationsModule, UsageModule, BullModule.registerQueue({ name: 'company-enrichment-queue' })],
   controllers: [CompanyController],
   providers: [
     WebsiteNormalizerService,

@@ -103,18 +103,12 @@ export class WebsiteParserService {
   }
 
   extractPublicEmail(text: string, html: string): string | null {
-    const candidates = [...text.matchAll(/(?:mailto:)?([A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/gi)].map((match) => match[1].toLowerCase());
+    const candidates = [...`${text}\n${html}`.matchAll(/(?:mailto:)?([A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/gi)].map((match) => match[1].toLowerCase());
     const allowed = ['info', 'contact', 'hello', 'support', 'sales', 'team', 'press', 'careers'];
-    const selected = candidates.find((value) => {
+    return candidates.find((value) => {
       const local = value.split('@')[0].toLowerCase();
       return allowed.some((prefix) => local === prefix || local.startsWith(`${prefix}.`) || local.startsWith(`${prefix}+`));
-    }) ?? candidates[0] ?? null;
-
-    if (html.toLowerCase().includes('mailto:john@') || html.toLowerCase().includes('mailto:jane@')) {
-      return selected;
-    }
-
-    return selected;
+    }) ?? null;
   }
 
   extractPhone(text: string): string | null {

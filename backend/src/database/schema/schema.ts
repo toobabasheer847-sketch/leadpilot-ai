@@ -205,11 +205,18 @@ export const leadEvidence = pgTable('lead_evidence', {
   sourceRecordId: uuid('source_record_id').references(() => sourceRecords.id, { onDelete: 'set null' }),
   evidenceType: varchar('evidence_type', { length: 100 }).notNull(),
   sourceUrl: text('source_url').notNull(),
+  canonicalUrl: text('canonical_url'),
+  sourceType: varchar('source_type', { length: 100 }).default('WEBSITE').notNull(),
   evidenceText: text('evidence_text').notNull(),
   evidenceTimestamp: timestamp('evidence_timestamp', { withTimezone: true }),
+  idempotencyKey: varchar('idempotency_key', { length: 512 }),
   metadata: jsonb('metadata'),
   ...timestamps,
-}, (table) => [index('lead_evidence_company_idx').on(table.companyId), index('lead_evidence_source_record_idx').on(table.sourceRecordId)]);
+}, (table) => [
+  index('lead_evidence_company_idx').on(table.companyId),
+  index('lead_evidence_source_record_idx').on(table.sourceRecordId),
+  uniqueIndex('lead_evidence_idempotency_unique').on(table.idempotencyKey),
+]);
 
 export const leadClassifications = pgTable('lead_classifications', {
   id: uuid('id').defaultRandom().primaryKey(),

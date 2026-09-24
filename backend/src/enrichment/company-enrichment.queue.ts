@@ -10,6 +10,7 @@ export class CompanyEnrichmentQueue {
 
   enqueue(data: CompanyEnrichmentJobData): Promise<Job<CompanyEnrichmentJobData>> {
     return this.queue.add('COMPANY_ENRICHMENT', { ...data, correlationId: this.context.get()?.correlationId }, {
+      jobId: data.idempotencyKey,
       attempts: 3,
       backoff: { type: 'exponential', delay: 2000 },
       removeOnComplete: true,

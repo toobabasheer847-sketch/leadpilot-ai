@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
 import { DRIZZLE } from '../../database/database.constants';
 import type { Database } from '../../database/database.types';
 import { leadEvidence, sourceRecords } from '../../database/schema/schema';
@@ -9,15 +10,21 @@ import { SourceEvidence } from '../website/website.types';
 export class EvidenceRepository {
   constructor(@Inject(DRIZZLE) private readonly db: Database) {}
 
-  async persistEvidence(companyId: string, sourceUrl: string, evidence: SourceEvidence[]) {
+  async persistEvidence(companyId: string, sourceUrl: string, evidence: SourceEvidence[], canonicalUrl?: string) {
     const inserted = [] as Array<typeof leadEvidence.$inferSelect>;
     for (const item of evidence) {
+      const idempotencyKey = createHash('sha256').update(JSON.stringify({ companyId, field: item.field, sourceUrl: item.sourceUrl || sourceUrl, value: item.value, excerpt: item.evidenceExcerpt })).digest('hex');
+      const [existing] = await this.db.select().from(leadEvidence).where(eq(leadEvidence.idempotencyKey, idempotencyKey)).limit(1);
+      if (existing) continue;
       const [record] = await this.db.insert(leadEvidence).values({
         companyId,
         evidenceType: item.evidenceType,
         sourceUrl: item.sourceUrl || sourceUrl,
+        canonicalUrl: canonicalUrl ?? null,
+        sourceType: 'WEBSITE',
         evidenceText: item.evidenceExcerpt || item.value,
         evidenceTimestamp: item.retrievedAt ? new Date(item.retrievedAt) : new Date(),
+        idempotencyKey,
         metadata: {
           field: item.field,
           value: item.value,

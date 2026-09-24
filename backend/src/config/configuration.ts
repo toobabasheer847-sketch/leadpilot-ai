@@ -58,6 +58,10 @@ export default () => ({
     maxResponseBytes: parseInt(process.env.WEBSITE_MAX_RESPONSE_BYTES ?? '5000000', 10),
     fetchConcurrency: parseInt(process.env.WEBSITE_FETCH_CONCURRENCY ?? '2', 10),
     maxPagesPerCompany: parseInt(process.env.WEBSITE_MAX_PAGES_PER_COMPANY ?? '5', 10),
+    maxCrawlDepth: parseInt(process.env.WEBSITE_MAX_CRAWL_DEPTH ?? '1', 10),
+    maxRedirects: parseInt(process.env.WEBSITE_MAX_REDIRECTS ?? '5', 10),
+    retries: parseInt(process.env.WEBSITE_FETCH_RETRIES ?? '2', 10),
+    respectRobots: process.env.WEBSITE_RESPECT_ROBOTS !== 'false',
   },
 
   export: {

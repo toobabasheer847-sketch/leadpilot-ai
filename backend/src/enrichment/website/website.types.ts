@@ -30,12 +30,14 @@ export interface WebsitePageResult {
   content: string;
   contentType: string;
   statusCode: number;
+  depth?: number;
 }
 
 export interface WebsiteDiscoveryOutcome {
   website: string | null;
   status: 'FOUND' | 'NOT_FOUND' | 'INVALID';
   page?: WebsitePageResult;
+  pages?: WebsitePageResult[];
   reason?: string;
 }
 
@@ -74,4 +76,6 @@ export interface CompanyEnrichmentJobData {
   companyId: string;
   organizationId: string;
   searchExecutionId?: string | null;
+  correlationId?: string;
+  idempotencyKey?: string;
 }

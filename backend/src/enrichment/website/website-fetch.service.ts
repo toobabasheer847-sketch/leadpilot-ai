@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import dns from 'node:dns/promises';
 import { isIP } from 'node:net';
@@ -7,12 +7,12 @@ import { WebsiteNormalizerService } from './website-normalizer.service';
 
 @Injectable()
 export class WebsiteFetchService {
-  private readonly logger = new Logger(WebsiteFetchService.name);
-
   private readonly timeoutMs: number;
   private readonly maxResponseBytes: number;
   private readonly maxRedirects: number;
   private readonly retries: number;
+  private readonly respectRobots: boolean;
+  private readonly robotsRules = new Map<string, string[]>();
 
   constructor(
     private readonly configService: ConfigService,
@@ -20,8 +20,9 @@ export class WebsiteFetchService {
   ) {
     this.timeoutMs = configService.get<number>('website.fetchTimeoutMs', 10000);
     this.maxResponseBytes = configService.get<number>('website.maxResponseBytes', 5000000);
-    this.maxRedirects = 5;
-    this.retries = 2;
+    this.maxRedirects = configService.get<number>('website.maxRedirects', 5);
+    this.retries = configService.get<number>('website.retries', 2);
+    this.respectRobots = configService.get<boolean>('website.respectRobots', true);
   }
 
   async fetchPage(url: string): Promise<WebsiteFetchResult> {
@@ -31,6 +32,7 @@ export class WebsiteFetchService {
     }
 
     const safeUrl = await this.validatePublicUrl(normalized);
+    if (!(await this.isAllowedByRobots(safeUrl))) throw new Error('Website disallowed by robots.txt.');
     let currentUrl = safeUrl;
     let redirectCount = 0;
 
@@ -45,8 +47,10 @@ export class WebsiteFetchService {
 
           const nextUrl = this.resolveLocation(currentUrl, response.headers.location);
           const validated = await this.validatePublicUrl(nextUrl);
+          if (!(await this.isAllowedByRobots(validated))) throw new Error('Website disallowed by robots.txt.');
           redirectCount += 1;
           currentUrl = validated;
+          attempt -= 1;
           continue;
         }
 
@@ -72,7 +76,7 @@ export class WebsiteFetchService {
           body,
           title: this.extractTitle(body),
           description: this.extractMetaDescription(body),
-          canonicalUrl: this.extractCanonicalUrl(body),
+          canonicalUrl: this.normalizer.normalizeUrl(this.extractCanonicalUrl(body)),
           redirectCount,
         };
       } catch (error) {
@@ -102,7 +106,13 @@ export class WebsiteFetchService {
       });
 
       const contentTypeHeader = response.headers.get('content-type') ?? '';
-      const body = await response.text();
+      if (response.status >= 300 && response.status < 400) {
+        return { statusCode: response.status, headers: { location: response.headers.get('location') ?? '' }, body: '' };
+      }
+      if (!this.isAllowedContentType(contentTypeHeader)) {
+        throw new Error(`Unsupported content type: ${contentTypeHeader || 'unknown'}`);
+      }
+      const body = await this.readBody(response);
       const headers: Record<string, string> = {};
       response.headers.forEach((value, key) => {
         headers[key] = value;
@@ -144,8 +154,11 @@ export class WebsiteFetchService {
     if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
       throw new Error('Localhost targets are blocked.');
     }
+    if (isIP(hostname) && this.isBlockedIp(hostname)) {
+      throw new Error('Blocked private or internal IP.');
+    }
 
-    if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal') {
+    if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal' || hostname === 'metadata') {
       throw new Error('Cloud metadata targets are blocked.');
     }
 
@@ -176,35 +189,16 @@ export class WebsiteFetchService {
       return false;
     }
 
-    if (address === '::1') {
+    if (address === '::1' || address === '::') {
       return true;
     }
 
-    if (address.startsWith('127.')) {
-      return true;
-    }
-
-    if (address.startsWith('10.')) {
-      return true;
-    }
-
-    if (address.startsWith('172.16.') || address.startsWith('172.17.') || address.startsWith('172.18.') || address.startsWith('172.19.') || address.startsWith('172.20.') || address.startsWith('172.21.') || address.startsWith('172.22.') || address.startsWith('172.23.') || address.startsWith('172.24.') || address.startsWith('172.25.') || address.startsWith('172.26.') || address.startsWith('172.27.') || address.startsWith('172.28.') || address.startsWith('172.29.') || address.startsWith('172.30.') || address.startsWith('172.31.')) {
-      return true;
-    }
-
-    if (address.startsWith('192.168.')) {
-      return true;
-    }
-
-    if (address.startsWith('169.254.')) {
-      return true;
-    }
-
-    if (address.startsWith('::ffff:127.')) {
-      return true;
-    }
-
-    return address.startsWith('fc') || address.startsWith('fd') || address.startsWith('fe80') || address.startsWith('2001:db8');
+    if (address.startsWith('::ffff:')) return this.isBlockedIp(address.slice(7));
+    if (address.includes(':')) return address.startsWith('fc') || address.startsWith('fd') || address.startsWith('fe80') || address.startsWith('2001:db8');
+    const octets = address.split('.').map(Number);
+    if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return true;
+    const [first, second] = octets;
+    return first === 0 || first === 10 || first === 127 || first === 169 && second === 254 || first === 172 && second >= 16 && second <= 31 || first === 192 && second === 0 || first === 192 && second === 168 || first === 198 && (second === 18 || second === 19) || first === 100 && second >= 64 && second <= 127;
   }
 
   private isAllowedContentType(contentType: string): boolean {
@@ -219,6 +213,47 @@ export class WebsiteFetchService {
 
     const message = error.message.toLowerCase();
     return message.includes('timeout') || message.includes('transient') || message.includes('reset') || message.includes('temporar') || message.includes('503') || message.includes('429');
+  }
+
+  private async readBody(response: Response): Promise<string> {
+    if (!response.body) throw new Error('Website response has no body.');
+    const reader = response.body.getReader();
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      const chunk = Buffer.from(next.value);
+      total += chunk.byteLength;
+      if (total > this.maxResponseBytes) {
+        await reader.cancel();
+        throw new Error('Website response exceeds configured maximum size.');
+      }
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks).toString('utf8');
+  }
+
+  private async isAllowedByRobots(url: string): Promise<boolean> {
+    if (!this.respectRobots) return true;
+    const parsed = new URL(url);
+    const origin = parsed.origin;
+    const cached = this.robotsRules.get(origin);
+    if (cached) return !this.isDisallowedPath(parsed.pathname, cached);
+    try {
+      const robotsUrl = await this.validatePublicUrl(`${origin}/robots.txt`);
+      const response = await fetch(robotsUrl, { signal: AbortSignal.timeout(this.timeoutMs), redirect: 'error', headers: { 'User-Agent': 'LeadPilotBot/1.0' } });
+      if (!response.ok) return true;
+      const rules = (await this.readBody(response)).split(/\r?\n/).map((line) => line.trim()).filter((line) => /^disallow\s*:/i.test(line)).map((line) => line.replace(/^disallow\s*:/i, '').trim()).filter(Boolean);
+      this.robotsRules.set(origin, rules);
+      return !this.isDisallowedPath(parsed.pathname, rules);
+    } catch {
+      return true;
+    }
+  }
+
+  private isDisallowedPath(pathname: string, rules: string[]) {
+    return rules.some((rule) => pathname.startsWith(rule));
   }
 
   private extractTitle(html: string): string | null {
