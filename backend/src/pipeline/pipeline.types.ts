@@ -10,14 +10,39 @@ export interface LeadPipelineJobData {
 
 export type StageMap = Record<StageProgressKey, StageState>;
 
+export interface PipelineFailure {
+  stage: string;
+  message: string;
+}
+
 export interface PipelineProgressState {
   stages: StageMap;
   jobs: Partial<Record<StageProgressKey, string[]>>;
   waits: number;
+  failures: PipelineFailure[];
+}
+
+export interface PipelineCounters {
+  companiesDiscovered: number | null;
+  companiesProcessed: number | null;
+  websitesResearched: number | null;
+  decisionMakersFound: number | null;
+  contactsFound: number | null;
+  evidenceCollected: number | null;
+  verifiedFields: number | null;
+  conflictsFound: number | null;
+  duplicatesFound: number | null;
+  qualifiedLeads: number | null;
+}
+
+export interface PipelineStageStatus {
+  name: string;
+  status: StageState;
 }
 
 export interface PipelineView {
   pipelineExecutionId: string;
+  executionId: string | null;
   searchId: string;
   searchExecutionId: string | null;
   status: PipelineStatus;
@@ -26,6 +51,9 @@ export interface PipelineView {
   completedAt: Date | null;
   failedAt: Date | null;
   stages: StageMap;
+  stageList: PipelineStageStatus[];
+  counters: PipelineCounters;
+  failures: PipelineFailure[];
   error: { code: PipelineErrorCode; message: string } | null;
 }
 

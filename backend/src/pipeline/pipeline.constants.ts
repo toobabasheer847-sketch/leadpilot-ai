@@ -3,16 +3,19 @@ export const LEAD_PIPELINE_JOB = 'LEAD_PIPELINE';
 export const MAX_STAGE_WAITS = 120;
 export const STAGE_WAIT_DELAY_MS = 2000;
 
-export const PIPELINE_STATUSES = ['QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED'] as const;
+export const PIPELINE_STATUSES = ['QUEUED', 'RUNNING', 'PARTIAL', 'COMPLETED', 'FAILED', 'CANCELLED'] as const;
 export type PipelineStatus = (typeof PIPELINE_STATUSES)[number];
 
 export const PIPELINE_STAGES = [
+  'SEARCH',
   'SOURCE_DISCOVERY',
   'COMPANY_PERSISTENCE',
   'WEBSITE_DISCOVERY',
   'ENRICHMENT',
   'DEEP_RESEARCH',
   'DECISION_MAKER_DISCOVERY',
+  'CONTACT_QUALITY',
+  'EVIDENCE',
   'CLASSIFICATION',
   'VERIFICATION',
   'DEDUPLICATION',
@@ -26,12 +29,15 @@ export const WORK_STAGES = PIPELINE_STAGES.filter((stage) => stage !== 'COMPLETE
 export type WorkStage = (typeof WORK_STAGES)[number];
 
 export const STAGE_PROGRESS_KEYS = {
+  SEARCH: 'search',
   SOURCE_DISCOVERY: 'sourceDiscovery',
   COMPANY_PERSISTENCE: 'companyPersistence',
   WEBSITE_DISCOVERY: 'websiteDiscovery',
   ENRICHMENT: 'enrichment',
   DEEP_RESEARCH: 'deepResearch',
   DECISION_MAKER_DISCOVERY: 'decisionMakerDiscovery',
+  CONTACT_QUALITY: 'contactQuality',
+  EVIDENCE: 'evidence',
   CLASSIFICATION: 'classification',
   VERIFICATION: 'verification',
   DEDUPLICATION: 'deduplication',
@@ -40,7 +46,7 @@ export const STAGE_PROGRESS_KEYS = {
 } as const;
 
 export type StageProgressKey = (typeof STAGE_PROGRESS_KEYS)[WorkStage];
-export type StageState = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+export type StageState = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'PARTIAL' | 'FAILED';
 
 export const PIPELINE_ERROR_CODES = [
   'TRANSIENT_PROVIDER_ERROR',
@@ -57,6 +63,7 @@ export const TRACKED_QUEUES = {
   enrichment: 'company-enrichment-queue',
   deepResearch: 'lead-research-queue',
   decisionMakerDiscovery: 'contact-discovery-queue',
+  contactQuality: 'contact-quality-queue',
   classification: 'ai-classification-queue',
   verification: 'lead-verification-queue',
   deduplication: 'lead-deduplication-queue',

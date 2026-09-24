@@ -30,9 +30,9 @@ export function NewSearchPage() {
           setBusy(true);
           try {
             const search = await searchApi.create(draft.name, draft.prompt);
-            await pipelineApi.start(search.id);
+            const view = await pipelineApi.execute(search.id);
             notify('success', 'Search started');
-            navigate(`/search-history/${search.id}`);
+            navigate(view.executionId ? `/search/${search.id}/execution/${view.executionId}` : `/search-history/${search.id}`);
           } catch (error) {
             notify('error', error instanceof ApiError ? error.message : 'Unable to start the search.');
           } finally {

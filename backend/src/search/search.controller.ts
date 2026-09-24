@@ -49,11 +49,6 @@ export class SearchController {
     return this.searchService.update(user, searchId, dto);
   }
 
-  @Post(':searchId/execute')
-  execute(@CurrentUser() user: AuthenticatedUser, @Param('searchId') searchId: string) {
-    return this.searchService.createExecution(user, searchId);
-  }
-
   @Get(':searchId/executions')
   listExecutions(@CurrentUser() user: AuthenticatedUser, @Param('searchId') searchId: string) {
     return this.searchService.listExecutions(user, searchId);

@@ -72,22 +72,25 @@ describe('Search configuration and execution (e2e)', () => {
     await request(app.getHttpServer()).patch(`/api/v1/searches/${searchId}`).set('Authorization', `Bearer ${token}`).send({ prompt: updatedPrompt }).expect(200);
     const execution = await request(app.getHttpServer()).post(`/api/v1/searches/${searchId}/execute`).set('Authorization', `Bearer ${token}`).expect(201);
     expect(execution.body.status).toBe('QUEUED');
-    expect(execution.body.structuredPlan).toMatchObject({
+    expect(execution.body.executionId).toEqual(expect.any(String));
+    const stored = await request(app.getHttpServer()).get(`/api/v1/searches/executions/${execution.body.executionId}`).set('Authorization', `Bearer ${token}`).expect(200);
+    expect(stored.body.structuredPlan).toMatchObject({
       industry: ['software'],
       locations: [{ state: 'California' }],
       companySize: { min: 51, max: 200 },
     });
 
     const duplicate = await request(app.getHttpServer()).post(`/api/v1/searches/${searchId}/execute`).set('Authorization', `Bearer ${token}`).expect(201);
-    const current = await request(app.getHttpServer()).get(`/api/v1/searches/executions/${execution.body.id}`).set('Authorization', `Bearer ${token}`).expect(200);
+    const current = await request(app.getHttpServer()).get(`/api/v1/searches/executions/${execution.body.executionId}`).set('Authorization', `Bearer ${token}`).expect(200);
     if (['QUEUED', 'RUNNING'].includes(current.body.status)) {
-      expect(duplicate.body.id).toBe(execution.body.id);
+      expect(duplicate.body.executionId).toBe(execution.body.executionId);
     }
 
     await request(app.getHttpServer()).get(`/api/v1/searches/${searchId}/executions`).set('Authorization', `Bearer ${token}`).expect(200).expect((response) => {
       expect(response.body.length).toBeGreaterThan(0);
       expect(response.body[0].structuredPlan).toMatchObject({ industry: ['software'] });
     });
-    await request(app.getHttpServer()).get(`/api/v1/searches/executions/${execution.body.id}`).set('Authorization', `Bearer ${otherToken}`).expect(404);
+    await request(app.getHttpServer()).get(`/api/v1/searches/executions/${execution.body.executionId}`).set('Authorization', `Bearer ${otherToken}`).expect(404);
+    await request(app.getHttpServer()).get(`/api/v1/search-executions/${execution.body.executionId}`).set('Authorization', `Bearer ${otherToken}`).expect(404);
   });
 });

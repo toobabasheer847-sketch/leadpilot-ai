@@ -32,7 +32,10 @@ export const searchApi = {
 
 export const pipelineApi = {
   start: (searchId: string) => authed<PipelineView>(`/searches/${searchId}/pipeline`, { method: 'POST' }),
+  execute: (searchId: string) => authed<PipelineView>(`/searches/${searchId}/execute`, { method: 'POST' }),
   get: (searchId: string) => authed<PipelineView>(`/searches/${searchId}/pipeline`),
+  execution: (executionId: string) => authed<PipelineView>(`/search-executions/${executionId}`),
+  cancelExecution: (executionId: string) => authed<PipelineView>(`/search-executions/${executionId}/cancel`, { method: 'POST' }),
 };
 
 export const leadApi = {

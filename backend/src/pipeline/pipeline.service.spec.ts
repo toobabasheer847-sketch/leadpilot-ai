@@ -6,10 +6,12 @@ import { OpenRouterProvider } from '../ai/classification/providers/openrouter.pr
 import {
   classifyPipelineError,
   initialProgress,
+  maskCounters,
   parseProgress,
   nextWorkStage,
   pipelineJobId,
   shouldRetryPipelineFailure,
+  summarizeJobStates,
 } from './pipeline.progress';
 import { PipelineService } from './pipeline.service';
 import { PipelineStageRunner } from './pipeline.runner';
@@ -44,18 +46,19 @@ describe('pipeline orchestration', () => {
     const queue = { enqueue: jest.fn().mockResolvedValue({ id: 'job-1' }), removePending: jest.fn() };
     const searches = { findOne: jest.fn().mockResolvedValue({ id: 'search-1' }), createExecution: jest.fn().mockResolvedValue({ id: 'execution-1' }) };
     const service = new PipelineService(repository as never, searches as never, queue as never, {} as never, logger());
-    repository.insert.mockResolvedValue(row());
+    repository.insert.mockImplementation(async (values: Partial<PipelineExecutionRow>) => row(values));
 
     const created = await service.start(user, 'search-1');
 
-    expect(created).toMatchObject({ pipelineExecutionId: 'pipeline-1', searchId: 'search-1', status: 'QUEUED', currentStage: 'SOURCE_DISCOVERY' });
+    expect(created).toMatchObject({ pipelineExecutionId: 'pipeline-1', executionId: 'execution-1', searchId: 'search-1', status: 'QUEUED', currentStage: 'SEARCH' });
     expect(queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({
       pipelineExecutionId: 'pipeline-1',
       organizationId: 'org-1',
       userId: 'user-1',
       searchId: 'search-1',
       searchExecutionId: 'execution-1',
-    }), 'SOURCE_DISCOVERY', 0);
+    }), 'SEARCH', 0);
+    expect(created.counters.companiesDiscovered).toBeNull();
   });
 
   it('reuses a queued or running pipeline for the same search', async () => {
@@ -176,6 +179,9 @@ describe('pipeline orchestration', () => {
   it('runs deep website research after enrichment in the existing pipeline', () => {
     expect(nextWorkStage('ENRICHMENT')).toBe('DEEP_RESEARCH');
     expect(nextWorkStage('DEEP_RESEARCH')).toBe('DECISION_MAKER_DISCOVERY');
+    expect(nextWorkStage('DECISION_MAKER_DISCOVERY')).toBe('CONTACT_QUALITY');
+    expect(nextWorkStage('CONTACT_QUALITY')).toBe('EVIDENCE');
+    expect(nextWorkStage('EVIDENCE')).toBe('CLASSIFICATION');
     expect(pipelineJobId('pipeline-1', 'DEEP_RESEARCH')).toBe('lead-pipeline-pipeline-1-deep-research');
     expect(pipelineJobId('pipeline-1', 'DEEP_RESEARCH')).not.toContain(':');
   });
@@ -194,6 +200,54 @@ describe('pipeline orchestration', () => {
     expect(progress.stages.classification).toBe('PENDING');
     expect(progress.waits).toBe(1);
   });
+
+  it('keeps a partial company failure from completing the whole pipeline as success', async () => {
+    expect(summarizeJobStates(['completed', 'failed'], 'One company failed.')).toEqual({ state: 'PARTIAL', message: 'One company failed.' });
+    expect(summarizeJobStates(['failed', 'failed'], 'All companies failed.')).toEqual({ state: 'FAILED', message: 'All companies failed.' });
+    expect(summarizeJobStates(['pending', 'failed'], 'Waiting.')).toEqual({ state: 'PENDING' });
+
+    const repository = repositoryMock();
+    const running = row({ status: 'RUNNING', currentStage: 'QUALIFICATION' });
+    repository.findById.mockResolvedValue(running);
+    repository.update.mockImplementation(async (_org: string, _id: string, values: Partial<PipelineExecutionRow>) => ({ ...running, ...values }));
+    const progress = initialProgress();
+    progress.stages.qualification = 'PARTIAL';
+    progress.failures = [{ stage: 'QUALIFICATION', message: 'One company failed.' }];
+    const runner = { tick: jest.fn().mockResolvedValue({ type: 'complete', progress }) };
+    const service = new PipelineService(repository as never, {} as never, { enqueue: jest.fn(), removePending: jest.fn() } as never, runner as never, logger());
+
+    await service.runTick({ pipelineExecutionId: 'pipeline-1', organizationId: 'org-1', userId: 'user-1', searchId: 'search-1', searchExecutionId: 'execution-1' }, 0, 3);
+
+    expect(repository.update).toHaveBeenCalledWith('org-1', 'pipeline-1', expect.objectContaining({ status: 'PARTIAL', currentStage: 'COMPLETED' }));
+  });
+
+  it('does not expose another organization execution', async () => {
+    const repository = repositoryMock();
+    repository.getSearchExecution = jest.fn().mockResolvedValue(null);
+    const service = new PipelineService(repository as never, {} as never, { enqueue: jest.fn(), removePending: jest.fn() } as never, {} as never, logger());
+    await expect(service.getByExecution(otherUser, 'execution-1')).rejects.toBeInstanceOf(NotFoundException);
+    expect(repository.findBySearchExecution).not.toHaveBeenCalled();
+  });
+
+  it('hides counters for stages that have not started', () => {
+    const stages = initialProgress().stages;
+    stages.sourceDiscovery = 'COMPLETED';
+    const masked = maskCounters(stages, {
+      companiesDiscovered: 2,
+      companiesProcessed: 0,
+      websitesResearched: 0,
+      decisionMakersFound: 0,
+      contactsFound: 0,
+      evidenceCollected: 0,
+      verifiedFields: 0,
+      conflictsFound: 0,
+      duplicatesFound: 0,
+      qualifiedLeads: 0,
+    });
+    expect(masked.companiesDiscovered).toBe(2);
+    expect(masked.companiesProcessed).toBeNull();
+    expect(masked.qualifiedLeads).toBeNull();
+  });
 });
 
 function repositoryMock() {
@@ -203,6 +257,19 @@ function repositoryMock() {
     findById: jest.fn(),
     insert: jest.fn(),
     update: jest.fn(),
+    findBySearchExecution: jest.fn(),
+    counters: jest.fn().mockResolvedValue({
+      companiesDiscovered: 0,
+      companiesProcessed: 0,
+      websitesResearched: 0,
+      decisionMakersFound: 0,
+      contactsFound: 0,
+      evidenceCollected: 0,
+      verifiedFields: 0,
+      conflictsFound: 0,
+      duplicatesFound: 0,
+      qualifiedLeads: 0,
+    }),
     audit: jest.fn(),
   };
 }
@@ -218,6 +285,7 @@ function config(values: Record<string, unknown>) {
 function runnerWith(repository: Record<string, unknown>) {
   return new PipelineStageRunner(
     repository as never,
+    {} as never,
     {} as never,
     {} as never,
     {} as never,

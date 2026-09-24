@@ -1,9 +1,9 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable } from '@nestjs/common';
 import { Queue } from 'bullmq';
-import { publicErrorMessage } from './pipeline.progress';
+import { publicErrorMessage, summarizeJobStates, type ObservedJobState } from './pipeline.progress';
 
-export type JobSettlement = { state: 'COMPLETED' } | { state: 'PENDING' } | { state: 'FAILED'; message: string };
+export type JobSettlement = { state: 'COMPLETED' } | { state: 'PENDING' } | { state: 'FAILED'; message: string } | { state: 'PARTIAL'; message: string };
 
 @Injectable()
 export class PipelineJobInspector {
@@ -12,6 +12,7 @@ export class PipelineJobInspector {
   constructor(
     @InjectQueue('company-enrichment-queue') enrichment: Queue,
     @InjectQueue('contact-discovery-queue') contacts: Queue,
+    @InjectQueue('contact-quality-queue') quality: Queue,
     @InjectQueue('ai-classification-queue') classification: Queue,
     @InjectQueue('lead-verification-queue') verification: Queue,
     @InjectQueue('lead-deduplication-queue') deduplication: Queue,
@@ -22,6 +23,7 @@ export class PipelineJobInspector {
     this.queues = {
       'company-enrichment-queue': enrichment,
       'contact-discovery-queue': contacts,
+      'contact-quality-queue': quality,
       'ai-classification-queue': classification,
       'lead-verification-queue': verification,
       'lead-deduplication-queue': deduplication,
@@ -36,13 +38,24 @@ export class PipelineJobInspector {
     const queue = this.queues[queueName];
     if (!queue) return { state: 'FAILED', message: 'Pipeline stage queue is unavailable.' };
 
+    const observed: ObservedJobState[] = [];
+    let failureMessage = 'Pipeline stage failed.';
     for (const jobId of jobIds) {
       const job = await queue.getJob(jobId);
-      if (!job) continue;
+      if (!job) {
+        observed.push('missing');
+        continue;
+      }
       const state = await job.getState();
-      if (state === 'failed') return { state: 'FAILED', message: publicErrorMessage(job.failedReason || 'Pipeline stage failed.') };
+      if (state === 'failed') {
+        observed.push('failed');
+        failureMessage = publicErrorMessage(job.failedReason || failureMessage);
+        continue;
+      }
       if (state !== 'completed') return { state: 'PENDING' };
+      observed.push('completed');
     }
-    return { state: 'COMPLETED' };
+    const summary = summarizeJobStates(observed.map((state) => state === 'missing' ? 'completed' : state), failureMessage);
+    return summary;
   }
 }

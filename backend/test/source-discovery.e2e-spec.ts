@@ -40,7 +40,7 @@ describe('Source discovery pipeline (e2e)', () => {
 
   it('runs a fake provider through BullMQ and persists provenance candidates', async () => {
     const executionResponse = await request(app.getHttpServer()).post(`/api/v1/searches/${searchId}/execute`).set('Authorization', `Bearer ${token}`).expect(201);
-    const executionId = executionResponse.body.id as string;
+    const executionId = executionResponse.body.executionId as string;
     let execution;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const response = await request(app.getHttpServer()).get(`/api/v1/searches/executions/${executionId}`).set('Authorization', `Bearer ${token}`).expect(200);
@@ -63,11 +63,11 @@ describe('Source discovery pipeline (e2e)', () => {
 
     const duplicateExecution = await request(app.getHttpServer()).post(`/api/v1/searches/${searchId}/execute`).set('Authorization', `Bearer ${token}`).expect(201);
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      const response = await request(app.getHttpServer()).get(`/api/v1/searches/executions/${duplicateExecution.body.id}`).set('Authorization', `Bearer ${token}`).expect(200);
+      const response = await request(app.getHttpServer()).get(`/api/v1/searches/executions/${duplicateExecution.body.executionId}`).set('Authorization', `Bearer ${token}`).expect(200);
       if (response.body.status === 'COMPLETED' || response.body.status === 'FAILED') break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    const duplicateCandidates = await request(app.getHttpServer()).get(`/api/v1/searches/executions/${duplicateExecution.body.id}/candidates`).set('Authorization', `Bearer ${token}`).expect(200);
+    const duplicateCandidates = await request(app.getHttpServer()).get(`/api/v1/searches/executions/${duplicateExecution.body.executionId}/candidates`).set('Authorization', `Bearer ${token}`).expect(200);
     expect(duplicateCandidates.body.total).toBe(1);
   });
 });

@@ -1,6 +1,6 @@
 import { ConflictException, Inject, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { MAX_STAGE_WAITS, type PipelineErrorCode, type PipelineStage, type PipelineStatus } from './pipeline.constants';
-import { classifyPipelineError, initialProgress, parseProgress, progressKey, shouldRetryPipelineFailure } from './pipeline.progress';
+import { classifyPipelineError, emptyCounters, hasPartialStage, initialProgress, maskCounters, parseProgress, progressKey, shouldRetryPipelineFailure, stageList } from './pipeline.progress';
 import { PipelineQueue } from './pipeline.queue';
 import { PipelineRepository, type PipelineExecutionRow } from './pipeline.repository';
 import { PipelineStageRunner } from './pipeline.runner';
@@ -22,7 +22,7 @@ export class PipelineService {
   async start(user: AuthenticatedUser, searchId: string): Promise<PipelineView> {
     await this.searches.findOne(user, searchId);
     const active = await this.repository.findActive(user.organizationId, searchId);
-    if (active) return this.view(active);
+    if (active) return this.present(active);
 
     const execution = await this.searches.createExecution(user, searchId);
     try {
@@ -31,17 +31,17 @@ export class PipelineService {
         searchId,
         searchExecutionId: execution.id,
         status: 'QUEUED',
-        currentStage: 'SOURCE_DISCOVERY',
+        currentStage: 'SEARCH',
         stageProgress: initialProgress(),
       });
       await this.enqueue(created, user.id, 0);
       await this.repository.audit(user.organizationId, user.id, 'PIPELINE_STARTED', created.id, { searchId, searchExecutionId: execution.id });
       this.logger.info('pipeline.started', { pipelineExecutionId: created.id, searchExecutionId: execution.id, organizationId: user.organizationId, stage: created.currentStage });
-      return this.view(created);
+      return this.present(created);
     } catch (error) {
       if (isUniqueViolation(error)) {
         const existing = await this.repository.findActive(user.organizationId, searchId);
-        if (existing) return this.view(existing);
+        if (existing) return this.present(existing);
       }
       throw error;
     }
@@ -51,13 +51,27 @@ export class PipelineService {
     await this.searches.findOne(user, searchId);
     const row = await this.repository.findLatest(user.organizationId, searchId);
     if (!row) throw new NotFoundException('Pipeline execution not found');
-    return this.view(row);
+    return this.present(row);
+  }
+
+  async getByExecution(user: AuthenticatedUser, executionId: string): Promise<PipelineView> {
+    const execution = await this.repository.getSearchExecution(user.organizationId, executionId);
+    if (!execution) throw new NotFoundException('Search execution not found');
+    const row = await this.repository.findBySearchExecution(user.organizationId, executionId);
+    if (!row) throw new NotFoundException('Pipeline execution not found');
+    return this.present(row);
+  }
+
+  async cancelByExecution(user: AuthenticatedUser, executionId: string): Promise<PipelineView> {
+    const row = await this.repository.findBySearchExecution(user.organizationId, executionId);
+    if (!row) throw new NotFoundException('Pipeline execution not found');
+    return this.cancel(user, row.id);
   }
 
   async cancel(user: AuthenticatedUser, pipelineExecutionId: string): Promise<PipelineView> {
     const row = await this.repository.findById(user.organizationId, pipelineExecutionId);
     if (!row) throw new NotFoundException('Pipeline execution not found');
-    if (row.status === 'COMPLETED' || row.status === 'FAILED' || row.status === 'CANCELLED') {
+    if (row.status === 'COMPLETED' || row.status === 'PARTIAL' || row.status === 'FAILED' || row.status === 'CANCELLED') {
       throw new ConflictException('Pipeline execution cannot be cancelled');
     }
     const progress = parseProgress(row.stageProgress);
@@ -65,12 +79,12 @@ export class PipelineService {
     await this.queue.removePending(row.id, row.currentStage, progress.waits);
     await this.repository.audit(user.organizationId, user.id, 'PIPELINE_CANCELLED', row.id, { stage: row.currentStage });
     this.logger.info('pipeline.cancelled', { pipelineExecutionId: row.id, searchExecutionId: row.searchExecutionId, organizationId: user.organizationId, stage: row.currentStage });
-    return this.view(updated ?? { ...row, status: 'CANCELLED' });
+    return this.present(updated ?? { ...row, status: 'CANCELLED' });
   }
 
   async runTick(data: LeadPipelineJobData, attemptsMade: number, attempts: number) {
     const row = await this.repository.findById(data.organizationId, data.pipelineExecutionId);
-    if (!row || row.status === 'CANCELLED' || row.status === 'COMPLETED' || row.status === 'FAILED') return;
+    if (!row || row.status === 'CANCELLED' || row.status === 'COMPLETED' || row.status === 'PARTIAL' || row.status === 'FAILED') return;
     const running = row.status === 'QUEUED'
       ? await this.repository.update(data.organizationId, row.id, { status: 'RUNNING', startedAt: row.startedAt ?? new Date() }) ?? row
       : row;
@@ -87,7 +101,7 @@ export class PipelineService {
 
   private async apply(data: LeadPipelineJobData, row: PipelineExecutionRow, tick: StageTick) {
     const current = await this.repository.findById(data.organizationId, row.id);
-    if (!current || current.status === 'CANCELLED' || current.status === 'COMPLETED' || current.status === 'FAILED') return;
+    if (!current || current.status === 'CANCELLED' || current.status === 'COMPLETED' || current.status === 'PARTIAL' || current.status === 'FAILED') return;
     if (tick.type === 'wait') {
       const waits = tick.progress.waits + 1;
       if (waits > MAX_STAGE_WAITS) {
@@ -104,17 +118,19 @@ export class PipelineService {
       return;
     }
     if (tick.type === 'complete') {
-      const updated = await this.repository.update(data.organizationId, row.id, {
-        status: 'COMPLETED',
+      const partial = hasPartialStage(tick.progress.stages) || tick.progress.failures.length > 0;
+      const status = partial ? 'PARTIAL' : 'COMPLETED';
+      await this.repository.update(data.organizationId, row.id, {
+        status,
         currentStage: 'COMPLETED',
         stageProgress: tick.progress,
         completedAt: new Date(),
         errorCode: null,
-        errorMessage: null,
+        errorMessage: partial ? 'Some companies could not finish every stage.' : null,
       });
       await this.repository.audit(data.organizationId, data.userId, 'PIPELINE_COMPLETED', row.id, { searchExecutionId: row.searchExecutionId });
-      this.logger.info('pipeline.completed', { pipelineExecutionId: row.id, searchExecutionId: row.searchExecutionId, organizationId: data.organizationId, stage: 'COMPLETED' });
-      return updated;
+      this.logger.info('pipeline.completed', { pipelineExecutionId: row.id, searchExecutionId: row.searchExecutionId, organizationId: data.organizationId, stage: status });
+      return;
     }
     await this.repository.update(data.organizationId, row.id, {
       status: 'RUNNING',
@@ -170,6 +186,7 @@ export class PipelineService {
     const progress = parseProgress(row.stageProgress);
     return {
       pipelineExecutionId: row.id,
+      executionId: row.searchExecutionId,
       searchId: row.searchId,
       searchExecutionId: row.searchExecutionId,
       status: row.status as PipelineStatus,
@@ -178,8 +195,18 @@ export class PipelineService {
       completedAt: row.completedAt,
       failedAt: row.failedAt,
       stages: progress.stages,
+      stageList: stageList(progress.stages),
+      counters: emptyCounters(),
+      failures: progress.failures,
       error: row.errorCode && row.errorMessage ? { code: row.errorCode as PipelineErrorCode, message: row.errorMessage } : null,
     };
+  }
+
+  private async present(row: PipelineExecutionRow): Promise<PipelineView> {
+    const view = this.view(row);
+    if (!row.searchExecutionId) return view;
+    const counts = await this.repository.counters(row.organizationId, row.searchExecutionId);
+    return { ...view, counters: maskCounters(view.stages, counts) };
   }
 }
 

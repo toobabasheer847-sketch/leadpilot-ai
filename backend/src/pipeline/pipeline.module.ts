@@ -43,9 +43,11 @@ import { PipelineService } from './pipeline.service';
       { name: 'lead-scoring-queue' },
       { name: 'lead-qualification-queue' },
       { name: 'lead-research-queue' },
+      { name: 'contact-quality-queue' },
     ),
   ],
   controllers: [PipelineController],
   providers: [PipelineRepository, PipelineQueue, PipelineJobInspector, PipelineStageRunner, PipelineService, PipelineProcessor],
+  exports: [PipelineService],
 })
 export class PipelineModule {}

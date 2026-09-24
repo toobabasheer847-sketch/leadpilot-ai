@@ -127,6 +127,14 @@ td small { display: block; color: var(--muted); }
 .badge-needs-review, .badge-unverified, .badge-not-found, .badge-partial { color: var(--muted); }
 .badge-conflict, .badge-failed, .badge-not-qualified, .badge-invalid { color: var(--danger); }
 .badge-queued, .badge-running, .badge-supported, .badge-partially-verified { color: var(--accent); }
+.pipeline-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.7rem; }
+.pipeline-list li { display: grid; grid-template-columns: 1.5rem 1fr auto; gap: 0.7rem; align-items: center; }
+.pipeline-mark { font-weight: 700; }
+.pipeline-mark.done { color: var(--accent); }
+.pipeline-mark.issue { color: var(--danger); }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.8rem; margin-top: 1rem; }
+.stat-grid dt { color: var(--muted); }
+.stat-grid dd { margin: 0; font-size: 1.2rem; }
 
 @media (max-width: 800px) {
   .detail-grid, .contact-quality { grid-template-columns: 1fr; }

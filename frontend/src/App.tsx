@@ -7,6 +7,7 @@ import { LeadDetailPage } from './pages/LeadDetailPage';
 import { LeadsPage } from './pages/LeadsPage';
 import { NewSearchPage } from './pages/NewSearchPage';
 import { ResearchPage } from './pages/ResearchPage';
+import { SearchExecutionPage } from './pages/SearchExecutionPage';
 import { SearchHistoryPage } from './pages/SearchHistoryPage';
 import { SearchProgressPage } from './pages/SearchProgressPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -21,6 +22,7 @@ export function App() {
         <Route element={<AppShell />}>
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/search/new" element={<NewSearchPage />} />
+          <Route path="/search/:searchId/execution/:executionId" element={<SearchExecutionPage />} />
           <Route path="/leads" element={<LeadsPage />} />
           <Route path="/leads/:companyId" element={<LeadDetailPage />} />
           <Route path="/search-history" element={<SearchHistoryPage />} />
