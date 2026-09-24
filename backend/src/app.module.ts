@@ -20,6 +20,7 @@ import { ClassificationModule } from './ai/classification/classification.module'
 import { VerificationModule } from './verification/verification.module';
 import { ScoringModule } from './scoring/scoring.module';
 import { DeduplicationModule } from './deduplication/deduplication.module';
+import { LeadsModule } from './leads/leads.module';
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { DeduplicationModule } from './deduplication/deduplication.module';
     VerificationModule,
     ScoringModule,
     DeduplicationModule,
+    LeadsModule,
   ],
   controllers: [AppController],
   providers: [
