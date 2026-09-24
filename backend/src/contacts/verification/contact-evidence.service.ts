@@ -25,7 +25,8 @@ export class ContactEvidenceService {
     }
 
     for (const field of ['fullName', 'title', 'email', 'phone', 'linkedinUrl', 'facebookUrl', 'instagramUrl']) {
-      const value = field === 'fullName' ? candidate.fullName : field === 'title' ? candidate.title : (candidate as Record<string, string | null>)[field];
+      const candidateFields = candidate as unknown as Record<string, string | null | undefined>;
+      const value = field === 'fullName' ? candidate.fullName : field === 'title' ? candidate.title : candidateFields[field] ?? null;
       if (!value) continue;
       await this.db.insert(leadVerifications).values({
         companyId,

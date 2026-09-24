@@ -16,6 +16,7 @@ import { OrganizationsModule } from './organizations/organizations.module';
 import { SearchModule } from './search/search.module';
 import { EnrichmentModule } from './enrichment/enrichment.module';
 import { ContactsModule } from './contacts/contacts.module';
+import { ClassificationModule } from './ai/classification/classification.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { ContactsModule } from './contacts/contacts.module';
     SearchModule,
     EnrichmentModule,
     ContactsModule,
+    ClassificationModule,
   ],
   controllers: [AppController],
   providers: [

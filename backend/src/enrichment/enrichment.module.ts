@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule } from '@nestjs/config';
+import { AuthModule } from '../auth/auth.module';
+import { UsersModule } from '../users/users.module';
+import { OrganizationsModule } from '../organizations/organizations.module';
 import { CompanyController } from './company.controller';
 import { CompanyEnrichmentProcessor } from './company-enrichment.processor';
 import { CompanyEnrichmentQueue } from './company-enrichment.queue';
@@ -14,7 +17,7 @@ import { WebsiteNormalizerService } from './website/website-normalizer.service';
 import { WebsiteParserService } from './website/website-parser.service';
 
 @Module({
-  imports: [ConfigModule, BullModule.registerQueue({ name: 'company-enrichment-queue' })],
+  imports: [ConfigModule, AuthModule, UsersModule, OrganizationsModule, BullModule.registerQueue({ name: 'company-enrichment-queue' })],
   controllers: [CompanyController],
   providers: [
     WebsiteNormalizerService,

@@ -210,14 +210,34 @@ export const leadEvidence = pgTable('lead_evidence', {
 export const leadClassifications = pgTable('lead_classifications', {
   id: uuid('id').defaultRandom().primaryKey(),
   companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'restrict' }),
+  searchExecutionId: uuid('search_execution_id').references(() => searchExecutions.id, { onDelete: 'set null' }),
+  category: varchar('category', { length: 100 }).notNull().default('REAL_ESTATE_INVESTOR'),
+  investorType: varchar('investor_type', { length: 100 }).notNull().default('NOT_DETERMINED'),
   classification: varchar('classification', { length: 100 }).notNull(),
   decision: varchar('decision', { length: 50 }).notNull(),
   confidence: numeric('confidence', { precision: 5, scale: 4 }),
   reasoning: text('reasoning').notNull(),
   modelName: varchar('model_name', { length: 255 }),
+  promptVersion: varchar('prompt_version', { length: 100 }).notNull().default('investor-classifier-v1'),
+  reasons: jsonb('reasons').notNull().default([]),
+  positiveEvidence: jsonb('positive_evidence').notNull().default([]),
+  negativeEvidence: jsonb('negative_evidence').notNull().default([]),
+  missingEvidence: jsonb('missing_evidence').notNull().default([]),
+  exclusionReason: text('exclusion_reason'),
+  companySizeVerification: varchar('company_size_verification', { length: 30 }).notNull().default('NOT_FOUND'),
+  locationStatus: varchar('location_status', { length: 30 }).notNull().default('NOT_FOUND'),
+  idempotencyKey: varchar('idempotency_key', { length: 512 }).notNull(),
   evidenceSummary: text('evidence_summary'),
   ...timestamps,
-}, (table) => [index('lead_classifications_company_idx').on(table.companyId), index('lead_classifications_decision_idx').on(table.decision), check('lead_classifications_confidence_check', sql`${table.confidence} is null or (${table.confidence} >= 0 and ${table.confidence} <= 1)`) ]);
+}, (table) => [
+  index('lead_classifications_company_idx').on(table.companyId),
+  index('lead_classifications_org_idx').on(table.organizationId),
+  index('lead_classifications_execution_idx').on(table.searchExecutionId),
+  index('lead_classifications_decision_idx').on(table.decision),
+  uniqueIndex('lead_classifications_idempotency_unique').on(table.organizationId, table.idempotencyKey),
+  check('lead_classifications_confidence_check', sql`${table.confidence} is null or (${table.confidence} >= 0 and ${table.confidence} <= 1)`),
+] );
 
 export const leadVerifications = pgTable('lead_verifications', {
   id: uuid('id').defaultRandom().primaryKey(),

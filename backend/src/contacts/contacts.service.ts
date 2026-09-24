@@ -55,7 +55,7 @@ export class ContactsService {
             instagramUrl: candidate.instagramUrl ?? null,
             source: candidate.sourceUrl,
             status: 'DISCOVERED',
-            confidence: 0.8,
+            confidence: '0.8000',
             verificationStatus: 'NOT_VERIFIED',
             updatedAt: new Date(),
           }).where(eq(companyContacts.id, existing.id)).returning()
@@ -72,7 +72,7 @@ export class ContactsService {
             instagramUrl: candidate.instagramUrl ?? null,
             source: candidate.sourceUrl,
             status: 'DISCOVERED',
-            confidence: 0.8,
+            confidence: '0.8000',
             verificationStatus: 'NOT_VERIFIED',
           }).returning();
 

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { ContactCandidate, ContactEvidenceEntry } from '../types/contact.types';
+import type { ContactCandidate } from '../types/contact.types';
 import { ContactExtractorService } from '../extraction/contact-extractor.service';
 
 @Injectable()
