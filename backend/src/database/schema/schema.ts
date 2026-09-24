@@ -108,6 +108,7 @@ export const companies = pgTable('companies', {
   propertyTypes: jsonb('property_types'),
   googlePlaceId: varchar('google_place_id', { length: 255 }),
   googleMapsUrl: text('google_maps_url'),
+  canonicalCompanyId: uuid('canonical_company_id'),
   verificationStatus: varchar('verification_status', { length: 50 }).default('NOT_VERIFIED').notNull(),
   lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true }),
   ...timestamps,
@@ -150,6 +151,7 @@ export const companyContacts = pgTable('company_contacts', {
   linkedinUrl: text('linkedin_url'),
   facebookUrl: text('facebook_url'),
   instagramUrl: text('instagram_url'),
+  canonicalContactId: uuid('canonical_contact_id'),
   source: text('source'),
   status: varchar('status', { length: 50 }).default('DISCOVERED').notNull(),
   confidence: numeric('confidence', { precision: 5, scale: 4 }),
@@ -293,17 +295,44 @@ export const leadScores = pgTable('lead_scores', {
 
 export const leadDuplicates = pgTable('lead_duplicates', {
   id: uuid('id').defaultRandom().primaryKey(),
-  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
-  duplicateCompanyId: uuid('duplicate_company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'restrict' }),
+  entityType: varchar('entity_type', { length: 20 }).notNull().default('COMPANY'),
+  entityAId: uuid('entity_a_id').notNull(),
+  entityBId: uuid('entity_b_id').notNull(),
+  groupId: uuid('group_id'),
+  companyId: uuid('company_id').references(() => companies.id, { onDelete: 'restrict' }),
+  duplicateCompanyId: uuid('duplicate_company_id').references(() => companies.id, { onDelete: 'restrict' }),
   matchType: varchar('match_type', { length: 50 }).notNull(),
   confidence: numeric('confidence', { precision: 5, scale: 4 }),
   status: varchar('status', { length: 50 }).default('PENDING').notNull(),
+  signals: jsonb('signals').notNull().default([]),
+  reason: text('reason'),
+  reviewedBy: uuid('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+  reviewedReason: text('reviewed_reason'),
   ...timestamps,
 }, (table) => [
-  uniqueIndex('lead_duplicates_pair_unique').on(table.companyId, table.duplicateCompanyId),
+  uniqueIndex('lead_duplicates_pair_unique').on(table.organizationId, table.entityType, table.entityAId, table.entityBId),
+  index('lead_duplicates_org_idx').on(table.organizationId),
+  index('lead_duplicates_group_idx').on(table.groupId),
+  index('lead_duplicates_entity_a_idx').on(table.entityAId),
+  index('lead_duplicates_entity_b_idx').on(table.entityBId),
   index('lead_duplicates_company_idx').on(table.companyId),
   index('lead_duplicates_duplicate_company_idx').on(table.duplicateCompanyId),
-  check('lead_duplicates_not_self_check', sql`${table.companyId} <> ${table.duplicateCompanyId}`),
+  check('lead_duplicates_not_self_check', sql`${table.entityAId} <> ${table.entityBId}`),
+]);
+
+export const duplicateGroups = pgTable('duplicate_groups', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'restrict' }),
+  entityType: varchar('entity_type', { length: 20 }).notNull(),
+  canonicalEntityId: uuid('canonical_entity_id').notNull(),
+  status: varchar('status', { length: 50 }).default('PENDING').notNull(),
+  reason: text('reason'),
+  ...timestamps,
+}, (table) => [
+  index('duplicate_groups_org_idx').on(table.organizationId),
+  index('duplicate_groups_canonical_idx').on(table.canonicalEntityId),
 ]);
 
 export const pipelineJobs = pgTable('pipeline_jobs', {

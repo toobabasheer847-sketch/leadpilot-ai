@@ -19,6 +19,7 @@ import { ContactsModule } from './contacts/contacts.module';
 import { ClassificationModule } from './ai/classification/classification.module';
 import { VerificationModule } from './verification/verification.module';
 import { ScoringModule } from './scoring/scoring.module';
+import { DeduplicationModule } from './deduplication/deduplication.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { ScoringModule } from './scoring/scoring.module';
     ClassificationModule,
     VerificationModule,
     ScoringModule,
+    DeduplicationModule,
   ],
   controllers: [AppController],
   providers: [
