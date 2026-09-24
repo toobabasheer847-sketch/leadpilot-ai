@@ -85,9 +85,10 @@ export function publicErrorMessage(message: string): string {
 export function classifyPipelineError(error: unknown): { code: PipelineErrorCode; message: string; retryable: boolean } {
   if (error instanceof SourceProviderError) {
     const message = publicErrorMessage(error.message);
-    if (error.code === 'NOT_CONFIGURED' || error.code === 'AUTHENTICATION') return { code: 'CONFIGURATION_ERROR', message, retryable: false };
-    if (error.code === 'INVALID_REQUEST' || error.code === 'MALFORMED_RESPONSE') return { code: 'VALIDATION_ERROR', message, retryable: false };
-    if (error.code === 'RATE_LIMITED' || error.code === 'TIMEOUT' || error.code === 'NETWORK_ERROR' || error.code === 'PROVIDER_ERROR') {
+    const code = String(error.code);
+    if (code === 'PROVIDER_NOT_CONFIGURED' || code === 'PROVIDER_AUTH_ERROR' || code === 'PROVIDER_QUOTA_EXCEEDED' || code === 'NOT_CONFIGURED' || code === 'AUTHENTICATION') return { code: 'CONFIGURATION_ERROR', message, retryable: false };
+    if (code === 'PROVIDER_INVALID_REQUEST' || code === 'INVALID_REQUEST' || code === 'MALFORMED_RESPONSE') return { code: 'VALIDATION_ERROR', message, retryable: false };
+    if (code === 'PROVIDER_RATE_LIMITED' || code === 'PROVIDER_TIMEOUT' || code === 'PROVIDER_UNAVAILABLE' || code === 'PROVIDER_UNKNOWN_ERROR' || code === 'RATE_LIMITED' || code === 'TIMEOUT' || code === 'NETWORK_ERROR' || code === 'PROVIDER_ERROR') {
       return { code: 'TRANSIENT_PROVIDER_ERROR', message, retryable: true };
     }
   }

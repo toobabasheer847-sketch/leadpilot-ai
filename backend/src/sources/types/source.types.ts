@@ -35,7 +35,27 @@ export interface SourceSearchContext {
   signal?: AbortSignal;
 }
 
-export interface SourceProvider {
+export interface ProviderHealth {
+  name: string;
+  configured: boolean;
+  enabled: boolean;
+}
+
+export interface ProviderMetadata {
+  provider: string;
+  sourceType: string;
+  synthetic: boolean;
+}
+
+export interface DiscoveryProvider {
+  providerName(): string;
+  searchBusinesses(plan: SearchPlan, context: SourceSearchContext): Promise<SourceSearchResult>;
+  normalizeResult(raw: unknown): NormalizedSourceResult;
+  health(): ProviderHealth;
+  metadata(): ProviderMetadata;
+}
+
+export interface SourceProvider extends DiscoveryProvider {
   readonly name: string;
   getProviderName(): string;
   getSourceType(): string;

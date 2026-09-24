@@ -28,6 +28,10 @@ export default () => ({
     timeoutMs: parseInt(process.env.SOURCE_PROVIDER_TIMEOUT_MS ?? '10000', 10),
     concurrency: parseInt(process.env.SOURCE_PROVIDER_CONCURRENCY ?? '2', 10),
     maxPages: parseInt(process.env.SOURCE_PROVIDER_MAX_PAGES ?? '3', 10),
+    maxResults: parseInt(process.env.DISCOVERY_MAX_RESULTS ?? '60', 10),
+    pageSize: parseInt(process.env.DISCOVERY_PAGE_SIZE ?? '20', 10),
+    retries: parseInt(process.env.SOURCE_PROVIDER_RETRIES ?? '2', 10),
+    retryDelayMs: parseInt(process.env.SOURCE_PROVIDER_RETRY_DELAY_MS ?? '250', 10),
     provider: process.env.SOURCE_PROVIDER ?? 'google_places',
     retainRawData: process.env.SOURCE_PROVIDER_RETAIN_RAW_DATA !== 'false',
   },
@@ -156,6 +160,15 @@ export function validateEnvironment(config: Record<string, unknown>) {
     if (!config.OPENROUTER_API_KEY || !config.OPENROUTER_MODEL) {
       throw new Error('OPENROUTER_API_KEY and OPENROUTER_MODEL are required in production');
     }
+  }
+
+  const discoveryMaxResults = Number(config.DISCOVERY_MAX_RESULTS ?? 60);
+  if (!Number.isInteger(discoveryMaxResults) || discoveryMaxResults < 1 || discoveryMaxResults > 500) {
+    throw new Error('DISCOVERY_MAX_RESULTS must be an integer between 1 and 500');
+  }
+  const discoveryPageSize = Number(config.DISCOVERY_PAGE_SIZE ?? 20);
+  if (!Number.isInteger(discoveryPageSize) || discoveryPageSize < 1 || discoveryPageSize > 20) {
+    throw new Error('DISCOVERY_PAGE_SIZE must be an integer between 1 and 20');
   }
 
   if (typeof config.JWT_SECRET !== 'string' || config.JWT_SECRET.length < 32) {

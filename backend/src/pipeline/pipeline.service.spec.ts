@@ -113,16 +113,16 @@ describe('pipeline orchestration', () => {
   it('retries a transient provider failure and persists it when attempts are exhausted', async () => {
     expect(shouldRetryPipelineFailure(true, 0, 3)).toBe(true);
     expect(shouldRetryPipelineFailure(true, 2, 3)).toBe(false);
-    expect(classifyPipelineError(new SourceProviderError('RATE_LIMITED', 'Google Places provider rate limit reached.')).retryable).toBe(true);
-    expect(classifyPipelineError(new SourceProviderError('NOT_CONFIGURED', 'Google Places provider is not configured.')).retryable).toBe(false);
+    expect(classifyPipelineError(new SourceProviderError('PROVIDER_RATE_LIMITED', 'Google Places provider rate limit reached.')).retryable).toBe(true);
+    expect(classifyPipelineError(new SourceProviderError('PROVIDER_NOT_CONFIGURED', 'Google Places provider is not configured.')).retryable).toBe(false);
 
     const repository = repositoryMock();
     const created = row({ status: 'RUNNING' });
     repository.findById.mockResolvedValue(created);
-    const runner = { tick: jest.fn().mockRejectedValue(new SourceProviderError('TIMEOUT', 'Google Places provider request failed.')) };
+    const runner = { tick: jest.fn().mockRejectedValue(new SourceProviderError('PROVIDER_TIMEOUT', 'Google Places provider request timed out.')) };
     const service = new PipelineService(repository as never, {} as never, { enqueue: jest.fn(), removePending: jest.fn() } as never, runner as never, logger());
 
-    await expect(service.runTick({ pipelineExecutionId: 'pipeline-1', organizationId: 'org-1', userId: 'user-1', searchId: 'search-1', searchExecutionId: 'execution-1' }, 0, 3)).rejects.toMatchObject({ code: 'TIMEOUT' });
+    await expect(service.runTick({ pipelineExecutionId: 'pipeline-1', organizationId: 'org-1', userId: 'user-1', searchId: 'search-1', searchExecutionId: 'execution-1' }, 0, 3)).rejects.toMatchObject({ code: 'PROVIDER_TIMEOUT' });
     expect(repository.update).not.toHaveBeenCalled();
 
     await service.runTick({ pipelineExecutionId: 'pipeline-1', organizationId: 'org-1', userId: 'user-1', searchId: 'search-1', searchExecutionId: 'execution-1' }, 2, 3);
@@ -162,7 +162,7 @@ describe('pipeline orchestration', () => {
   it('reports a missing Google Places configuration without fabricating companies', async () => {
     const provider = new GooglePlacesProvider({ fetch: jest.fn() } as never, config({}));
     await expect(provider.search({ industry: [], leadTypes: [], locations: [], companyFields: [], unresolvedCriteria: [] }, { organizationId: 'org-1', searchExecutionId: 'execution-1' })).rejects.toBeInstanceOf(SourceProviderError);
-    const failure = classifyPipelineError(new SourceProviderError('NOT_CONFIGURED', 'Google Places provider is not configured.'));
+    const failure = classifyPipelineError(new SourceProviderError('PROVIDER_NOT_CONFIGURED', 'Google Places provider is not configured.'));
     expect(failure).toMatchObject({ code: 'CONFIGURATION_ERROR', retryable: false });
   });
 

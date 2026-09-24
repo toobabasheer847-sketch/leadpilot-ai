@@ -10,6 +10,7 @@ import { SearchPlan } from '../../search/types/search-plan.types';
 import { SOURCE_PROVIDER } from '../interfaces/source-provider.interface';
 import type { SourceProvider, SourceSearchContext } from '../types/source.types';
 import { SourceNormalizerService } from './source-normalizer.service';
+import { fillEmptyCompanyFields, phoneMatchKey } from './company-field-merge';
 
 @Injectable()
 export class SourceDiscoveryService {
@@ -28,27 +29,28 @@ export class SourceDiscoveryService {
     await this.audit(organizationId, executionId, 'SOURCE_SEARCH_STARTED');
     await this.usage.checkRequestRate(organizationId, undefined, 'DISCOVERY');
     try {
-      const result = await this.providerObservability.track(this.provider.getProviderName(), 'DISCOVERY', async () => ({ value: await this.provider.search(plan, context) }));
+      const result = await this.providerObservability.track(this.provider.providerName(), 'DISCOVERY', async () => ({ value: await this.provider.searchBusinesses(plan, context) }));
       let candidates = 0;
+      const synthetic = this.provider.metadata().synthetic;
 
       for (const raw of result.results) {
         try {
           const normalized = this.normalizer.normalize(raw);
           const company = await this.upsertCompany(organizationId, this.provider.getSourceType(), normalized);
           const sourceRecord = await this.upsertSourceRecord(organizationId, executionId, company.id, this.provider.getSourceType(), normalized, context);
-          await this.createEvidence(company.id, sourceRecord.id, normalized);
+          if (!synthetic) await this.createEvidence(company.id, sourceRecord.id, normalized, this.provider.providerName());
           candidates += 1;
         } catch (error) {
           await this.audit(organizationId, executionId, 'SOURCE_RESULT_REJECTED', undefined, { reason: error instanceof Error ? error.name : 'unknown' });
         }
       }
 
-      await this.usage.recordUsage({ organizationId, operation: 'DISCOVERY', provider: this.provider.getProviderName(), resourceType: 'search_execution', resourceId: executionId, units: 1, status: 'COMPLETED', requestId: context.requestId, metadata: { candidates } });
-      await this.audit(organizationId, executionId, 'CANDIDATES_DISCOVERED', undefined, { count: String(candidates), provider: this.provider.getProviderName() });
-      await this.audit(organizationId, executionId, 'SOURCE_SEARCH_COMPLETED', undefined, { count: String(candidates), provider: this.provider.getProviderName() });
+      await this.usage.recordUsage({ organizationId, operation: 'DISCOVERY', provider: this.provider.providerName(), resourceType: 'search_execution', resourceId: executionId, units: 1, status: 'COMPLETED', requestId: context.requestId, metadata: { candidates } });
+      await this.audit(organizationId, executionId, 'CANDIDATES_DISCOVERED', undefined, { count: String(candidates), provider: this.provider.providerName() });
+      await this.audit(organizationId, executionId, 'SOURCE_SEARCH_COMPLETED', undefined, { count: String(candidates), provider: this.provider.providerName() });
       return { candidates };
     } catch (error) {
-      await this.usage.recordUsage({ organizationId, operation: 'DISCOVERY', provider: this.provider.getProviderName(), resourceType: 'search_execution', resourceId: executionId, units: 1, status: 'FAILED', requestId: context.requestId });
+      await this.usage.recordUsage({ organizationId, operation: 'DISCOVERY', provider: this.provider.providerName(), resourceType: 'search_execution', resourceId: executionId, units: 1, status: 'FAILED', requestId: context.requestId });
       throw error;
     }
   }
@@ -84,6 +86,7 @@ export class SourceDiscoveryService {
         or(
           ...(provider === 'google_places' ? [eq(companies.googlePlaceId, result.externalId)] : []),
           ...(website ? [eq(companies.website, website)] : []),
+          ...(phoneMatchKey(result.phone) ? [eq(companies.phone, result.phone as string)] : []),
           and(
             ilike(companies.name, result.name),
             result.address?.state ? eq(companyLocations.state, result.address.state) : isNull(companyLocations.state),
@@ -92,10 +95,16 @@ export class SourceDiscoveryService {
       )).limit(1);
 
     if (existing?.company) {
+      const updates = fillEmptyCompanyFields(existing.company, {
+        website: result.website,
+        phone: result.phone,
+        category: result.category,
+        googlePlaceId: provider === 'google_places' ? result.externalId : null,
+      });
+      if (Object.keys(updates).length === 0 && (existing.company.googleMapsUrl || provider !== 'google_places')) return existing.company;
       const [updated] = await this.db.update(companies).set({
-        ...(result.website ? { website: result.website } : {}),
-        ...(result.phone ? { phone: result.phone } : {}),
-        ...(result.category ? { category: result.category } : {}),
+        ...updates,
+        ...(provider === 'google_places' && !existing.company.googleMapsUrl ? { googleMapsUrl: result.sourceUrl } : {}),
         updatedAt: new Date(),
       }).where(eq(companies.id, existing.company.id)).returning();
       return updated ?? existing.company;
@@ -106,9 +115,9 @@ export class SourceDiscoveryService {
       website,
       phone: result.phone,
       category: result.category,
-      ...(provider === 'google_places' ? { googlePlaceId: result.externalId } : {}),
-      googleMapsUrl: result.sourceUrl,
+      ...(provider === 'google_places' ? { googlePlaceId: result.externalId, googleMapsUrl: result.sourceUrl } : {}),
       verificationStatus: 'NOT_VERIFIED',
+      investorType: null,
     }).returning();
 
     if (result.address) {
@@ -152,10 +161,10 @@ export class SourceDiscoveryService {
     return record;
   }
 
-  private async createEvidence(companyId: string, sourceRecordId: string, result: ReturnType<SourceNormalizerService['normalize']>) {
+  private async createEvidence(companyId: string, sourceRecordId: string, result: ReturnType<SourceNormalizerService['normalize']>, provider: string) {
     const facts = [result.name, result.website, result.phone, result.category, result.address?.addressLine1, result.address?.city, result.address?.state, result.address?.postalCode].filter(Boolean).join(' | ');
     if (!facts) return;
-    await this.db.insert(leadEvidence).values({ companyId, sourceRecordId, evidenceType: 'PROVIDER_RESULT', sourceUrl: result.sourceUrl, evidenceText: facts, evidenceTimestamp: new Date(), metadata: { externalId: result.externalId } });
+    await this.db.insert(leadEvidence).values({ companyId, sourceRecordId, evidenceType: 'PROVIDER_RESULT', sourceUrl: result.sourceUrl, evidenceText: facts, evidenceTimestamp: new Date(), provider, metadata: { externalId: result.externalId, verified: false } });
   }
 
   private async audit(organizationId: string, entityId: string, action: string, userId?: string, metadata?: Record<string, string>) {

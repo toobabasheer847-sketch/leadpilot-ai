@@ -20,6 +20,16 @@ describe('SourceNormalizerService', () => {
     expect(result.phone).toBeUndefined();
   });
 
+  it('normalizes a phone without inventing a country code', () => {
+    const result = new SourceNormalizerService().normalize({
+      externalId: 'place-1',
+      name: 'Example Business',
+      sourceUrl: 'https://example.test/source',
+      phone: '(512) 555-0100',
+    });
+    expect(result.phone).toBe('5125550100');
+  });
+
   it('rejects records without a factual source URL', () => {
     expect(() => new SourceNormalizerService().normalize({ externalId: 'place-1', name: 'Company', sourceUrl: '' })).toThrow('required provenance');
   });

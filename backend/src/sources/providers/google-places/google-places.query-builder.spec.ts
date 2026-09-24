@@ -10,4 +10,15 @@ describe('buildGooglePlacesQuery', () => {
       unresolvedCriteria: [{ text: '1-50 employees', reason: 'provider unsupported' }],
     })).toBe('cash home buyer real estate Texas, US');
   });
+
+  it('does not invent an employee filter the provider cannot apply', () => {
+    expect(buildGooglePlacesQuery({
+      industry: [],
+      leadTypes: ['cash_home_buyer'],
+      locations: [{ country: 'US', state: 'Texas' }],
+      companySize: { min: 1, max: 50 },
+      companyFields: [],
+      unresolvedCriteria: [],
+    })).toBe('cash home buyer Texas, US');
+  });
 });

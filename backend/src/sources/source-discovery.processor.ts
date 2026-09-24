@@ -6,7 +6,7 @@ import { DRIZZLE } from '../database/database.constants';
 import type { Database } from '../database/database.types';
 import { auditLogs, pipelineJobs, searchExecutions } from '../database/schema/schema';
 import { SearchPlan } from '../search/types/search-plan.types';
-import { SourceProviderError } from './providers/source-provider.error';
+import { isTerminalProviderError, SourceProviderError } from './providers/source-provider.error';
 import { SourceDiscoveryJobData } from './source-discovery.queue';
 import { SourceDiscoveryService } from './services/source-discovery.service';
 import { StructuredLoggerService } from '../common/observability/structured-logger.service';
@@ -48,7 +48,7 @@ export class SourceDiscoveryProcessor extends WorkerHost {
       const safeMessage = error instanceof SourceProviderError || error instanceof Error
         ? error.message
         : 'Source discovery failed.';
-      this.logger.warn('job.source_discovery.failed', { jobId: job.id, errorType: error instanceof Error ? error.name : 'unknown' });
+      this.logger.warn('job.source_discovery.failed', { jobId: job.id, errorType: error instanceof Error ? error.name : 'unknown', errorCode: error instanceof SourceProviderError ? error.code : undefined });
       await this.db.update(searchExecutions).set({
         status: 'FAILED',
         completedAt: new Date(),
@@ -63,7 +63,7 @@ export class SourceDiscoveryProcessor extends WorkerHost {
         entityType: 'search_execution',
         metadata: { error: safeMessage },
       });
-      if (error instanceof SourceProviderError && ['NOT_CONFIGURED', 'AUTHENTICATION', 'MALFORMED_RESPONSE'].includes(error.code)) {
+      if (isTerminalProviderError(error)) {
         throw new UnrecoverableError(safeMessage);
       }
       throw error;
