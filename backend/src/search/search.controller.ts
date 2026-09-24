@@ -7,9 +7,10 @@ import { ListSearchesDto } from './dto/list-searches.dto';
 import { UpdateSearchDto } from './dto/update-search.dto';
 import { PreviewSearchDto } from './dto/preview-search.dto';
 import { SearchService } from './search.service';
+import { UsageRateLimitGuard } from '../usage/usage-rate-limit.guard';
 
 @Controller('searches')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, UsageRateLimitGuard)
 export class SearchController {
   constructor(private readonly searchService: SearchService) {}
 

@@ -14,6 +14,7 @@ import { ExportStorageService } from './export-storage.service';
 import { ExportsQueue } from './exports.queue';
 import { DEFAULT_EXPORT_FIELDS, type ExportField, type ExportJobData, type ExportStatus } from './types/export.types';
 import type { AuthenticatedUser } from '../auth/auth.types';
+import { UsageService } from '../usage/usage.service';
 
 @Injectable()
 export class ExportsService {
@@ -24,6 +25,7 @@ export class ExportsService {
     private readonly format: ExportFormatService,
     private readonly storage: ExportStorageService,
     private readonly config: ConfigService,
+    private readonly usage: UsageService,
   ) {}
 
   async create(user: AuthenticatedUser, dto: CreateExportDto) {
@@ -32,6 +34,9 @@ export class ExportsService {
     const fingerprint = createHash('sha256').update(JSON.stringify({ organizationId: user.organizationId, requestedByUserId: user.id, format: dto.format, filters, fields })).digest('hex');
     const [existing] = await this.db.select().from(exportsTable).where(and(eq(exportsTable.organizationId, user.organizationId), eq(exportsTable.idempotencyKey, fingerprint), eq(exportsTable.status, 'QUEUED'))).limit(1);
     if (existing) return { status: existing.status, exportId: existing.id };
+    await this.usage.assertDailyQuota(user.organizationId, 'EXPORT');
+    const preview = await this.leads.list(user, filters);
+    await this.usage.assertMaxExportRows(user.organizationId, preview.pagination.total);
     const [record] = await this.db.insert(exportsTable).values({ organizationId: user.organizationId, requestedByUserId: user.id, searchExecutionId: filters.searchExecutionId ?? null, format: dto.format, status: 'QUEUED', filters, fields, fileName: null, filePath: null, fileSize: null, rowCount: null, errorMessage: null, idempotencyKey: fingerprint, expiresAt: null }).returning();
     if (!record) throw new Error('Export could not be created');
     const job = await this.queue.enqueue({ exportId: record.id, organizationId: user.organizationId });
@@ -64,6 +69,7 @@ export class ExportsService {
       const retentionDays = this.config.get<number>('export.retentionDays', 7);
       const expiresAt = new Date(Date.now() + retentionDays * 86400000);
       await this.db.update(exportsTable).set({ status: 'COMPLETED', fileName, filePath: fileName, fileSize: content.length, rowCount, completedAt: new Date(), expiresAt, updatedAt: new Date() }).where(eq(exportsTable.id, record.id));
+      await this.usage.recordUsage({ organizationId: data.organizationId, userId: record.requestedByUserId, operation: 'EXPORT', resourceType: 'export', resourceId: record.id, units: 1, status: 'COMPLETED', metadata: { rowCount, fileSize: content.length } });
       await this.audit(data.organizationId, null, record.id, 'EXPORT_COMPLETED', { exportId: record.id, rowCount, fileSize: content.length });
       return { exportId: record.id, status: 'COMPLETED', rowCount };
     } catch (error) {

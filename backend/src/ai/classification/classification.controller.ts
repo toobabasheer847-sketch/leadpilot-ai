@@ -4,9 +4,10 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { ClassifyCompanyDto } from './dto/classify-company.dto';
 import { ClassificationService, mergeCriteria } from './classification.service';
+import { UsageRateLimitGuard } from '../../usage/usage-rate-limit.guard';
 
 @Controller()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, UsageRateLimitGuard)
 export class ClassificationController {
   constructor(private readonly service: ClassificationService) {}
 

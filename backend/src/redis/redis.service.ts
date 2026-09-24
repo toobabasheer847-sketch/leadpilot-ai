@@ -27,6 +27,22 @@ export class RedisService implements OnModuleDestroy {
     }
   }
 
+  async consumeFixedWindow(key: string, limit: number, windowSeconds: number): Promise<{ allowed: boolean; count: number; resetAt: Date }> {
+    const resetAt = new Date(Date.now() + windowSeconds * 1000);
+    try {
+      const count = Number(await this.client.eval(
+        'local current = redis.call("INCR", KEYS[1]); if current == 1 then redis.call("EXPIRE", KEYS[1], ARGV[1]); end; return current',
+        1,
+        key,
+        windowSeconds,
+      ));
+      const ttl = await this.client.ttl(key);
+      return { allowed: count <= limit, count, resetAt: new Date(Date.now() + Math.max(ttl, 0) * 1000) };
+    } catch {
+      return { allowed: true, count: 0, resetAt };
+    }
+  }
+
   async onModuleDestroy() {
     this.client.disconnect();
   }

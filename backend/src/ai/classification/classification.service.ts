@@ -13,6 +13,7 @@ import { normalizeEvidence } from './utils/evidence-normalizer';
 import type { ClassificationCriteria, ClassificationInput } from './types/classification.types';
 import type { ClassificationJobData } from './classification.queue';
 import { ClassificationQueue } from './classification.queue';
+import { UsageService } from '../../usage/usage.service';
 
 const defaultCriteria: ClassificationCriteria = {
   category: 'REAL_ESTATE_INVESTOR',
@@ -28,6 +29,7 @@ export class ClassificationService {
     @Inject(LLM_PROVIDER) private readonly llm: LlmProvider,
     private readonly queue: ClassificationQueue,
     private readonly config: ConfigService,
+    private readonly usage: UsageService,
   ) {}
 
   async enqueue(companyId: string, organizationId: string, criteria: ClassificationCriteria, searchExecutionId: string | null, force = false) {
@@ -103,6 +105,8 @@ export class ClassificationService {
       evidence,
     };
     try {
+      await this.usage.checkRequestRate(data.organizationId, undefined, 'AI_CLASSIFICATION');
+      await this.usage.assertDailyQuota(data.organizationId, 'AI_CLASSIFICATION');
       const result = enforceEvidenceBackedDecision(parseClassificationResult(await this.llm.classify(input)), new Set(evidence.map((item) => item.evidenceId)));
       const model = this.config.get<string>('openRouter.model') ?? 'unknown';
       const [stored] = await this.db.insert(leadClassifications).values({
@@ -128,8 +132,10 @@ export class ClassificationService {
         evidenceSummary: evidence.map((item) => `${item.evidenceId}: ${item.excerpt}`).join('\n').slice(0, 10000),
       }).returning();
       await this.audit(data.organizationId, company.id, 'AI_CLASSIFICATION_COMPLETED', { classificationId: stored?.id, decision: result.decision });
+      await this.usage.recordUsage({ organizationId: data.organizationId, operation: 'AI_CLASSIFICATION', provider: 'openrouter', resourceType: 'company', resourceId: company.id, units: 1, status: 'COMPLETED', metadata: { model } });
       return stored;
     } catch (error) {
+      await this.usage.recordUsage({ organizationId: data.organizationId, operation: 'AI_CLASSIFICATION', provider: 'openrouter', resourceType: 'company', resourceId: company.id, units: 1, status: 'FAILED', costStatus: 'UNKNOWN' });
       await this.audit(data.organizationId, company.id, 'AI_CLASSIFICATION_FAILED', { error: error instanceof Error ? error.message : 'Unknown classification error' });
       throw error;
     }

@@ -22,6 +22,7 @@ import { ScoringModule } from './scoring/scoring.module';
 import { DeduplicationModule } from './deduplication/deduplication.module';
 import { LeadsModule } from './leads/leads.module';
 import { ExportsModule } from './exports/exports.module';
+import { UsageModule } from './usage/usage.module';
 
 @Module({
   imports: [
@@ -60,6 +61,7 @@ import { ExportsModule } from './exports/exports.module';
     DeduplicationModule,
     LeadsModule,
     ExportsModule,
+    UsageModule,
   ],
   controllers: [AppController],
   providers: [

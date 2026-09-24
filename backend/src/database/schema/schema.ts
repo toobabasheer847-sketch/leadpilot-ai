@@ -375,11 +375,50 @@ export const usageEvents = pgTable('usage_events', {
   organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'restrict' }),
   userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
   eventType: varchar('event_type', { length: 100 }).notNull(),
+  operation: varchar('operation', { length: 100 }).notNull().default('UNKNOWN'),
   provider: varchar('provider', { length: 100 }),
+  resourceType: varchar('resource_type', { length: 100 }),
+  resourceId: uuid('resource_id'),
   quantity: integer('quantity').default(1).notNull(),
+  status: varchar('status', { length: 50 }).notNull().default('COMPLETED'),
+  estimatedCost: numeric('estimated_cost', { precision: 12, scale: 6 }),
+  costStatus: varchar('cost_status', { length: 20 }).notNull().default('UNKNOWN'),
+  requestId: varchar('request_id', { length: 255 }),
   metadata: jsonb('metadata'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-}, (table) => [index('usage_events_org_idx').on(table.organizationId), index('usage_events_user_idx').on(table.userId), index('usage_events_event_type_idx').on(table.eventType), index('usage_events_created_at_idx').on(table.createdAt)]);
+}, (table) => [
+  index('usage_events_org_idx').on(table.organizationId),
+  index('usage_events_user_idx').on(table.userId),
+  index('usage_events_event_type_idx').on(table.eventType),
+  index('usage_events_operation_idx').on(table.operation),
+  index('usage_events_provider_idx').on(table.provider),
+  index('usage_events_status_idx').on(table.status),
+  index('usage_events_created_at_idx').on(table.createdAt),
+  index('usage_events_org_operation_created_idx').on(table.organizationId, table.operation, table.createdAt),
+  check('usage_events_quantity_positive_check', sql`${table.quantity} > 0`),
+  check('usage_events_cost_status_check', sql`${table.costStatus} in ('ACTUAL', 'ESTIMATED', 'UNKNOWN')`),
+]);
+
+export const organizationLimits = pgTable('organization_limits', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'restrict' }),
+  requestsPerMinute: integer('requests_per_minute').notNull(),
+  requestsPerHour: integer('requests_per_hour').notNull(),
+  requestsPerDay: integer('requests_per_day').notNull(),
+  aiRequestsPerMinute: integer('ai_requests_per_minute').notNull(),
+  aiRequestsPerDay: integer('ai_requests_per_day').notNull(),
+  dailySearchLimit: integer('daily_search_limit').notNull(),
+  dailyExportLimit: integer('daily_export_limit').notNull(),
+  dailyAiLimit: integer('daily_ai_limit').notNull(),
+  maxLeadsPerSearch: integer('max_leads_per_search').notNull(),
+  maxExportRows: integer('max_export_rows').notNull(),
+  enabled: boolean('enabled').default(true).notNull(),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex('organization_limits_org_unique').on(table.organizationId),
+  index('organization_limits_enabled_idx').on(table.enabled),
+  check('organization_limits_positive_check', sql`${table.requestsPerMinute} > 0 and ${table.requestsPerHour} > 0 and ${table.requestsPerDay} > 0 and ${table.aiRequestsPerMinute} > 0 and ${table.aiRequestsPerDay} > 0 and ${table.dailySearchLimit} >= 0 and ${table.dailyExportLimit} >= 0 and ${table.dailyAiLimit} >= 0 and ${table.maxLeadsPerSearch} > 0 and ${table.maxExportRows} > 0`),
+]);
 
 export const auditLogs = pgTable('audit_logs', {
   id: uuid('id').defaultRandom().primaryKey(),

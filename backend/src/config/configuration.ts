@@ -59,6 +59,28 @@ export default () => ({
     retentionDays: parseInt(process.env.EXPORT_RETENTION_DAYS ?? '7', 10),
   },
 
+  usage: {
+    requestsPerMinute: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE ?? '100', 10),
+    requestsPerHour: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS_PER_HOUR ?? '1000', 10),
+    requestsPerDay: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS_PER_DAY ?? '5000', 10),
+    aiRequestsPerMinute: parseInt(process.env.AI_REQUESTS_PER_MINUTE ?? '20', 10),
+    aiRequestsPerDay: parseInt(process.env.AI_REQUESTS_PER_DAY ?? '500', 10),
+    dailySearchLimit: parseInt(process.env.DEFAULT_DAILY_SEARCH_LIMIT ?? '100', 10),
+    dailyExportLimit: parseInt(process.env.DEFAULT_DAILY_EXPORT_LIMIT ?? '25', 10),
+    dailyAiLimit: parseInt(process.env.DEFAULT_DAILY_AI_LIMIT ?? '500', 10),
+    maxLeadsPerSearch: parseInt(process.env.DEFAULT_MAX_LEADS_PER_SEARCH ?? '1000', 10),
+    maxExportRows: parseInt(process.env.DEFAULT_MAX_EXPORT_ROWS ?? '10000', 10),
+    rateLimitWindowSeconds: parseInt(process.env.RATE_LIMIT_WINDOW_SECONDS ?? '60', 10),
+    pricing: (() => {
+      try {
+        const parsed = JSON.parse(process.env.USAGE_PROVIDER_PRICING_JSON ?? '{}');
+        return typeof parsed === 'object' && parsed !== null ? parsed : {};
+      } catch {
+        return {};
+      }
+    })(),
+  },
+
   auth: {
     jwtSecret: process.env.JWT_SECRET,
     jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '1h',

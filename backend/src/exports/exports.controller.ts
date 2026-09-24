@@ -6,9 +6,10 @@ import type { AuthenticatedUser } from '../auth/auth.types';
 import { CreateExportDto } from './dto/create-export.dto';
 import { ListExportsDto } from './dto/list-exports.dto';
 import { ExportsService } from './exports.service';
+import { UsageRateLimitGuard } from '../usage/usage-rate-limit.guard';
 
 @Controller('exports')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, UsageRateLimitGuard)
 export class ExportsController {
   constructor(private readonly service: ExportsService) {}
 

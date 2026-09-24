@@ -8,9 +8,10 @@ import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { SourcesModule } from '../sources/sources.module';
+import { UsageModule } from '../usage/usage.module';
 
 @Module({
-  imports: [AuthModule, UsersModule, OrganizationsModule, SourcesModule],
+  imports: [AuthModule, UsersModule, OrganizationsModule, SourcesModule, UsageModule],
   controllers: [SearchController],
   providers: [SearchService, SearchPlanParser, SearchConfigurationRepository, SearchExecutionRepository],
 })

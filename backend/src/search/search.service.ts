@@ -12,6 +12,7 @@ import { SearchConfigurationRepository } from './repositories/search-configurati
 import { SearchExecutionRepository } from './repositories/search-execution.repository';
 import { SourceDiscoveryQueue } from '../sources/source-discovery.queue';
 import { SourceDiscoveryService } from '../sources/services/source-discovery.service';
+import { UsageService } from '../usage/usage.service';
 
 @Injectable()
 export class SearchService {
@@ -22,6 +23,7 @@ export class SearchService {
     private readonly executions: SearchExecutionRepository,
     private readonly sourceQueue: SourceDiscoveryQueue,
     private readonly discovery: SourceDiscoveryService,
+    private readonly usage: UsageService,
   ) {}
 
   preview(prompt: string) {
@@ -85,6 +87,10 @@ export class SearchService {
     if (existing[0]) {
       return existing[0];
     }
+    await this.usage.assertDailyQuota(user.organizationId, 'SEARCH');
+    const plan = typeof search.criteria === 'object' && search.criteria !== null ? search.criteria as Record<string, unknown> : {};
+    const requestedLeads = typeof plan.maxResults === 'number' ? plan.maxResults : 0;
+    if (requestedLeads > 0) await this.usage.assertMaxLeads(user.organizationId, requestedLeads);
 
     const execution = await this.db.transaction(async (tx) => {
       const [created] = await tx.insert(searchExecutions).values({
@@ -119,6 +125,7 @@ export class SearchService {
       throw new ServiceUnavailableException('Source discovery is temporarily unavailable.');
     }
     await this.writeAudit(user, 'SEARCH_EXECUTION_CREATED', execution.id, { searchId });
+    await this.usage.recordUsage({ organizationId: user.organizationId, userId: user.id, operation: 'SEARCH', resourceType: 'search_execution', resourceId: execution.id, units: 1, status: 'COMPLETED' });
     return execution;
   }
 
