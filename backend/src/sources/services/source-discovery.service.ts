@@ -1,8 +1,11 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { DRIZZLE } from '../../database/database.constants';
 import type { Database } from '../../database/database.types';
-import { auditLogs, companies, companyLocations, sourceRecords } from '../../database/schema/schema';
+import { auditLogs, companies, companyLocations, leadEvidence, sourceRecords } from '../../database/schema/schema';
+import { ProviderObservabilityService } from '../../common/observability/provider-observability.service';
+import { RequestContextService } from '../../common/observability/request-context.service';
+import { UsageService } from '../../usage/usage.service';
 import { SearchPlan } from '../../search/types/search-plan.types';
 import { SOURCE_PROVIDER } from '../interfaces/source-provider.interface';
 import type { SourceProvider, SourceSearchContext } from '../types/source.types';
@@ -10,31 +13,44 @@ import { SourceNormalizerService } from './source-normalizer.service';
 
 @Injectable()
 export class SourceDiscoveryService {
-  private readonly logger = new Logger(SourceDiscoveryService.name);
-
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     @Inject(SOURCE_PROVIDER) private readonly provider: SourceProvider,
     private readonly normalizer: SourceNormalizerService,
+    private readonly usage: UsageService,
+    private readonly providerObservability: ProviderObservabilityService,
+    private readonly requestContext: RequestContextService,
   ) {}
 
-  async discover(executionId: string, organizationId: string, plan: SearchPlan) {
-    const context: SourceSearchContext = { searchExecutionId: executionId, organizationId };
+  async discover(executionId: string, organizationId: string, plan: SearchPlan, trace: Pick<SourceSearchContext, 'requestId' | 'correlationId'> = {}) {
+    const currentContext = this.requestContext.get();
+    const context: SourceSearchContext = { searchExecutionId: executionId, organizationId, requestId: trace.requestId ?? currentContext?.requestId, correlationId: trace.correlationId ?? currentContext?.correlationId };
     await this.audit(organizationId, executionId, 'SOURCE_SEARCH_STARTED');
-    const result = await this.provider.search(plan, context);
-    let candidates = 0;
+    await this.usage.checkRequestRate(organizationId, undefined, 'DISCOVERY');
+    try {
+      const result = await this.providerObservability.track(this.provider.getProviderName(), 'DISCOVERY', async () => ({ value: await this.provider.search(plan, context) }));
+      let candidates = 0;
 
-    for (const raw of result.results) {
-      const normalized = this.normalizer.normalize(raw);
-      if (!normalized.externalId || normalized.name === 'Not Found') continue;
-      const company = await this.upsertCompany(organizationId, result.provider, normalized);
-      await this.upsertSourceRecord(organizationId, executionId, company.id, result.provider, normalized);
-      candidates += 1;
+      for (const raw of result.results) {
+        try {
+          const normalized = this.normalizer.normalize(raw);
+          const company = await this.upsertCompany(organizationId, this.provider.getSourceType(), normalized);
+          const sourceRecord = await this.upsertSourceRecord(organizationId, executionId, company.id, this.provider.getSourceType(), normalized, context);
+          await this.createEvidence(company.id, sourceRecord.id, normalized);
+          candidates += 1;
+        } catch (error) {
+          await this.audit(organizationId, executionId, 'SOURCE_RESULT_REJECTED', undefined, { reason: error instanceof Error ? error.name : 'unknown' });
+        }
+      }
+
+      await this.usage.recordUsage({ organizationId, operation: 'DISCOVERY', provider: this.provider.getProviderName(), resourceType: 'search_execution', resourceId: executionId, units: 1, status: 'COMPLETED', requestId: context.requestId, metadata: { candidates } });
+      await this.audit(organizationId, executionId, 'CANDIDATES_DISCOVERED', undefined, { count: String(candidates), provider: this.provider.getProviderName() });
+      await this.audit(organizationId, executionId, 'SOURCE_SEARCH_COMPLETED', undefined, { count: String(candidates), provider: this.provider.getProviderName() });
+      return { candidates };
+    } catch (error) {
+      await this.usage.recordUsage({ organizationId, operation: 'DISCOVERY', provider: this.provider.getProviderName(), resourceType: 'search_execution', resourceId: executionId, units: 1, status: 'FAILED', requestId: context.requestId });
+      throw error;
     }
-
-    await this.audit(organizationId, executionId, 'CANDIDATES_DISCOVERED', undefined, { count: String(candidates), provider: result.provider });
-    await this.audit(organizationId, executionId, 'SOURCE_SEARCH_COMPLETED', undefined, { count: String(candidates), provider: result.provider });
-    return { candidates };
   }
 
   async listCandidates(executionId: string, organizationId: string, page: number, limit: number) {
@@ -75,7 +91,15 @@ export class SourceDiscoveryService {
         ),
       )).limit(1);
 
-    if (existing?.company) return existing.company;
+    if (existing?.company) {
+      const [updated] = await this.db.update(companies).set({
+        ...(result.website ? { website: result.website } : {}),
+        ...(result.phone ? { phone: result.phone } : {}),
+        ...(result.category ? { category: result.category } : {}),
+        updatedAt: new Date(),
+      }).where(eq(companies.id, existing.company.id)).returning();
+      return updated ?? existing.company;
+    }
     const [company] = await this.db.insert(companies).values({
       organizationId,
       name: result.name,
@@ -104,7 +128,7 @@ export class SourceDiscoveryService {
     return company;
   }
 
-  private async upsertSourceRecord(organizationId: string, executionId: string, companyId: string, provider: string, result: ReturnType<SourceNormalizerService['normalize']>) {
+  private async upsertSourceRecord(organizationId: string, executionId: string, companyId: string, provider: string, result: ReturnType<SourceNormalizerService['normalize']>, context: SourceSearchContext) {
     const [existing] = await this.db.select({ id: sourceRecords.id }).from(sourceRecords).where(and(
       eq(sourceRecords.organizationId, organizationId),
       eq(sourceRecords.searchExecutionId, executionId),
@@ -120,9 +144,18 @@ export class SourceDiscoveryService {
       sourceName: provider,
       sourceUrl: result.sourceUrl,
       externalId: result.externalId,
+      requestId: context.requestId,
+      correlationId: context.correlationId,
+      retrievedAt: new Date(),
       rawData: result.rawData,
     }).returning();
     return record;
+  }
+
+  private async createEvidence(companyId: string, sourceRecordId: string, result: ReturnType<SourceNormalizerService['normalize']>) {
+    const facts = [result.name, result.website, result.phone, result.category, result.address?.addressLine1, result.address?.city, result.address?.state, result.address?.postalCode].filter(Boolean).join(' | ');
+    if (!facts) return;
+    await this.db.insert(leadEvidence).values({ companyId, sourceRecordId, evidenceType: 'PROVIDER_RESULT', sourceUrl: result.sourceUrl, evidenceText: facts, evidenceTimestamp: new Date(), metadata: { externalId: result.externalId } });
   }
 
   private async audit(organizationId: string, entityId: string, action: string, userId?: string, metadata?: Record<string, string>) {

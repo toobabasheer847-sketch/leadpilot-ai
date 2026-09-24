@@ -19,4 +19,8 @@ describe('SourceNormalizerService', () => {
     });
     expect(result.phone).toBeUndefined();
   });
+
+  it('rejects records without a factual source URL', () => {
+    expect(() => new SourceNormalizerService().normalize({ externalId: 'place-1', name: 'Company', sourceUrl: '' })).toThrow('required provenance');
+  });
 });

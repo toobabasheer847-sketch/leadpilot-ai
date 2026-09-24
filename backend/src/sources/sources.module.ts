@@ -10,12 +10,14 @@ import { SourceDiscoveryProcessor } from './source-discovery.processor';
 import { SourceDiscoveryQueue } from './source-discovery.queue';
 import { SourceDiscoveryService } from './services/source-discovery.service';
 import { SourceNormalizerService } from './services/source-normalizer.service';
+import { UsageModule } from '../usage/usage.module';
 
 @Module({
   imports: [
     ConfigModule,
     QueueModule,
     CommonModule,
+    UsageModule,
     BullModule.registerQueue({ name: 'source-discovery-queue' }),
   ],
   providers: [
@@ -26,7 +28,7 @@ import { SourceNormalizerService } from './services/source-normalizer.service';
       provide: SOURCE_PROVIDER,
       inject: [ConfigService, GooglePlacesProvider, FakeSourceProvider],
       useFactory: (config: ConfigService, google: GooglePlacesProvider, fake: FakeSourceProvider) =>
-        config.get<string>('sourceProvider.provider', 'google_places') === 'fake' ? fake : google,
+        config.get<string>('nodeEnv') !== 'production' && config.get<string>('sourceProvider.provider', 'google_places') === 'fake' ? fake : google,
     },
     SourceDiscoveryService,
     SourceDiscoveryProcessor,

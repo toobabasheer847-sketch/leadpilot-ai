@@ -4,6 +4,9 @@ import { SourceProvider, SourceSearchContext, SourceSearchResult } from '../type
 export class FakeSourceProvider implements SourceProvider {
   readonly name = 'fake_source';
 
+  getSourceType() { return this.name; }
+  getProviderName() { return this.name; }
+
   async search(_plan: SearchPlan, _context: SourceSearchContext): Promise<SourceSearchResult> {
     return {
       provider: this.name,

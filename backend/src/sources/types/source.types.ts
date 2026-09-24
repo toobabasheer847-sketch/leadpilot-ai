@@ -30,10 +30,14 @@ export interface SourceSearchResult {
 export interface SourceSearchContext {
   organizationId: string;
   searchExecutionId: string;
+  requestId?: string;
+  correlationId?: string;
   signal?: AbortSignal;
 }
 
 export interface SourceProvider {
   readonly name: string;
+  getProviderName(): string;
+  getSourceType(): string;
   search(plan: SearchPlan, context: SourceSearchContext): Promise<SourceSearchResult>;
 }

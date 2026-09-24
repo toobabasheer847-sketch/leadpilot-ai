@@ -24,6 +24,7 @@ export default () => ({
 
   sourceProvider: {
     googlePlacesApiKey: process.env.GOOGLE_PLACES_API_KEY,
+    googlePlacesBaseUrl: process.env.GOOGLE_PLACES_BASE_URL,
     timeoutMs: parseInt(process.env.SOURCE_PROVIDER_TIMEOUT_MS ?? '10000', 10),
     concurrency: parseInt(process.env.SOURCE_PROVIDER_CONCURRENCY ?? '2', 10),
     maxPages: parseInt(process.env.SOURCE_PROVIDER_MAX_PAGES ?? '3', 10),

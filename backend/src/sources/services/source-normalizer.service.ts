@@ -1,10 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { NormalizedSourceResult } from '../types/source.types';
+import { SourceProviderError } from '../providers/source-provider.error';
 
 @Injectable()
 export class SourceNormalizerService {
   normalize(result: NormalizedSourceResult): NormalizedSourceResult {
-    return {
+    const normalized = {
       ...result,
       externalId: result.externalId.trim(),
       name: result.name.trim(),
@@ -19,6 +20,16 @@ export class SourceNormalizerService {
         postalCode: result.address.postalCode?.trim(),
       } : undefined,
     };
+    if (!normalized.externalId || !normalized.name || !normalized.sourceUrl) {
+      throw new SourceProviderError('MALFORMED_RESPONSE', 'Provider result is missing required provenance fields.');
+    }
+    try {
+      const sourceUrl = new URL(normalized.sourceUrl);
+      if (!['http:', 'https:'].includes(sourceUrl.protocol)) throw new Error('unsupported protocol');
+    } catch {
+      throw new SourceProviderError('MALFORMED_RESPONSE', 'Provider result contains an invalid source URL.');
+    }
+    return normalized;
   }
 
   normalizeWebsite(website?: string) {

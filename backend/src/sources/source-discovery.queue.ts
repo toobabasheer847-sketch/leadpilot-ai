@@ -7,6 +7,7 @@ export interface SourceDiscoveryJobData {
   searchExecutionId: string;
   searchConfigurationId: string;
   organizationId: string;
+  correlationId?: string;
 }
 
 @Injectable()

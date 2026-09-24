@@ -185,6 +185,8 @@ export const sourceRecords = pgTable('source_records', {
   sourceName: varchar('source_name', { length: 255 }),
   sourceUrl: text('source_url').notNull(),
   externalId: varchar('external_id', { length: 255 }),
+  requestId: varchar('request_id', { length: 255 }),
+  correlationId: varchar('correlation_id', { length: 255 }),
   rawData: jsonb('raw_data'),
   retrievedAt: timestamp('retrieved_at', { withTimezone: true }).defaultNow().notNull(),
   ...timestamps,

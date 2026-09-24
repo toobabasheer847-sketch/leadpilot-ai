@@ -1,22 +1,22 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Inject, Logger } from '@nestjs/common';
+import { Inject } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { Job, UnrecoverableError } from 'bullmq';
 import { DRIZZLE } from '../database/database.constants';
 import type { Database } from '../database/database.types';
 import { auditLogs, pipelineJobs, searchExecutions } from '../database/schema/schema';
 import { SearchPlan } from '../search/types/search-plan.types';
-import { SourceProviderError } from './providers/google-places/google-places.provider';
+import { SourceProviderError } from './providers/source-provider.error';
 import { SourceDiscoveryJobData } from './source-discovery.queue';
 import { SourceDiscoveryService } from './services/source-discovery.service';
+import { StructuredLoggerService } from '../common/observability/structured-logger.service';
 
 @Processor('source-discovery-queue')
 export class SourceDiscoveryProcessor extends WorkerHost {
-  private readonly logger = new Logger(SourceDiscoveryProcessor.name);
-
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly discovery: SourceDiscoveryService,
+    private readonly logger: StructuredLoggerService,
   ) {
     super();
   }
@@ -33,7 +33,7 @@ export class SourceDiscoveryProcessor extends WorkerHost {
       const plan = execution[0]?.plan as SearchPlan | null;
       if (!plan) throw new Error('Search execution plan is unavailable.');
 
-      const result = await this.discovery.discover(searchExecutionId, organizationId, plan);
+      const result = await this.discovery.discover(searchExecutionId, organizationId, plan, { correlationId: job.data.correlationId });
       await this.db.update(searchExecutions).set({
         status: 'COMPLETED',
         completedAt: new Date(),
@@ -48,7 +48,7 @@ export class SourceDiscoveryProcessor extends WorkerHost {
       const safeMessage = error instanceof SourceProviderError || error instanceof Error
         ? error.message
         : 'Source discovery failed.';
-      this.logger.warn(`Source discovery job ${job.id} failed: ${error instanceof Error ? error.name : 'unknown error'}`);
+      this.logger.warn('job.source_discovery.failed', { jobId: job.id, errorType: error instanceof Error ? error.name : 'unknown' });
       await this.db.update(searchExecutions).set({
         status: 'FAILED',
         completedAt: new Date(),

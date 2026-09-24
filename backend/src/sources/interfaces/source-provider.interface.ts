@@ -1,4 +1,4 @@
-import { SourceProvider } from '../types/source.types';
+import type { SourceProvider } from '../types/source.types';
 
 export const SOURCE_PROVIDER = 'SOURCE_PROVIDER';
 
