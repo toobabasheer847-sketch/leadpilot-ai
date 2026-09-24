@@ -39,6 +39,11 @@ export default () => ({
     model: process.env.OPENROUTER_MODEL,
   },
 
+  contactProvider: {
+    apiKey: process.env.CONTACT_PROVIDER_API_KEY,
+    emailApiKey: process.env.EMAIL_ENRICHMENT_API_KEY,
+  },
+
   website: {
     fetchTimeoutMs: parseInt(process.env.WEBSITE_FETCH_TIMEOUT_MS ?? '10000', 10),
     maxResponseBytes: parseInt(process.env.WEBSITE_MAX_RESPONSE_BYTES ?? '5000000', 10),

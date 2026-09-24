@@ -150,10 +150,15 @@ export const companyContacts = pgTable('company_contacts', {
   linkedinUrl: text('linkedin_url'),
   facebookUrl: text('facebook_url'),
   instagramUrl: text('instagram_url'),
+  source: text('source'),
+  status: varchar('status', { length: 50 }).default('DISCOVERED').notNull(),
+  confidence: numeric('confidence', { precision: 5, scale: 4 }),
+  identityConfidence: numeric('identity_confidence', { precision: 5, scale: 4 }),
+  identityEvidence: jsonb('identity_evidence'),
   verificationStatus: varchar('verification_status', { length: 50 }).default('NOT_VERIFIED').notNull(),
   lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true }),
   ...timestamps,
-}, (table) => [index('company_contacts_company_idx').on(table.companyId), index('company_contacts_verification_status_idx').on(table.verificationStatus)]);
+}, (table) => [index('company_contacts_company_idx').on(table.companyId), index('company_contacts_verification_status_idx').on(table.verificationStatus), index('company_contacts_status_idx').on(table.status)]);
 
 export const companySocialProfiles = pgTable('company_social_profiles', {
   id: uuid('id').defaultRandom().primaryKey(),
