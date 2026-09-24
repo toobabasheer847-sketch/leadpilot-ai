@@ -10,11 +10,12 @@ export function Field({ label, children, hint }: { label: string; children: Reac
   );
 }
 
-export function EmptyState({ title, detail }: { title: string; detail: string }) {
+export function EmptyState({ title, detail, action }: { title: string; detail: string; action?: ReactNode }) {
   return (
     <div className="empty" role="status">
       <h2>{title}</h2>
       <p>{detail}</p>
+      {action}
     </div>
   );
 }
@@ -38,5 +39,6 @@ export function Skeleton({ rows = 3 }: { rows?: number }) {
 
 export function StatusBadge({ status }: { status: string | null | undefined }) {
   const label = !status ? 'Not Found' : status === 'NOT_FOUND' ? 'Not Found' : status;
-  return <span className={`badge badge-${label.toLowerCase()}`}>{label}</span>;
+  const tone = label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  return <span className={`badge badge-${tone}`}>{label}</span>;
 }

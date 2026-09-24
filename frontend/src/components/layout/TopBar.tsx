@@ -20,7 +20,7 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const title = titles[location.pathname] ?? (location.pathname.startsWith('/search-history/') ? 'Search progress' : 'LeadPilot');
+  const title = titles[location.pathname] ?? (location.pathname.startsWith('/leads/') ? 'Company' : location.pathname.startsWith('/search-history/') ? 'Search progress' : 'LeadPilot');
 
   useEffect(() => setMenuOpen(false), [location.pathname]);
 

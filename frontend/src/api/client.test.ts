@@ -6,6 +6,9 @@ describe('API error handling', () => {
     expect(readErrorMessage(404, { message: 'Search not found' })).toBe('Search not found');
     expect(readErrorMessage(401, { message: 'Invalid email or password' })).toBe('Invalid email or password');
     expect(readErrorMessage(429, { message: ['Too many requests'] })).toBe('Too many requests');
+    expect(readErrorMessage(403, { message: 'Forbidden' })).toBe('Forbidden');
+    expect(readErrorMessage(409, { message: 'Already running' })).toBe('Already running');
+    expect(readErrorMessage(422, { message: 'Invalid field' })).toBe('Invalid field');
     expect(readErrorMessage(400, { message: 'api_key=hidden' })).toBe('Some fields need to be corrected.');
   });
 });

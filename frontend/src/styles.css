@@ -108,6 +108,29 @@ td small { display: block; color: var(--muted); }
   .topbar { flex-wrap: wrap; }
   .metric-grid, .filters { grid-template-columns: 1fr; }
 }
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.kv { display: grid; gap: 0.65rem; margin: 0; }
+.kv div { display: grid; gap: 0.15rem; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; }
+.contact-quality { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
+.person-card, .verification-card, .lead-card { display: grid; gap: 0.35rem; }
+.lead-cards { display: grid; gap: 0.8rem; }
+.conflict { border-left: 3px solid var(--danger); }
+.evidence-card { border-top: 1px solid var(--line); padding-top: 0.6rem; }
+.evidence-toggle { width: 100%; text-align: left; }
+.evidence-body { overflow: hidden; }
+.sort-button { background: transparent; color: inherit; border: 0; padding: 0; min-height: 0; font-weight: 700; }
+.check-cell { width: 2.5rem; }
+.dialog-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: grid; place-items: center; z-index: 30; padding: 1rem; }
+.dialog { background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem; width: min(440px, 100%); display: grid; gap: 0.8rem; }
+.badge-needs-review, .badge-unverified, .badge-not-found, .badge-partial { color: var(--muted); }
+.badge-conflict, .badge-failed, .badge-not-qualified, .badge-invalid { color: var(--danger); }
+.badge-queued, .badge-running, .badge-supported, .badge-partially-verified { color: var(--accent); }
+
+@media (max-width: 800px) {
+  .detail-grid, .contact-quality { grid-template-columns: 1fr; }
+}
 @media (prefers-reduced-motion: reduce) {
   .sidebar { transition: none; }
 }

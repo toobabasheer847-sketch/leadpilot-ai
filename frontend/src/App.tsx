@@ -3,6 +3,7 @@ import { AppShell } from './components/layout/AppShell';
 import { LoginPage, RegisterPage } from './pages/AuthPages';
 import { DashboardPage } from './pages/DashboardPage';
 import { ExportsPage } from './pages/ExportsPage';
+import { LeadDetailPage } from './pages/LeadDetailPage';
 import { LeadsPage } from './pages/LeadsPage';
 import { NewSearchPage } from './pages/NewSearchPage';
 import { ResearchPage } from './pages/ResearchPage';
@@ -21,6 +22,7 @@ export function App() {
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/search/new" element={<NewSearchPage />} />
           <Route path="/leads" element={<LeadsPage />} />
+          <Route path="/leads/:companyId" element={<LeadDetailPage />} />
           <Route path="/search-history" element={<SearchHistoryPage />} />
           <Route path="/search-history/:searchId" element={<SearchProgressPage />} />
           <Route path="/research" element={<ResearchPage />} />
