@@ -29,4 +29,21 @@ describe('environment validation', () => {
       OPENROUTER_MODEL: 'configured-model',
     })).toThrow(/SOURCE_PROVIDER=fake/);
   });
+
+  it('allows the OpenStreetMap provider and rejects an insecure Overpass URL', () => {
+    expect(validateEnvironment({
+      ...base,
+      NODE_ENV: 'production',
+      SOURCE_PROVIDER: 'osm',
+      OVERPASS_API_URL: 'https://overpass-api.de/api/interpreter',
+      OVERPASS_TIMEOUT_MS: '30000',
+      OVERPASS_MAX_RESULTS: '100',
+      OPENROUTER_API_KEY: 'present',
+      OPENROUTER_MODEL: 'configured-model',
+    })).toEqual(expect.objectContaining({ SOURCE_PROVIDER: 'osm' }));
+    expect(() => validateEnvironment({
+      ...base,
+      OVERPASS_API_URL: 'http://overpass.example/api',
+    })).toThrow(/OVERPASS_API_URL/);
+  });
 });

@@ -11,6 +11,7 @@ export class SourceNormalizerService {
       name: result.name.trim(),
       website: this.normalizeWebsite(result.website),
       phone: this.normalizePhone(result.phone),
+      email: this.normalizeEmail(result.email),
       sourceUrl: result.sourceUrl.trim(),
       address: result.address ? {
         ...result.address,
@@ -48,5 +49,11 @@ export class SourceNormalizerService {
     if (!phone?.trim()) return undefined;
     const compact = phone.trim().replace(/[^\d+]/g, '');
     return compact || undefined;
+  }
+
+  normalizeEmail(email?: string) {
+    if (!email?.trim()) return undefined;
+    const value = email.trim().toLowerCase();
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? value : undefined;
   }
 }

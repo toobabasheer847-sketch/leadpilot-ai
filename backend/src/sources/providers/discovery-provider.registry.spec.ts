@@ -19,7 +19,27 @@ describe('DiscoveryProviderRegistry', () => {
       'sourceProvider.googlePlacesApiKey': 'secret-key',
       'sourceProvider.googlePlacesBaseUrl': 'https://places.googleapis.com/v1/places:searchText',
     }).status();
-    expect(status.providers).toEqual([{ name: 'google_places', configured: true, enabled: true }]);
+    expect(status.providers).toEqual([
+      { name: 'google_places', configured: true, enabled: true },
+      { name: 'osm', configured: true, enabled: false },
+    ]);
     expect(JSON.stringify(status)).not.toContain('secret-key');
+  });
+
+  it('enables OpenStreetMap only when it is selected and the endpoint is https', () => {
+    const selected = registry({
+      nodeEnv: 'development',
+      'sourceProvider.provider': 'osm',
+      'sourceProvider.overpassApiUrl': 'https://overpass-api.de/api/interpreter',
+    }).status();
+    expect(selected.providers).toContainEqual({ name: 'osm', configured: true, enabled: true });
+    expect(selected.providers).toContainEqual({ name: 'google_places', configured: false, enabled: false });
+
+    const insecure = registry({
+      nodeEnv: 'development',
+      'sourceProvider.provider': 'osm',
+      'sourceProvider.overpassApiUrl': 'http://overpass.example/api',
+    }).status();
+    expect(insecure.providers).toContainEqual({ name: 'osm', configured: false, enabled: false });
   });
 });

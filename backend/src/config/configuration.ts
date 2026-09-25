@@ -34,6 +34,10 @@ export default () => ({
     retryDelayMs: parseInt(process.env.SOURCE_PROVIDER_RETRY_DELAY_MS ?? '250', 10),
     provider: process.env.SOURCE_PROVIDER ?? 'google_places',
     retainRawData: process.env.SOURCE_PROVIDER_RETAIN_RAW_DATA !== 'false',
+    overpassApiUrl: process.env.OVERPASS_API_URL ?? 'https://overpass-api.de/api/interpreter',
+    nominatimApiUrl: process.env.NOMINATIM_API_URL ?? 'https://nominatim.openstreetmap.org/search',
+    overpassTimeoutMs: parseInt(process.env.OVERPASS_TIMEOUT_MS ?? process.env.SOURCE_PROVIDER_TIMEOUT_MS ?? '30000', 10),
+    overpassMaxResults: parseInt(process.env.OVERPASS_MAX_RESULTS ?? process.env.DISCOVERY_MAX_RESULTS ?? '100', 10),
   },
 
   database: {
@@ -176,6 +180,44 @@ export function validateEnvironment(config: Record<string, unknown>) {
   const discoveryPageSize = Number(config.DISCOVERY_PAGE_SIZE ?? 20);
   if (!Number.isInteger(discoveryPageSize) || discoveryPageSize < 1 || discoveryPageSize > 20) {
     throw new Error('DISCOVERY_PAGE_SIZE must be an integer between 1 and 20');
+  }
+
+  if (typeof config.NOMINATIM_API_URL === 'string' && config.NOMINATIM_API_URL.trim()) {
+    let nominatimUrl: URL;
+    try {
+      nominatimUrl = new URL(config.NOMINATIM_API_URL);
+    } catch {
+      throw new Error('NOMINATIM_API_URL must be a valid https URL');
+    }
+    if (nominatimUrl.protocol !== 'https:') {
+      throw new Error('NOMINATIM_API_URL must be a valid https URL');
+    }
+  }
+
+  if (typeof config.OVERPASS_API_URL === 'string' && config.OVERPASS_API_URL.trim()) {
+    let overpassUrl: URL;
+    try {
+      overpassUrl = new URL(config.OVERPASS_API_URL);
+    } catch {
+      throw new Error('OVERPASS_API_URL must be a valid https URL');
+    }
+    if (overpassUrl.protocol !== 'https:') {
+      throw new Error('OVERPASS_API_URL must be a valid https URL');
+    }
+  }
+
+  if (typeof config.OVERPASS_TIMEOUT_MS !== 'undefined') {
+    const overpassTimeoutMs = Number(config.OVERPASS_TIMEOUT_MS);
+    if (!Number.isInteger(overpassTimeoutMs) || overpassTimeoutMs < 1000 || overpassTimeoutMs > 60000) {
+      throw new Error('OVERPASS_TIMEOUT_MS must be an integer between 1000 and 60000');
+    }
+  }
+
+  if (typeof config.OVERPASS_MAX_RESULTS !== 'undefined') {
+    const overpassMaxResults = Number(config.OVERPASS_MAX_RESULTS);
+    if (!Number.isInteger(overpassMaxResults) || overpassMaxResults < 1 || overpassMaxResults > 100) {
+      throw new Error('OVERPASS_MAX_RESULTS must be an integer between 1 and 100');
+    }
   }
 
   if (typeof config.JWT_SECRET !== 'string' || config.JWT_SECRET.length < 32) {

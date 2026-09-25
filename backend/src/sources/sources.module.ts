@@ -6,6 +6,7 @@ import { CommonModule } from '../common/common.module';
 import { SOURCE_PROVIDER } from './interfaces/source-provider.interface';
 import { FakeSourceProvider } from './providers/fake-source.provider';
 import { GooglePlacesProvider } from './providers/google-places/google-places.provider';
+import { OsmSourceProvider } from './providers/osm/osm.provider';
 import { SourceDiscoveryProcessor } from './source-discovery.processor';
 import { SourceDiscoveryQueue } from './source-discovery.queue';
 import { SourceDiscoveryService } from './services/source-discovery.service';
@@ -29,13 +30,14 @@ import { ProvidersController } from './providers.controller';
   providers: [
     SourceNormalizerService,
     GooglePlacesProvider,
+    OsmSourceProvider,
     FakeSourceProvider,
     DiscoveryProviderRegistry,
     {
       provide: SOURCE_PROVIDER,
-      inject: [ConfigService, GooglePlacesProvider, FakeSourceProvider],
-      useFactory: (config: ConfigService, google: GooglePlacesProvider, fake: FakeSourceProvider) =>
-        selectDiscoveryProvider(config.get<string>('nodeEnv', 'development'), config.get<string>('sourceProvider.provider', 'google_places'), google, fake),
+      inject: [ConfigService, GooglePlacesProvider, OsmSourceProvider, FakeSourceProvider],
+      useFactory: (config: ConfigService, google: GooglePlacesProvider, osm: OsmSourceProvider, fake: FakeSourceProvider) =>
+        selectDiscoveryProvider(config.get<string>('nodeEnv', 'development'), config.get<string>('sourceProvider.provider', 'google_places'), google, osm, fake),
     },
     SourceDiscoveryService,
     SourceDiscoveryProcessor,

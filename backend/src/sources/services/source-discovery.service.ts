@@ -79,7 +79,10 @@ export class SourceDiscoveryService {
 
   private async upsertCompany(organizationId: string, provider: string, result: ReturnType<SourceNormalizerService['normalize']>) {
     const website = result.website;
-    const [existing] = await this.db.select({ company: companies }).from(companies)
+    const linked = await this.findCompanyByExternalId(organizationId, provider, result.externalId);
+    const [existing] = linked
+      ? [{ company: linked }]
+      : await this.db.select({ company: companies }).from(companies)
       .leftJoin(companyLocations, eq(companyLocations.companyId, companies.id))
       .where(and(
         eq(companies.organizationId, organizationId),
@@ -98,6 +101,7 @@ export class SourceDiscoveryService {
       const updates = fillEmptyCompanyFields(existing.company, {
         website: result.website,
         phone: result.phone,
+        email: result.email,
         category: result.category,
         googlePlaceId: provider === 'google_places' ? result.externalId : null,
       });
@@ -114,6 +118,7 @@ export class SourceDiscoveryService {
       name: result.name,
       website,
       phone: result.phone,
+      email: result.email,
       category: result.category,
       ...(provider === 'google_places' ? { googlePlaceId: result.externalId, googleMapsUrl: result.sourceUrl } : {}),
       verificationStatus: 'NOT_VERIFIED',
@@ -135,6 +140,20 @@ export class SourceDiscoveryService {
       });
     }
     return company;
+  }
+
+  private async findCompanyByExternalId(organizationId: string, provider: string, externalId: string) {
+    if (!externalId) return undefined;
+    const [linked] = await this.db.select({ company: companies }).from(sourceRecords)
+      .innerJoin(companies, eq(companies.id, sourceRecords.companyId))
+      .where(and(
+        eq(sourceRecords.organizationId, organizationId),
+        eq(companies.organizationId, organizationId),
+        eq(sourceRecords.sourceType, provider),
+        eq(sourceRecords.externalId, externalId),
+      ))
+      .limit(1);
+    return linked?.company;
   }
 
   private async upsertSourceRecord(organizationId: string, executionId: string, companyId: string, provider: string, result: ReturnType<SourceNormalizerService['normalize']>, context: SourceSearchContext) {
@@ -162,7 +181,7 @@ export class SourceDiscoveryService {
   }
 
   private async createEvidence(companyId: string, sourceRecordId: string, result: ReturnType<SourceNormalizerService['normalize']>, provider: string) {
-    const facts = [result.name, result.website, result.phone, result.category, result.address?.addressLine1, result.address?.city, result.address?.state, result.address?.postalCode].filter(Boolean).join(' | ');
+    const facts = [result.name, result.website, result.phone, result.email, result.category, result.address?.addressLine1, result.address?.city, result.address?.state, result.address?.postalCode].filter(Boolean).join(' | ');
     if (!facts) return;
     await this.db.insert(leadEvidence).values({ companyId, sourceRecordId, evidenceType: 'PROVIDER_RESULT', sourceUrl: result.sourceUrl, evidenceText: facts, evidenceTimestamp: new Date(), provider, metadata: { externalId: result.externalId, verified: false } });
   }

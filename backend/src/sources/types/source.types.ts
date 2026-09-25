@@ -16,6 +16,7 @@ export interface NormalizedSourceResult {
   name: string;
   website?: string;
   phone?: string;
+  email?: string;
   address?: SourceAddress;
   category?: string;
   sourceUrl: string;

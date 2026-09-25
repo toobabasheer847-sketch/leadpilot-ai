@@ -30,6 +30,22 @@ describe('SourceNormalizerService', () => {
     expect(result.phone).toBe('5125550100');
   });
 
+  it('keeps a real email and drops a missing or invalid one', () => {
+    const service = new SourceNormalizerService();
+    expect(service.normalize({
+      externalId: 'place-1',
+      name: 'Example Business',
+      sourceUrl: 'https://example.test/source',
+      email: 'Owner@Example.TEST',
+    }).email).toBe('owner@example.test');
+    expect(service.normalize({
+      externalId: 'place-1',
+      name: 'Example Business',
+      sourceUrl: 'https://example.test/source',
+    }).email).toBeUndefined();
+    expect(service.normalizeEmail('not an email')).toBeUndefined();
+  });
+
   it('rejects records without a factual source URL', () => {
     expect(() => new SourceNormalizerService().normalize({ externalId: 'place-1', name: 'Company', sourceUrl: '' })).toThrow('required provenance');
   });
