@@ -30,6 +30,9 @@ export class ListLeadsDto {
   @IsOptional() @IsString() propertyType?: string;
   @IsOptional() @IsString() marketServed?: string;
   @IsOptional() @IsString() companySize?: string;
+  @IsOptional() @IsIn(['MATCHED', 'UNKNOWN', 'OUTSIDE_RANGE']) companySizeStatus?: 'MATCHED' | 'UNKNOWN' | 'OUTSIDE_RANGE';
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) companySizeMin?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) companySizeMax?: number;
   @IsOptional() @IsString() contactTitle?: string;
   @IsOptional() @Transform(toBoolean) hasDecisionMaker?: boolean;
   @IsOptional() @Transform(toBoolean) hasEmail?: boolean;

@@ -1,15 +1,20 @@
-export type ClassificationDecision = 'QUALIFIED' | 'NOT_QUALIFIED' | 'INSUFFICIENT_EVIDENCE';
+export const CLASSIFICATION_DECISIONS = ['QUALIFIED', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE'] as const;
+export type ClassificationDecision = (typeof CLASSIFICATION_DECISIONS)[number];
 
-export type InvestorType =
-  | 'CASH_HOME_BUYER'
-  | 'FIX_AND_FLIP'
-  | 'BUY_AND_HOLD'
-  | 'BRRRR'
-  | 'COMMERCIAL_INVESTOR'
-  | 'LAND_INVESTOR'
-  | 'MULTIFAMILY_INVESTOR'
-  | 'REAL_ESTATE_INVESTOR_OTHER'
-  | 'NOT_DETERMINED';
+export const INVESTOR_TYPES = [
+  'CASH_HOME_BUYER',
+  'FIX_AND_FLIP',
+  'BUY_AND_HOLD',
+  'BRRRR',
+  'COMMERCIAL_INVESTOR',
+  'LAND_INVESTOR',
+  'MULTIFAMILY_INVESTOR',
+  'REAL_ESTATE_INVESTOR_OTHER',
+  'NOT_DETERMINED',
+] as const;
+export type InvestorType = (typeof INVESTOR_TYPES)[number];
+
+export const VERIFICATION_STATUSES = ['FOUND', 'NOT_FOUND'] as const;
 
 export interface ClassificationCriteria {
   category: string;

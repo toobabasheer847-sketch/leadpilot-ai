@@ -1,12 +1,68 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import dns from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { WebsiteFetchResult } from './website.types';
 import { WebsiteNormalizerService } from './website-normalizer.service';
 
+export type WebsiteFetchFailureCategory =
+  | 'FETCH_TIMEOUT'
+  | 'DNS_ERROR'
+  | 'TLS_ERROR'
+  | 'CONNECTION_ERROR'
+  | 'HTTP_4XX'
+  | 'HTTP_5XX'
+  | 'REDIRECT_ERROR'
+  | 'INVALID_CONTENT'
+  | 'BLOCKED'
+  | 'UNKNOWN_FETCH_ERROR';
+
+const FETCH_FAILURES = new Set<WebsiteFetchFailureCategory>([
+  'FETCH_TIMEOUT', 'DNS_ERROR', 'TLS_ERROR', 'CONNECTION_ERROR', 'HTTP_4XX', 'HTTP_5XX', 'REDIRECT_ERROR', 'INVALID_CONTENT', 'BLOCKED', 'UNKNOWN_FETCH_ERROR',
+]);
+
+export function isWebsiteFetchFailure(reason: string): boolean {
+  return FETCH_FAILURES.has(reason as WebsiteFetchFailureCategory);
+}
+
+export class WebsiteFetchError extends Error {
+  readonly category: WebsiteFetchFailureCategory;
+  readonly networkCode: string;
+
+  constructor(message: string, category: WebsiteFetchFailureCategory, networkCode = '') {
+    super(message);
+    this.name = 'WebsiteFetchError';
+    this.category = category;
+    this.networkCode = networkCode;
+  }
+}
+
+export function websiteFetchFailureCategory(error: unknown): WebsiteFetchFailureCategory {
+  if (error instanceof WebsiteFetchError) return error.category;
+  const message = error instanceof Error ? error.message : '';
+  const code = networkCode(error);
+  if (/disallowed by robots|http 401|http 403/i.test(message)) return 'BLOCKED';
+  if (/too many redirects|redirect/i.test(message) && /redirect/i.test(message)) return 'REDIRECT_ERROR';
+  if (/unsupported content type|invalid response|malformed/i.test(message)) return 'INVALID_CONTENT';
+  if (/HTTP 5\d\d/i.test(message)) return 'HTTP_5XX';
+  if (/HTTP 4\d\d/i.test(message)) return 'HTTP_4XX';
+  if (/timeout|timed out|abort/i.test(message) || code === 'ABORT_ERR') return 'FETCH_TIMEOUT';
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'DNS_ERROR';
+  if (/CERT|TLS|SSL|UNABLE_TO_VERIFY_LEAF_SIGNATURE|HANDSHAKE/i.test(code) || /certificate|tls|ssl/i.test(message)) return 'TLS_ERROR';
+  if (/ECONN|EHOSTUNREACH|ENETUNREACH|EPIPE|EAI_FAIL/.test(code) || /ECONN|network|socket/i.test(message)) return 'CONNECTION_ERROR';
+  return 'UNKNOWN_FETCH_ERROR';
+}
+
+function networkCode(error: unknown): string {
+  if (error instanceof WebsiteFetchError && error.networkCode) return error.networkCode;
+  const record = error as { code?: unknown; cause?: { code?: unknown } } | null;
+  const code = record?.cause?.code ?? record?.code;
+  return typeof code === 'string' ? code : '';
+}
+
 @Injectable()
 export class WebsiteFetchService {
+  private readonly logger = new Logger(WebsiteFetchService.name);
   private readonly timeoutMs: number;
   private readonly maxResponseBytes: number;
   private readonly maxRedirects: number;
@@ -26,48 +82,65 @@ export class WebsiteFetchService {
   }
 
   async fetchPage(url: string, options?: { timeoutMs?: number; retries?: number }): Promise<WebsiteFetchResult> {
-    const normalized = this.normalizer.normalizeUrl(this.publicHttpsUrl(url));
+    const startedAt = Date.now();
+    const normalized = this.requestUrl(this.publicHttpsUrl(url));
     if (!normalized) {
-      throw new Error('Invalid website URL.');
+      throw new WebsiteFetchError('Invalid website URL.', 'REDIRECT_ERROR');
     }
     const timeoutMs = options?.timeoutMs ?? this.timeoutMs;
     const retries = options?.retries ?? this.retries;
-
-    const safeUrl = await this.validatePublicUrl(normalized);
-    if (!(await this.isAllowedByRobots(safeUrl, timeoutMs))) throw new Error('Website disallowed by robots.txt.');
-    let currentUrl = safeUrl;
+    let currentUrl = normalized;
     let redirectCount = 0;
+    let lastStatus: number | null = null;
+    let lastType = '';
+
+    try {
+      const safeUrl = await this.validatePublicUrl(normalized);
+      if (!(await this.isAllowedByRobots(safeUrl, timeoutMs))) throw new WebsiteFetchError('Website disallowed by robots.txt.', 'BLOCKED');
+      currentUrl = safeUrl;
 
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       try {
         const response = await this.requestPage(currentUrl, timeoutMs);
+        lastStatus = response.statusCode;
+        lastType = response.headers['content-type'] ?? '';
 
-        if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-          if (redirectCount >= this.maxRedirects) {
-            throw new Error('Too many redirects for website fetch.');
+        if (response.statusCode >= 300 && response.statusCode < 400) {
+          if (!response.headers.location || redirectCount >= this.maxRedirects) {
+            throw new WebsiteFetchError('Too many redirects for website fetch.', 'REDIRECT_ERROR');
           }
 
           const nextUrl = this.resolveLocation(currentUrl, response.headers.location);
           const validated = await this.validatePublicUrl(nextUrl);
-          if (!(await this.isAllowedByRobots(validated, timeoutMs))) throw new Error('Website disallowed by robots.txt.');
+          if (!(await this.isAllowedByRobots(validated, timeoutMs))) throw new WebsiteFetchError('Website disallowed by robots.txt.', 'BLOCKED');
           redirectCount += 1;
           currentUrl = validated;
           attempt -= 1;
           continue;
         }
 
+        if (response.statusCode === 401 || response.statusCode === 403) {
+          throw new WebsiteFetchError(`Website fetch failed with HTTP ${response.statusCode}.`, 'BLOCKED');
+        }
+        if (response.statusCode === 429) {
+          throw new WebsiteFetchError(`Website fetch failed with HTTP ${response.statusCode}.`, 'HTTP_4XX');
+        }
+        if (response.statusCode >= 500) {
+          throw new WebsiteFetchError(`Website fetch failed with HTTP ${response.statusCode}.`, 'HTTP_5XX');
+        }
         if (response.statusCode < 200 || response.statusCode >= 400) {
-          throw new Error(`Website fetch failed with HTTP ${response.statusCode}.`);
+          throw new WebsiteFetchError(`Website fetch failed with HTTP ${response.statusCode}.`, 'HTTP_4XX');
         }
 
-        const contentType = response.headers['content-type']?.toLowerCase() ?? '';
+        const headerType = response.headers['content-type']?.toLowerCase() ?? '';
+        const contentType = this.isAllowedContentType(headerType) || !this.looksLikeHtml(response.body) ? headerType : 'text/html';
         if (!this.isAllowedContentType(contentType)) {
-          throw new Error(`Unsupported content type: ${contentType || 'unknown'}`);
+          throw new WebsiteFetchError(`Unsupported content type: ${contentType || 'unknown'}`, 'INVALID_CONTENT');
         }
 
         const body = response.body;
         if (Buffer.byteLength(body, 'utf8') > this.maxResponseBytes) {
-          throw new Error('Website response exceeds configured maximum size.');
+          throw new WebsiteFetchError('Website response exceeds configured maximum size.', 'INVALID_CONTENT');
         }
 
         return {
@@ -89,7 +162,13 @@ export class WebsiteFetchService {
       }
     }
 
-    throw new Error('Website fetch failed after retries.');
+    throw new WebsiteFetchError('Website fetch failed after retries.', 'UNKNOWN_FETCH_ERROR');
+    } catch (error) {
+      const category = websiteFetchFailureCategory(error);
+      const failure = error instanceof WebsiteFetchError ? error : new WebsiteFetchError(error instanceof Error ? error.message : 'Website fetch failed.', category, networkCode(error));
+      this.logFailure(normalized, currentUrl, lastStatus, redirectCount, lastType, failure.category, timeoutMs, networkCode(error), Date.now() - startedAt);
+      throw failure;
+    }
   }
 
   private async requestPage(url: string, timeoutMs = this.timeoutMs): Promise<{ statusCode: number; headers: Record<string, string>; body: string }> {
@@ -108,15 +187,13 @@ export class WebsiteFetchService {
       });
 
       const contentTypeHeader = response.headers.get('content-type') ?? '';
-      if (response.status >= 300 && response.status < 400) {
-        return { statusCode: response.status, headers: { location: response.headers.get('location') ?? '' }, body: '' };
-      }
-      if (!this.isAllowedContentType(contentTypeHeader)) {
-        throw new Error(`Unsupported content type: ${contentTypeHeader || 'unknown'}`);
+      if (response.status < 200 || response.status >= 300) {
+        return { statusCode: response.status, headers: { location: response.headers.get('location') ?? '', 'content-type': contentTypeHeader }, body: '' };
       }
       const body = await this.readBody(response);
       const headers: Record<string, string> = {};
       response.headers.forEach((value, key) => {
+        if (key.toLowerCase() === 'set-cookie' || key.toLowerCase() === 'authorization') return;
         headers[key] = value;
       });
 
@@ -126,11 +203,16 @@ export class WebsiteFetchService {
         body,
       };
     } catch (error) {
+      if (error instanceof WebsiteFetchError) throw error;
+      const category = websiteFetchFailureCategory(error);
+      const code = networkCode(error);
       const message = error instanceof Error ? error.message : 'Unknown fetch error';
-      if (message.includes('timed out') || message.includes('AbortError') || message.includes('ECONNRESET') || message.includes('fetch failed')) {
-        throw new Error(`Transient website fetch failure: ${message}`);
+      if (category === 'FETCH_TIMEOUT') throw new WebsiteFetchError(`Website fetch timed out: ${message}`, category, code);
+      if (category === 'CONNECTION_ERROR') throw new WebsiteFetchError(`Transient website fetch failure: ${message}`, category, code);
+      if (category === 'UNKNOWN_FETCH_ERROR' && /fetch failed|ECONNRESET/i.test(message)) {
+        throw new WebsiteFetchError(`Transient website fetch failure: ${message}`, 'CONNECTION_ERROR', code);
       }
-      throw error;
+      throw new WebsiteFetchError(message, category, code);
     } finally {
       clearTimeout(timeout);
     }
@@ -142,7 +224,7 @@ export class WebsiteFetchService {
   }
 
   private async validatePublicUrl(url: string): Promise<string> {
-    const normalized = this.normalizer.normalizeUrl(url);
+    const normalized = this.requestUrl(url);
     if (!normalized) {
       throw new Error('Invalid URL provided for fetch.');
     }
@@ -210,12 +292,12 @@ export class WebsiteFetchService {
   }
 
   private shouldRetry(error: unknown): boolean {
-    if (!(error instanceof Error)) {
-      return false;
+    if (error instanceof WebsiteFetchError) {
+      return error.category === 'FETCH_TIMEOUT' || error.category === 'CONNECTION_ERROR' || error.category === 'HTTP_5XX' || (error.category === 'HTTP_4XX' && error.message.includes('429'));
     }
-
+    if (!(error instanceof Error)) return false;
     const message = error.message.toLowerCase();
-    return message.includes('timeout') || message.includes('transient') || message.includes('reset') || message.includes('temporar') || message.includes('503') || message.includes('429');
+    return message.includes('timeout') || message.includes('timed out') || message.includes('transient') || message.includes('reset') || message.includes('temporar') || /http 5\d\d/.test(message) || message.includes('503') || message.includes('429');
   }
 
   private async readBody(response: Response): Promise<string> {
@@ -268,7 +350,7 @@ export class WebsiteFetchService {
       const robotsUrl = await this.validatePublicUrl(`${origin}/robots.txt`);
       const response = await fetch(robotsUrl, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error', headers: { 'User-Agent': 'LeadPilotBot/1.0' } });
       if (!response.ok) return true;
-      const rules = (await this.readBody(response)).split(/\r?\n/).map((line) => line.trim()).filter((line) => /^disallow\s*:/i.test(line)).map((line) => line.replace(/^disallow\s*:/i, '').trim()).filter(Boolean);
+      const rules = this.robotsDisallowRules(await this.readBody(response));
       this.robotsRules.set(origin, rules);
       return !this.isDisallowedPath(parsed.pathname, rules);
     } catch {
@@ -277,7 +359,75 @@ export class WebsiteFetchService {
   }
 
   private isDisallowedPath(pathname: string, rules: string[]) {
-    return rules.some((rule) => pathname.startsWith(rule));
+    return rules.some((rule) => rule === '/' || pathname.startsWith(rule));
+  }
+
+  private robotsDisallowRules(text: string): string[] {
+    const groups: Array<{ agents: string[]; rules: string[] }> = [];
+    let agents: string[] = [];
+    let rules: string[] = [];
+    const flush = () => {
+      if (agents.length > 0) groups.push({ agents, rules });
+      agents = [];
+      rules = [];
+    };
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.split('#')[0]?.trim() ?? '';
+      if (!line) continue;
+      const agent = line.match(/^user-agent\s*:\s*(.+)$/i);
+      if (agent) {
+        if (rules.length > 0) flush();
+        agents.push(agent[1].trim().toLowerCase());
+        continue;
+      }
+      const disallow = line.match(/^disallow\s*:\s*(.*)$/i);
+      if (disallow && agents.length > 0) rules.push(disallow[1].trim());
+    }
+    flush();
+    const specific = groups.filter((group) => group.agents.some((agent) => agent.includes('leadpilot')));
+    const chosen = specific.length > 0 ? specific : groups.filter((group) => group.agents.includes('*'));
+    return chosen.flatMap((group) => group.rules).filter(Boolean);
+  }
+
+  private requestUrl(url: string): string | null {
+    try {
+      const parsed = new URL(url);
+      if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) return null;
+      parsed.hash = '';
+      parsed.username = '';
+      parsed.password = '';
+      parsed.hostname = parsed.hostname.toLowerCase();
+      if ((parsed.protocol === 'http:' && parsed.port === '80') || (parsed.protocol === 'https:' && parsed.port === '443')) parsed.port = '';
+      const parameters = new URLSearchParams();
+      const tracking = new Set(['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'gclid', 'fbclid']);
+      for (const [key, value] of parsed.searchParams.entries()) {
+        if (!tracking.has(key.toLowerCase())) parameters.append(key, value);
+      }
+      parsed.search = parameters.toString();
+      if (!parsed.pathname) parsed.pathname = '/';
+      return parsed.toString();
+    } catch {
+      return null;
+    }
+  }
+
+  private looksLikeHtml(body: string): boolean {
+    return /<html|<title|<meta\s/i.test(body.slice(0, 2000));
+  }
+
+  private logFailure(requestedUrl: string, currentUrl: string, status: number | null, redirectCount: number, contentType: string, category: WebsiteFetchFailureCategory, timeoutMs: number, code: string, elapsedMs: number) {
+    const requested = this.safeUrlParts(requestedUrl);
+    const finalHost = this.safeUrlParts(currentUrl);
+    this.logger.warn(`website_fetch.failed host=${requested.host} scheme=${requested.scheme} status=${status ?? 'none'} redirects=${redirectCount} finalHost=${finalHost.host} contentType=${contentType || 'none'} category=${category} timeoutMs=${timeoutMs} networkCode=${code || 'none'} elapsedMs=${elapsedMs}`);
+  }
+
+  private safeUrlParts(url: string): { host: string; scheme: string } {
+    try {
+      const parsed = new URL(url);
+      return { host: parsed.hostname, scheme: parsed.protocol.replace(':', '') };
+    } catch {
+      return { host: 'invalid', scheme: 'none' };
+    }
   }
 
   private extractTitle(html: string): string | null {

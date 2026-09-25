@@ -13,7 +13,7 @@ export class CompanyEnrichmentQueue {
       jobId: data.idempotencyKey,
       attempts: 3,
       backoff: { type: 'exponential', delay: 2000 },
-      removeOnComplete: true,
+      removeOnComplete: { count: 1000 },
       removeOnFail: false,
     });
   }

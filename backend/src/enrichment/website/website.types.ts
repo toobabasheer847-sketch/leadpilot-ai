@@ -33,12 +33,47 @@ export interface WebsitePageResult {
   depth?: number;
 }
 
+export interface WebsiteDiscoveryInput {
+  existingWebsite?: string | null;
+  companyName?: string | null;
+  city?: string | null;
+  state?: string | null;
+  country?: string | null;
+  sourceWebsites?: string[];
+  attemptSourceUrl?: string | null;
+  attemptSourceType?: string | null;
+  category?: string | null;
+}
+
 export interface WebsiteDiscoveryOutcome {
   website: string | null;
   status: 'FOUND' | 'NOT_FOUND' | 'INVALID';
   page?: WebsitePageResult;
   pages?: WebsitePageResult[];
   reason?: string;
+  provider?: string | null;
+  sourceUrl?: string | null;
+  sourceType?: string | null;
+  retrievedAt?: string | null;
+  evidenceExcerpt?: string | null;
+  searchHit?: {
+    title: string;
+    url: string;
+    snippet: string;
+    source: string;
+    retrievedAt: string;
+  } | null;
+  rejectedSearchHits?: Array<{
+    reason: string;
+    hit: {
+      title: string;
+      url: string;
+      snippet: string;
+      source: string;
+      retrievedAt: string;
+    };
+  }>;
+  clearStoredWebsite?: boolean;
 }
 
 export interface WebsiteFetchResult {

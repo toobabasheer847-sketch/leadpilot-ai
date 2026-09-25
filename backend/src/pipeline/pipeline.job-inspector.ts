@@ -1,7 +1,7 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable } from '@nestjs/common';
 import { Queue } from 'bullmq';
-import { publicErrorMessage, summarizeJobStates, type ObservedJobState } from './pipeline.progress';
+import { publicErrorMessage, summarizeJobStates, summarizeWebsiteFindings, type ObservedJobState } from './pipeline.progress';
 
 export type JobSettlement = { state: 'COMPLETED' } | { state: 'PENDING' } | { state: 'FAILED'; message: string } | { state: 'PARTIAL'; message: string };
 
@@ -39,6 +39,7 @@ export class PipelineJobInspector {
     if (!queue) return { state: 'FAILED', message: 'Pipeline stage queue is unavailable.' };
 
     const observed: ObservedJobState[] = [];
+    const websiteOutcomes: Array<'FOUND' | 'NOT_FOUND'> = [];
     let failureMessage = 'Pipeline stage failed.';
     for (const jobId of jobIds) {
       const job = await queue.getJob(jobId);
@@ -54,8 +55,17 @@ export class PipelineJobInspector {
       }
       if (state !== 'completed') return { state: 'PENDING' };
       observed.push('completed');
+      const websiteStatus = websiteStatusFrom(job.returnvalue);
+      if (websiteStatus) websiteOutcomes.push(websiteStatus);
     }
     const summary = summarizeJobStates(observed.map((state) => state === 'missing' ? 'completed' : state), failureMessage);
+    if (summary.state === 'COMPLETED' && queueName === 'company-enrichment-queue') return summarizeWebsiteFindings(websiteOutcomes) ?? summary;
     return summary;
   }
+}
+
+function websiteStatusFrom(value: unknown): 'FOUND' | 'NOT_FOUND' | null {
+  if (!value || typeof value !== 'object' || !('websiteStatus' in value)) return null;
+  const status = (value as { websiteStatus?: unknown }).websiteStatus;
+  return status === 'FOUND' || status === 'NOT_FOUND' ? status : null;
 }

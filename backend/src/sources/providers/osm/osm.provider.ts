@@ -65,16 +65,17 @@ export class OsmSourceProvider implements SourceProvider {
     }
     const locations = discoveryLocations(plan);
     const timeoutSeconds = Math.min(25, Math.max(1, Math.floor(this.timeoutMs / 1000) - 5));
+    const resultLimit = clamp(plan.maxResults ?? this.maxResults, 1, this.maxResults, this.maxResults);
     return this.enqueue(async () => {
       const normalized: NormalizedSourceResult[] = [];
       for (const location of locations) {
-        if (normalized.length >= this.maxResults) break;
+        if (normalized.length >= resultLimit) break;
         const bbox = await this.geocode(locationLabel(location));
         for (const window of searchWindows(bbox)) {
-          if (normalized.length >= this.maxResults) break;
+          if (normalized.length >= resultLimit) break;
           const query = buildOverpassQuery(plan, {
             timeoutSeconds,
-            maxResults: this.maxResults - normalized.length,
+            maxResults: resultLimit - normalized.length,
             bbox: window,
           });
           const payload = await this.requestWithRetry(query);
@@ -87,7 +88,7 @@ export class OsmSourceProvider implements SourceProvider {
           }
         }
       }
-      return { provider: this.name, results: dedupeResults(normalized).slice(0, this.maxResults) };
+      return { provider: this.name, results: dedupeResults(normalized).slice(0, resultLimit) };
     });
   }
 

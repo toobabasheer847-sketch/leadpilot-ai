@@ -32,5 +32,7 @@ export interface SearchPlan {
   requiredRoles?: string[];
   /** Soft score floor; never overrides required criteria failures. */
   minimumScore?: number;
+  /** Upper bound requested by the prompt, such as "up to 50". */
+  maxResults?: number;
   unresolvedCriteria: UnresolvedCriterion[];
 }

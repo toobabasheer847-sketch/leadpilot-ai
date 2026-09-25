@@ -7,7 +7,7 @@ import { CompanyEnrichmentRepository } from './repositories/company-enrichment.r
 import { EvidenceRepository } from './repositories/evidence.repository';
 import { CompanySocialDiscoveryService } from './social/company-social-discovery.service';
 import { CompanyEnrichmentQueue } from './company-enrichment.queue';
-import { WebsiteDiscoveryService } from './website/website-discovery.service';
+import { WebsiteDiscoveryService, websitesFromSourceRaw } from './website/website-discovery.service';
 import { WebsiteParserService } from './website/website-parser.service';
 import { CompanyEnrichmentJobData, EnrichmentStatus } from './website/website.types';
 import { UsageService } from '../usage/usage.service';
@@ -90,9 +90,9 @@ export class EnrichmentService {
     await this.usage.checkRequestRate(organizationId, undefined, 'WEBSITE_FETCH');
     try {
       const result = await this.providerObservability.track('website', 'ENRICHMENT', async () => ({ value: await this.enrichPages(company) }));
-      await this.usage.recordUsage({ organizationId, operation: 'WEBSITE_FETCH', provider: 'website', resourceType: 'company', resourceId: company.id, units: Math.max(1, result.pagesFetched), status: 'COMPLETED', metadata: { pagesFetched: result.pagesFetched, fieldsExtracted: result.fieldsExtracted } });
-      await this.db.insert(auditLogs).values({ organizationId, entityId: company.id, action: 'COMPANY_ENRICHMENT_COMPLETED', entityType: 'company', metadata: { companyId: company.id, pagesFetched: result.pagesFetched, fieldsExtracted: result.fieldsExtracted } });
-      return { companyId, organizationId, website: result.website, socialProfiles: result.socialProfiles, fieldsExtracted: result.fieldsExtracted };
+      await this.usage.recordUsage({ organizationId, operation: 'WEBSITE_FETCH', provider: 'website', resourceType: 'company', resourceId: company.id, units: Math.max(1, result.pagesFetched), status: 'COMPLETED', metadata: { pagesFetched: result.pagesFetched, fieldsExtracted: result.fieldsExtracted, websiteStatus: result.websiteStatus, ...(result.message ? { message: result.message } : {}) } });
+      await this.db.insert(auditLogs).values({ organizationId, entityId: company.id, action: 'COMPANY_ENRICHMENT_COMPLETED', entityType: 'company', metadata: { companyId: company.id, pagesFetched: result.pagesFetched, fieldsExtracted: result.fieldsExtracted, websiteStatus: result.websiteStatus, ...(result.message ? { message: result.message } : {}) } });
+      return { companyId, organizationId, website: result.website, websiteStatus: result.websiteStatus, message: result.message, socialProfiles: result.socialProfiles, fieldsExtracted: result.fieldsExtracted };
     } catch (error) {
       await this.usage.recordUsage({ organizationId, operation: 'WEBSITE_FETCH', provider: 'website', resourceType: 'company', resourceId: company.id, units: 1, status: 'FAILED' });
       throw error;
@@ -100,9 +100,29 @@ export class EnrichmentService {
   }
 
   private async enrichPages(company: typeof companies.$inferSelect) {
-    const websiteResult = await this.discovery.discover(company.website ?? null, company.name);
+    const located = await this.companyRepository.findCompanyWithLocation(company.id, company.organizationId);
+    const location = located?.location ?? null;
+    const sources = await this.db.select({
+      sourceUrl: sourceRecords.sourceUrl,
+      sourceType: sourceRecords.sourceType,
+      rawData: sourceRecords.rawData,
+    }).from(sourceRecords).where(and(eq(sourceRecords.companyId, company.id), eq(sourceRecords.organizationId, company.organizationId)));
+    const attempt = sources.find((row) => Boolean(row.sourceUrl)) ?? null;
+    const websiteResult = await this.discovery.discover({
+      existingWebsite: company.website ?? null,
+      companyName: company.name,
+      city: location?.city ?? null,
+      state: location?.state ?? null,
+      country: location?.country ?? null,
+      sourceWebsites: sources.flatMap((row) => websitesFromSourceRaw(row.rawData)),
+      attemptSourceUrl: attempt?.sourceUrl ?? null,
+      attemptSourceType: attempt?.sourceType ?? null,
+      category: company.category ?? null,
+    });
     const updates: Partial<typeof companies.$inferInsert> = {};
-    if (websiteResult.website) updates.website = websiteResult.website;
+    const replacingRejectedWebsite = Boolean(websiteResult.clearStoredWebsite && company.website && company.verificationStatus !== 'VERIFIED');
+    if (websiteResult.status === 'FOUND' && websiteResult.website && (!company.website || replacingRejectedWebsite)) updates.website = websiteResult.website;
+    if (websiteResult.status !== 'FOUND' && replacingRejectedWebsite) updates.website = null;
     const pages = websiteResult.pages ?? (websiteResult.page ? [websiteResult.page] : []);
     const discoveredSocial = new Set<string>();
     let fieldsExtracted = 0;
@@ -118,13 +138,67 @@ export class EnrichmentService {
       await this.evidenceRepository.persistEvidence(company.id, page.finalUrl, parsed.evidence, page.canonicalUrl ?? websiteResult.website ?? undefined);
       for (const socialUrl of this.socialDiscovery.discover(page.content, page.finalUrl)) discoveredSocial.add(socialUrl);
     }
+    const evidenceWebsite = replacingRejectedWebsite ? websiteResult.website : (company.website || websiteResult.website);
+    if (websiteResult.status === 'FOUND' && websiteResult.website && websiteResult.searchHit) {
+      const officialWebsite = evidenceWebsite || websiteResult.website;
+      await this.evidenceRepository.persistEvidence(company.id, websiteResult.searchHit.url, [{
+        field: 'website',
+        value: officialWebsite,
+        sourceUrl: websiteResult.searchHit.url,
+        evidenceExcerpt: websiteResult.searchHit.snippet || websiteResult.searchHit.title || officialWebsite,
+        retrievedAt: websiteResult.searchHit.retrievedAt,
+        evidenceType: 'META_DATA',
+      }], officialWebsite, { provider: websiteResult.searchHit.source, sourceType: 'WEB_SEARCH', verified: false });
+    }
+    if (websiteResult.status === 'FOUND' && websiteResult.website && websiteResult.sourceUrl) {
+      const officialWebsite = evidenceWebsite || websiteResult.website;
+      await this.evidenceRepository.persistEvidence(company.id, websiteResult.sourceUrl, [{
+        field: 'website',
+        value: officialWebsite,
+        sourceUrl: websiteResult.sourceUrl,
+        evidenceExcerpt: websiteResult.evidenceExcerpt || officialWebsite,
+        retrievedAt: websiteResult.retrievedAt || new Date().toISOString(),
+        evidenceType: 'WEBSITE',
+      }], officialWebsite, { provider: websiteResult.searchHit?.source ?? websiteResult.provider ?? 'official_website', sourceType: 'WEBSITE', verified: false });
+    }
+    for (const rejected of websiteResult.rejectedSearchHits ?? []) {
+      await this.evidenceRepository.persistEvidence(company.id, rejected.hit.url, [{
+        field: 'website',
+        value: rejected.reason,
+        sourceUrl: rejected.hit.url,
+        evidenceExcerpt: rejected.hit.snippet || rejected.hit.title || rejected.reason,
+        retrievedAt: rejected.hit.retrievedAt,
+        evidenceType: 'META_DATA',
+      }], undefined, { provider: rejected.hit.source, sourceType: 'WEB_SEARCH', verified: false });
+    }
+    if (websiteResult.status === 'NOT_FOUND' && (!company.website || replacingRejectedWebsite) && websiteResult.sourceUrl) {
+      const excerpt = websiteResult.evidenceExcerpt || websiteResult.reason || 'No verified website found.';
+      await this.evidenceRepository.persistEvidence(company.id, websiteResult.sourceUrl, [{
+        field: 'website',
+        value: 'NOT_FOUND',
+        sourceUrl: websiteResult.sourceUrl,
+        evidenceExcerpt: excerpt,
+        retrievedAt: websiteResult.retrievedAt || new Date().toISOString(),
+        evidenceType: 'META_DATA',
+      }], undefined, { provider: 'website_discovery', sourceType: websiteResult.sourceType ?? attempt?.sourceType ?? 'WEBSITE', verified: false });
+    }
     for (const socialUrl of discoveredSocial) {
       const host = new URL(socialUrl).hostname.toLowerCase();
       const platform = host.includes('linkedin') ? 'linkedin' : host.includes('facebook') ? 'facebook' : host.includes('instagram') ? 'instagram' : host.includes('youtube') ? 'youtube' : host.includes('x.com') || host.includes('twitter') ? 'x' : 'other';
       if (platform !== 'other') await this.companyRepository.upsertSocialProfile(company.id, platform, socialUrl, null);
     }
-    await this.companyRepository.updateCompany(company.id, updates);
-    return { website: websiteResult.website, socialProfiles: [...discoveredSocial], pagesFetched: pages.length, fieldsExtracted };
+    if (Object.keys(updates).length > 0) await this.companyRepository.updateCompany(company.id, updates);
+    const retainedWebsite = replacingRejectedWebsite ? null : company.website;
+    const officialWebsite = retainedWebsite || (websiteResult.status === 'FOUND' ? websiteResult.website : null);
+    const nothingNew = Object.keys(updates).length === 0 && fieldsExtracted === 0 && discoveredSocial.size === 0;
+    return {
+      website: officialWebsite,
+      websiteStatus: officialWebsite ? 'FOUND' as const : 'NOT_FOUND' as const,
+      message: nothingNew ? 'No additional verified enrichment data found.' : undefined,
+      socialProfiles: [...discoveredSocial],
+      pagesFetched: pages.length,
+      fieldsExtracted,
+    };
   }
 
   private jobKey(companyId: string, organizationId: string, searchExecutionId: string | null) {

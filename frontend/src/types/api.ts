@@ -45,6 +45,7 @@ export interface SearchPreview {
     leadTypes?: string[];
     locations?: Array<{ country?: string; state?: string; city?: string }>;
     companySize?: { min?: number; max?: number };
+    maxResults?: number;
   };
 }
 
@@ -173,6 +174,7 @@ export interface LeadRecord {
     propertyTypes?: unknown;
     marketsServed?: unknown;
     companySize?: string | number | null;
+    companySizeStatus?: 'MATCHED' | 'UNKNOWN' | 'OUTSIDE_RANGE' | null;
     location: LeadLocation | null;
   };
   contact: {
@@ -184,6 +186,7 @@ export interface LeadRecord {
     linkedin?: string | null;
     facebook?: string | null;
     instagram?: string | null;
+    youtube?: string | null;
   } | null;
   socialProfiles?: SocialProfileRow[];
   classification: { decision: string | null; confidence: number | string | null } | null;
@@ -348,4 +351,7 @@ export interface LeadFilters {
   hasDecisionMaker?: boolean;
   hasEmail?: boolean;
   hasPhone?: boolean;
+  companySizeStatus?: 'MATCHED' | 'UNKNOWN' | 'OUTSIDE_RANGE';
+  companySizeMin?: number;
+  companySizeMax?: number;
 }

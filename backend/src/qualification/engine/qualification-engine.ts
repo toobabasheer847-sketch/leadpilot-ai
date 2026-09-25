@@ -4,26 +4,31 @@ import type { CriterionEvidence, CriterionResultCode, QualificationContext, Qual
 const REAL_ESTATE_POSITIVE = [
   /\bbe?uy(?:s|ing)?\s+(?:houses?|homes?|properties|real estate)\b/i,
   /\bpurchase[sd]?\s+(?:houses?|homes?|properties)\b/i,
+  /\bacquir(?:e|es|ed|ing)\b/i,
+  /\bacquisition\b/i,
   /\bcash\s+(?:home|house)\s+(?:buy|purchase)/i,
   /\bfix(?:\s|-)?and(?:\s|-)?flip\b/i,
   /\bbuy(?:\s|-)?and(?:\s|-)?hold\b/i,
   /\bbrrrr?\b/i,
-  /\brental\s+acquisitions?\b/i,
-  /\b(?:commercial|land)\s+(?:property\s+)?acquisitions?\b/i,
+  /\brental\s+(?:property\s+)?acquisitions?\b/i,
+  /\b(?:commercial|land|multifamily|multi-family)\s+(?:property\s+)?acquisitions?\b/i,
   /\binvestment\s+portfolio\b/i,
+  /\b(?:owned|property)\s+portfolio\b/i,
   /\bwe\s+buy\s+houses?\b/i,
 ];
 
 const REAL_ESTATE_NEGATIVE = [
-  /\bbrokerage\s+only\b/i,
-  /\brealtor\s+only\b|\breal\s+estate\s+agent\b/i,
-  /\bproperty\s+management\s+only\b/i,
-  /\bmortgage\b|\blending\s+only\b|\blender\b/i,
+  /\bbrokerage(?:\s+only)?\b/i,
+  /\brealtor\b|\breal\s+estate\s+agent\b|\bestate\s+agent\b/i,
+  /\bproperty\s+management(?:\s+only)?\b/i,
+  /\bmortgage\b|\blending(?:\s+only)?\b|\blender\b/i,
   /\btitle\s+(?:company|services?)\b/i,
   /\binsurance\b/i,
   /\binspection\s+(?:company|services?)\b/i,
   /\blaw\s+firm\b|\blegal\s+services?\b/i,
-  /\bcontractor\s+services?\b/i,
+  /\bcontractor\b/i,
+  /\bapartment\s+leasing\b/i,
+  /\bwholesal(?:e|ing)\b/i,
   /\bmarketing\s+(?:agency|services?)\b|\bsoftware\s+(?:company|platform)\b/i,
 ];
 
@@ -204,27 +209,45 @@ function evaluateLocation(context: QualificationContext, criteria: Qualification
 
 function evaluateCompanySize(context: QualificationContext, criteria: QualificationCriteria): CriterionEvidence {
   const verification = fieldStatus(context, 'companySize');
-  const count = context.company.employeeCount ?? parseRangeMidpoint(context.company.employeeRange);
-  if (count === null) {
-    return evidence('companySize', verification === 'CONFLICT' || verification === 'NEEDS_REVIEW' ? 'NEEDS_REVIEW' : 'NOT_FOUND', true, 'Company size could not be reliably established from evidence.', null, verification);
-  }
+  const fit = companySizeFit(context.company.employeeCount, context.company.employeeRange, criteria.companySize);
+  const excerpt = context.company.employeeCount != null ? String(context.company.employeeCount) : context.company.employeeRange;
   if (verification === 'CONFLICT' || verification === 'NEEDS_REVIEW') {
     return evidence('companySize', 'NEEDS_REVIEW', true, 'Company size evidence conflicts across sources.', {
       source: 'company_record',
       sourceUrl: null,
-      excerpt: String(count),
+      excerpt,
     }, verification);
   }
-  const min = criteria.companySize?.min ?? Number.NEGATIVE_INFINITY;
-  const max = criteria.companySize?.max ?? Number.POSITIVE_INFINITY;
-  const match = count >= min && count <= max;
-  return evidence('companySize', match ? 'MATCH' : 'NO_MATCH', true, match
-    ? `Company size ${count} matched requested range.`
-    : `Company size ${count} did not match requested range.`, {
+  if (fit === 'UNKNOWN') {
+    return evidence('companySize', 'NOT_FOUND', true, 'Company size could not be reliably established from evidence.', null, verification);
+  }
+  if (fit === 'OUTSIDE_RANGE') {
+    return evidence('companySize', 'NO_MATCH', true, `Company size ${excerpt} is outside the requested range.`, {
+      source: 'company_record',
+      sourceUrl: null,
+      excerpt,
+    }, verification);
+  }
+  return evidence('companySize', 'MATCH', true, `Company size ${excerpt} matched the requested range.`, {
     source: 'company_record',
     sourceUrl: null,
-    excerpt: String(count),
+    excerpt,
   }, verification);
+}
+
+export type CompanySizeFit = 'MATCHED' | 'UNKNOWN' | 'OUTSIDE_RANGE';
+
+export function companySizeFit(employeeCount: number | null, employeeRange: string | null, bounds?: { min?: number; max?: number }): CompanySizeFit {
+  const min = bounds?.min ?? Number.NEGATIVE_INFINITY;
+  const max = bounds?.max ?? Number.POSITIVE_INFINITY;
+  if (typeof employeeCount === 'number' && Number.isFinite(employeeCount)) {
+    return employeeCount >= min && employeeCount <= max ? 'MATCHED' : 'OUTSIDE_RANGE';
+  }
+  const span = parseEmployeeSpan(employeeRange);
+  if (!span) return 'UNKNOWN';
+  if (span.max < min || span.min > max) return 'OUTSIDE_RANGE';
+  if (span.min >= min && span.max <= max) return 'MATCHED';
+  return 'UNKNOWN';
 }
 
 function evaluateCategory(context: QualificationContext, criteria: QualificationCriteria): CriterionEvidence {
@@ -406,12 +429,14 @@ function findEvidence(evidence: QualificationContext['evidence'], patterns: RegE
   })) ?? null;
 }
 
-function parseRangeMidpoint(range: string | null) {
+function parseEmployeeSpan(range: string | null): { min: number; max: number } | null {
   if (!range) return null;
-  const match = range.match(/(\d+)\s*[-–to]+\s*(\d+)/i);
-  if (match) return Math.round((Number(match[1]) + Number(match[2])) / 2);
-  const single = range.match(/(\d+)/);
-  return single ? Number(single[1]) : null;
+  const match = range.match(/(\d+)\s*(?:-|–|to)\s*(\d+)/i);
+  if (!match) return null;
+  const min = Number(match[1]);
+  const max = Number(match[2]);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) return null;
+  return { min, max };
 }
 
 function normalizeState(value: string) {

@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { businessValue, formatWhen, locationLabel } from '../../lib/format';
+import { businessValue, formatWhen } from '../../lib/format';
+import { collectSocialLinks } from '../../lib/social';
 import type { LeadRecord, LeadSortBy } from '../../types/api';
 import { EmptyState } from '../feedback/States';
 import { ExternalLink } from '../company/ExternalLink';
@@ -58,13 +59,18 @@ export function LeadTable({ leads, selected = new Set(), onToggle = () => undefi
             </th>
             <SortHeader label="Company" column="companyName" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} />
             <th>Website</th>
-            <th>Location</th>
-            <th>Category</th>
+            <th>Address</th>
+            <th>City</th>
+            <th>State</th>
+            <th>ZIP</th>
+            <th>Company size</th>
             <th>Investor type</th>
             <th>Decision maker</th>
-            <th>Decision maker title</th>
+            <th>Title</th>
             <th>Email</th>
             <th>Phone</th>
+            <th>Company social</th>
+            <th>Decision maker social</th>
             <th>Verification</th>
             <SortHeader label="Quality" column="score" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} />
             <th>Qualification</th>
@@ -101,17 +107,36 @@ function SortHeader({ label, column, sortBy, sortOrder, onSort }: {
   );
 }
 
+function companySizeLabel(lead: LeadRecord) {
+  const value = lead.company.companySize;
+  const shown = value == null || value === '' ? null : String(value);
+  if (lead.company.companySizeStatus === 'MATCHED') return shown ? `MATCHED 1-50 (${shown})` : 'MATCHED 1-50';
+  if (lead.company.companySizeStatus === 'OUTSIDE_RANGE') return shown ? `OUTSIDE RANGE (${shown})` : 'OUTSIDE RANGE';
+  if (lead.company.companySizeStatus === 'UNKNOWN' || shown == null) return 'UNKNOWN';
+  return shown;
+}
+
+function socialLabel(links: Array<{ platform: string }>) {
+  if (!links.length) return businessValue(null);
+  return links.map((link) => link.platform).join(', ');
+}
+
 function leadCells(lead: LeadRecord): Array<{ key: string; node: ReactNode }> {
   return [
     { key: 'company', node: <Link to={`/leads/${lead.id}`}><strong>{businessValue(lead.company.name)}</strong></Link> },
     { key: 'website', node: <ExternalLink href={lead.company.website} /> },
-    { key: 'location', node: locationLabel(lead.company.location) },
-    { key: 'category', node: businessValue(lead.company.category) },
+    { key: 'address', node: businessValue(lead.company.location?.address) },
+    { key: 'city', node: businessValue(lead.company.location?.city) },
+    { key: 'state', node: businessValue(lead.company.location?.state) },
+    { key: 'zip', node: businessValue(lead.company.location?.zipCode) },
+    { key: 'size', node: companySizeLabel(lead) },
     { key: 'investor', node: businessValue(lead.company.investorType) },
     { key: 'person', node: businessValue(lead.contact?.name) },
     { key: 'title', node: businessValue(lead.contact?.title) },
     { key: 'email', node: businessValue(lead.contact?.email) },
-    { key: 'phone', node: businessValue(lead.contact?.phone) },
+    { key: 'phone', node: businessValue(lead.company.phone ?? lead.contact?.phone) },
+    { key: 'companySocial', node: socialLabel(collectSocialLinks({ rows: lead.socialProfiles })) },
+    { key: 'personSocial', node: socialLabel(collectSocialLinks({ contact: lead.contact ? { linkedinUrl: lead.contact.linkedin ?? null, facebookUrl: lead.contact.facebook ?? null, instagramUrl: lead.contact.instagram ?? null, youtubeUrl: lead.contact.youtube ?? null } : null })) },
     { key: 'verification', node: <LeadStatusBadge status={lead.verification?.status} /> },
     { key: 'score', node: <LeadScoreBadge score={lead.score} /> },
     { key: 'qualification', node: <LeadStatusBadge status={lead.qualification?.status} /> },

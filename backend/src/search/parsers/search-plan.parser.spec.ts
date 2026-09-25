@@ -36,6 +36,18 @@ describe('SearchPlanParser', () => {
     expect(plan.requiredRoles).toEqual(expect.arrayContaining(['CEO', 'Founder', 'President', 'Owner']));
   });
 
+  it('parses the Texas investor acceptance prompt without inventing a full result set', () => {
+    const plan = parser.parse('Find up to 50 real estate investment companies in Texas with company size 1-50 employees');
+    expect(plan).toMatchObject({
+      industry: ['real_estate'],
+      leadTypes: ['real_estate_investor'],
+      locations: [{ country: 'US', state: 'Texas' }],
+      companySize: { min: 1, max: 50 },
+      maxResults: 50,
+    });
+    expect(plan.requiredRoles).toBeUndefined();
+  });
+
   it('does not invent criteria for an unsupported prompt', () => {
     const plan = parser.parse('Find excellent businesses with strong reputations.');
     expect(plan.industry).toEqual([]);

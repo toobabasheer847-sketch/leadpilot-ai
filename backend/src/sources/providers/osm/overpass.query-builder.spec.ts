@@ -42,8 +42,20 @@ describe('buildOverpassQuery', () => {
       locations: [{ country: 'US', state: 'New York' }],
     }), { timeoutSeconds: 25, maxResults: 15, bbox });
 
-    expect(query).toContain('["office"="estate_agent"]');
-    expect(query).toContain('["office"="property_management"]');
+    expect(query).toContain('["name"~"investor|investments|acquisition",i]');
+    expect(query).not.toContain('["office"="estate_agent"]');
+    expect(query).not.toContain('["office"="property_management"]');
+  });
+
+  it('does not add brokerage selectors when an investor lead type is combined with real estate', () => {
+    const query = buildOverpassQuery(plan({
+      industry: ['real_estate'],
+      leadTypes: ['real_estate_investor'],
+    }), { timeoutSeconds: 25, maxResults: 50, bbox });
+
+    expect(query).toContain('["name"~"investor|investments|acquisition",i]');
+    expect(query).not.toContain('estate_agent');
+    expect(query).toContain('out center 50;');
   });
 
   it('uses a name filter for an unrecognized category term', () => {

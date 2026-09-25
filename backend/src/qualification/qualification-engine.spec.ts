@@ -184,6 +184,44 @@ describe('qualification engine', () => {
     expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: 20 } }), criteria()).criterionResults.find((item) => item.criterion === 'companySize')?.result).toBe('MATCH');
     expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: 200 } }), criteria()).status).toBe('NOT_QUALIFIED');
     expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: null, employeeRange: null } }), criteria()).status).toBe('NEEDS_REVIEW');
+    expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: null, employeeRange: '10-40' } }), criteria()).criterionResults.find((item) => item.criterion === 'companySize')?.result).toBe('MATCH');
+    expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: null, employeeRange: '1-200' } }), criteria()).criterionResults.find((item) => item.criterion === 'companySize')?.result).toBe('NOT_FOUND');
+    expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: null, employeeRange: '51-200' } }), criteria()).status).toBe('NOT_QUALIFIED');
+  });
+
+  it('does not treat a real-estate name as investor evidence', () => {
+    const decision = evaluateQualification(baseContext({
+      company: { ...baseContext().company, name: 'ABC Real Estate' },
+      evidence: [{
+        id: 'ev-name',
+        evidenceType: 'COMPANY_NAME',
+        sourceUrl: 'https://abc.test',
+        evidenceText: 'ABC Real Estate',
+        provider: 'official_website',
+        sourceType: 'WEBSITE',
+        retrievedAt: new Date(),
+        metadata: {},
+      }],
+      classification: null,
+    }), criteria({ leadTypes: ['real_estate_investor'] }));
+    expect(decision.status).not.toBe('QUALIFIED');
+    expect(decision.criterionResults.find((item) => item.criterion === 'category')?.result).not.toBe('MATCH');
+  });
+
+  it('accepts explicit acquisition evidence', () => {
+    const decision = evaluateQualification(baseContext({
+      evidence: [{
+        id: 'ev-acquire',
+        evidenceType: 'COMPANY_WEBSITE',
+        sourceUrl: 'https://abc.test/about',
+        evidenceText: 'We acquire residential properties in Dallas and hold them in an owned-property portfolio.',
+        provider: 'official_website',
+        sourceType: 'WEBSITE',
+        retrievedAt: new Date(),
+        metadata: {},
+      }],
+    }), criteria({ leadTypes: ['real_estate_investor'] }));
+    expect(decision.criterionResults.find((item) => item.criterion === 'real_estate_investor')?.result).toBe('MATCH');
   });
 
   it('verifies decision maker roles and reports missing decision makers', () => {

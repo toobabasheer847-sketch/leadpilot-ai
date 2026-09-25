@@ -20,6 +20,7 @@ const INDUSTRIES: Array<[string, string]> = [
 
 const LEAD_TYPES: Array<[string, string]> = [
   ['cash home buyer', 'cash_home_buyer'],
+  ['real estate investment', 'real_estate_investor'],
   ['real estate investor', 'real_estate_investor'],
   ['house flipper', 'house_flipper'],
   ['fix and flip', 'fix_and_flip'],
@@ -57,6 +58,7 @@ export class SearchPlanParser {
     const requiredFields = this.parseRequiredFields(lowerPrompt, companyFields, contactFields);
     const optionalFields = this.parseOptionalFields(lowerPrompt, companyFields, contactFields, requiredFields);
     const minimumScore = this.parseMinimumScore(lowerPrompt);
+    const maxResults = this.parseMaxResults(lowerPrompt);
     const unresolvedCriteria = this.parseUnresolved(normalizedPrompt, lowerPrompt, industry, leadTypes, locations, companySize);
 
     return {
@@ -75,6 +77,7 @@ export class SearchPlanParser {
       ...(optionalFields.length ? { optionalFields } : {}),
       ...(titles.length ? { requiredRoles: titles } : {}),
       ...(minimumScore !== undefined ? { minimumScore } : {}),
+      ...(maxResults !== undefined ? { maxResults } : {}),
       unresolvedCriteria,
     };
   }
@@ -153,6 +156,14 @@ export class SearchPlanParser {
       }
     }
     return [...optional];
+  }
+
+  private parseMaxResults(prompt: string) {
+    const match = prompt.match(/\b(?:up to|maximum of|maximum|max|limit of|limit)\s+(\d{1,3})\b/i);
+    if (!match) return undefined;
+    const value = Number(match[1]);
+    if (!Number.isInteger(value) || value < 1) return undefined;
+    return Math.min(100, value);
   }
 
   private parseMinimumScore(prompt: string) {

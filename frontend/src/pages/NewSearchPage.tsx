@@ -46,6 +46,8 @@ export function NewSearchPage() {
           <p>Lead types: {preview.structuredPlan.leadTypes?.join(', ') || 'Not Found'}</p>
           <p>Industry: {preview.structuredPlan.industry?.join(', ') || 'Not Found'}</p>
           <p>Locations: {preview.structuredPlan.locations?.map((item) => [item.city, item.state, item.country].filter(Boolean).join(', ')).join(' · ') || 'Not Found'}</p>
+          <p>Company size: {preview.structuredPlan.companySize ? `${preview.structuredPlan.companySize.min ?? 'Not Found'}–${preview.structuredPlan.companySize.max ?? 'Not Found'}` : 'Not Found'}</p>
+          <p>Result limit: {preview.structuredPlan.maxResults ?? 'Not Found'}</p>
         </section>
       ) : null}
     </section>

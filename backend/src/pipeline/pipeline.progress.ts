@@ -96,14 +96,57 @@ export function classifyPipelineError(error: unknown): { code: PipelineErrorCode
     }
   }
 
+  if (isOpenRouterError(error)) {
+    const message = publicErrorMessage(error.message);
+    if (error.code === 'NOT_CONFIGURED' || error.code === 'AUTHENTICATION') return { code: 'CONFIGURATION_ERROR', message, retryable: false };
+    if (error.code === 'RATE_LIMITED' || error.code === 'TIMEOUT' || error.code === 'PROVIDER_ERROR') return { code: 'TRANSIENT_PROVIDER_ERROR', message, retryable: true };
+    if (error.code === 'MODEL_NOT_FOUND' || error.code === 'INVALID_REQUEST' || error.code === 'PARSE_ERROR') return { code: 'VALIDATION_ERROR', message, retryable: false };
+  }
+
   const raw = error instanceof Error ? error.message : 'Pipeline stage failed.';
   const message = publicErrorMessage(raw);
-  if (/not configured|openrouter_model|google_places_api_key/i.test(raw)) return { code: 'CONFIGURATION_ERROR', message, retryable: false };
+  if (/not configured|openrouter_model|google_places_api_key|authentication failed \(status 40[13]\)/i.test(raw)) return { code: 'CONFIGURATION_ERROR', message, retryable: false };
   if (/rate limit|timed out|timeout|econnreset|temporarily unavailable/i.test(raw)) return { code: 'TRANSIENT_PROVIDER_ERROR', message, retryable: true };
   if (error instanceof NotFoundException || /\bnot found\b/i.test(raw)) return { code: 'NOT_FOUND', message, retryable: false };
   if (error instanceof ForbiddenException || /forbidden|permission/i.test(raw)) return { code: 'PERMISSION_ERROR', message, retryable: false };
-  if (error instanceof BadRequestException || /validation/i.test(raw)) return { code: 'VALIDATION_ERROR', message, retryable: false };
+  if (error instanceof BadRequestException || /validation|status 400|status 404|malformed classification|invalid classification|invalid positive evidence|invalid negative evidence|invalid investor type|invalid missing evidence|invalid exclusion reason|invalid company size|invalid location status/i.test(raw)) return { code: 'VALIDATION_ERROR', message, retryable: false };
+  const websiteFailure = classifyWebsiteDiscoveryMessage(raw) ?? classifyWebSearchMessage(raw);
+  if (websiteFailure) return { ...websiteFailure, message };
   return { code: 'INTERNAL_ERROR', message: 'Pipeline stage failed.', retryable: false };
+}
+
+export const WEBSITE_PARTIAL_MESSAGE = 'No verified website found for some companies.';
+export const ENRICHMENT_EMPTY_MESSAGE = 'No additional verified enrichment data found.';
+
+function classifyWebSearchMessage(raw: string): { code: PipelineErrorCode; retryable: boolean } | null {
+  if (raw.startsWith('Web search provider is not configured') || raw.startsWith('Web search provider authentication failed')) return { code: 'CONFIGURATION_ERROR', retryable: false };
+  if (raw.startsWith('Web search provider timed out') || raw.startsWith('Web search provider rate limit') || raw.startsWith('Web search provider is unavailable')) return { code: 'TRANSIENT_PROVIDER_ERROR', retryable: true };
+  if (/^Web search provider returned HTTP 5\d\d\.$/.test(raw)) return { code: 'TRANSIENT_PROVIDER_ERROR', retryable: true };
+  if (/^Web search provider returned HTTP 4\d\d\.$/.test(raw)) return { code: 'VALIDATION_ERROR', retryable: false };
+  if (raw.startsWith('Web search provider returned an invalid response')) return { code: 'VALIDATION_ERROR', retryable: false };
+  return null;
+}
+
+function classifyWebsiteDiscoveryMessage(raw: string): { code: PipelineErrorCode; retryable: boolean } | null {
+  if (/^No verified website found\b/i.test(raw)) return { code: 'NOT_FOUND', retryable: false };
+  if (raw.startsWith('Website discovery provider is not configured')) return { code: 'CONFIGURATION_ERROR', retryable: false };
+  if (raw.startsWith('Website discovery provider timed out') || raw.startsWith('Website discovery provider is unavailable')) return { code: 'TRANSIENT_PROVIDER_ERROR', retryable: true };
+  if (/^Website discovery provider returned HTTP 5\d\d\.$/.test(raw)) return { code: 'TRANSIENT_PROVIDER_ERROR', retryable: true };
+  if (/^Website discovery provider returned HTTP 4\d\d\.$/.test(raw)) return { code: 'VALIDATION_ERROR', retryable: false };
+  if (raw.startsWith('Website discovery provider returned an invalid response')) return { code: 'VALIDATION_ERROR', retryable: false };
+  return null;
+}
+
+export function summarizeWebsiteFindings(outcomes: Array<'FOUND' | 'NOT_FOUND'>): { state: 'COMPLETED' } | { state: 'PARTIAL'; message: string } | null {
+  if (outcomes.length === 0) return null;
+  const found = outcomes.some((item) => item === 'FOUND');
+  const missing = outcomes.some((item) => item === 'NOT_FOUND');
+  if (found && missing) return { state: 'PARTIAL', message: WEBSITE_PARTIAL_MESSAGE };
+  return { state: 'COMPLETED' };
+}
+
+function isOpenRouterError(error: unknown): error is Error & { code: string } {
+  return error instanceof Error && error.name === 'OpenRouterError' && 'code' in error;
 }
 
 export function shouldRetryPipelineFailure(retryable: boolean, attemptsMade: number, attempts: number): boolean {

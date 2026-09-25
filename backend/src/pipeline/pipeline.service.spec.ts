@@ -2,9 +2,10 @@ import { ConflictException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { GooglePlacesProvider } from '../sources/providers/google-places/google-places.provider';
 import { SourceProviderError } from '../sources/providers/source-provider.error';
-import { OpenRouterProvider } from '../ai/classification/providers/openrouter.provider';
+import { OpenRouterError, OpenRouterProvider } from '../ai/classification/providers/openrouter.provider';
 import {
   classifyPipelineError,
+  ENRICHMENT_EMPTY_MESSAGE,
   initialProgress,
   maskCounters,
   parseProgress,
@@ -12,6 +13,8 @@ import {
   pipelineJobId,
   shouldRetryPipelineFailure,
   summarizeJobStates,
+  summarizeWebsiteFindings,
+  WEBSITE_PARTIAL_MESSAGE,
 } from './pipeline.progress';
 import { PipelineService } from './pipeline.service';
 import { PipelineStageRunner } from './pipeline.runner';
@@ -174,6 +177,12 @@ describe('pipeline orchestration', () => {
     const provider = new OpenRouterProvider(config({ 'openRouter.apiKey': 'present', 'openRouter.model': undefined }));
     await expect(provider.classify({ company: { id: 'company-1', name: 'Stored company', description: null, website: null, category: null, investorType: null, investmentStrategy: null, employeeCount: null, employeeRange: null }, criteria: { category: 'UNSPECIFIED' }, evidence: [] })).rejects.toThrow(/not configured/);
     expect(classifyPipelineError(new Error('OpenRouter is not configured'))).toMatchObject({ code: 'CONFIGURATION_ERROR', retryable: false });
+    expect(classifyPipelineError(new OpenRouterError('OpenRouter authentication failed (status 401)', 401, 'AUTHENTICATION', false))).toMatchObject({ code: 'CONFIGURATION_ERROR', retryable: false });
+    expect(classifyPipelineError(new Error('OpenRouter model is unavailable (status 404)'))).toMatchObject({ code: 'VALIDATION_ERROR', retryable: false });
+    expect(classifyPipelineError(new Error('Invalid positive evidence'))).toMatchObject({ code: 'VALIDATION_ERROR', retryable: false });
+    expect(classifyPipelineError(new Error('OpenRouter rate limit (status 429)'))).toMatchObject({ code: 'TRANSIENT_PROVIDER_ERROR', retryable: true });
+    expect(classifyPipelineError(new Error('OpenRouter request timed out after 20000ms'))).toMatchObject({ code: 'TRANSIENT_PROVIDER_ERROR', retryable: true });
+    expect(classifyPipelineError(new Error('OpenRouter provider temporarily unavailable (status 503)'))).toMatchObject({ code: 'TRANSIENT_PROVIDER_ERROR', retryable: true });
   });
 
   it('runs deep website research after enrichment in the existing pipeline', () => {
@@ -182,6 +191,10 @@ describe('pipeline orchestration', () => {
     expect(nextWorkStage('DECISION_MAKER_DISCOVERY')).toBe('CONTACT_QUALITY');
     expect(nextWorkStage('CONTACT_QUALITY')).toBe('EVIDENCE');
     expect(nextWorkStage('EVIDENCE')).toBe('CLASSIFICATION');
+    expect(nextWorkStage('CLASSIFICATION')).toBe('VERIFICATION');
+    expect(nextWorkStage('VERIFICATION')).toBe('DEDUPLICATION');
+    expect(nextWorkStage('DEDUPLICATION')).toBe('SCORING');
+    expect(nextWorkStage('SCORING')).toBe('QUALIFICATION');
     expect(pipelineJobId('pipeline-1', 'DEEP_RESEARCH')).toBe('lead-pipeline-pipeline-1-deep-research');
     expect(pipelineJobId('pipeline-1', 'DEEP_RESEARCH')).not.toContain(':');
   });
@@ -219,6 +232,48 @@ describe('pipeline orchestration', () => {
     await service.runTick({ pipelineExecutionId: 'pipeline-1', organizationId: 'org-1', userId: 'user-1', searchId: 'search-1', searchExecutionId: 'execution-1' }, 0, 3);
 
     expect(repository.update).toHaveBeenCalledWith('org-1', 'pipeline-1', expect.objectContaining({ status: 'PARTIAL', currentStage: 'COMPLETED' }));
+  });
+
+  it('completes website discovery when every company is NOT_FOUND and fails a provider crash', async () => {
+    expect(summarizeWebsiteFindings(['NOT_FOUND', 'NOT_FOUND'])).toEqual({ state: 'COMPLETED' });
+    expect(summarizeWebsiteFindings(['FOUND', 'NOT_FOUND'])).toEqual({ state: 'PARTIAL', message: WEBSITE_PARTIAL_MESSAGE });
+    expect(classifyPipelineError(new Error('Website discovery provider is not configured.'))).toMatchObject({ code: 'CONFIGURATION_ERROR', message: 'Website discovery provider is not configured.', retryable: false });
+    expect(classifyPipelineError(new Error('Website discovery provider timed out.'))).toMatchObject({ code: 'TRANSIENT_PROVIDER_ERROR', message: 'Website discovery provider timed out.', retryable: true });
+    expect(classifyPipelineError(new Error('Website discovery provider returned HTTP 403.'))).toMatchObject({ code: 'VALIDATION_ERROR', message: 'Website discovery provider returned HTTP 403.', retryable: false });
+    expect(classifyPipelineError(new Error('Website discovery provider returned an invalid response.'))).toMatchObject({ code: 'VALIDATION_ERROR', retryable: false });
+    expect(classifyPipelineError(new Error('No verified website found for Oak Stream Investors in Texas.')).code).not.toBe('INTERNAL_ERROR');
+
+    const jobs = { settle: jest.fn() };
+    const stageRunner = new PipelineStageRunner(
+      {} as never, {} as never, {} as never, {} as never, {} as never,
+      {} as never, {} as never, {} as never, {} as never, {} as never,
+      jobs as never,
+    );
+    const progress = initialProgress();
+    progress.jobs.websiteDiscovery = ['oak', 'trinity', 'fidelity'];
+    jobs.settle.mockResolvedValueOnce({ state: 'COMPLETED' });
+    const completed = await stageRunner.tick(row({ status: 'RUNNING', currentStage: 'WEBSITE_DISCOVERY' }), progress);
+    expect(completed.type).toBe('advance');
+    if (completed.type === 'advance') expect(completed.progress.stages.websiteDiscovery).toBe('COMPLETED');
+
+    jobs.settle.mockResolvedValueOnce({ state: 'FAILED', message: 'Website discovery provider returned HTTP 503.' });
+    const failed = await stageRunner.tick(row({ status: 'RUNNING', currentStage: 'WEBSITE_DISCOVERY' }), progress);
+    expect(failed).toMatchObject({ type: 'fail', errorCode: 'TRANSIENT_PROVIDER_ERROR', errorMessage: 'Website discovery provider returned HTTP 503.' });
+    if (failed.type === 'fail') expect(failed.progress.stages.websiteDiscovery).toBe('FAILED');
+
+    jobs.settle.mockResolvedValueOnce({ state: 'FAILED', message: 'Website discovery provider is not configured.' });
+    const unconfigured = await stageRunner.tick(row({ status: 'RUNNING', currentStage: 'WEBSITE_DISCOVERY' }), progress);
+    expect(unconfigured).toMatchObject({ type: 'fail', errorCode: 'CONFIGURATION_ERROR', errorMessage: 'Website discovery provider is not configured.' });
+
+    const enrichmentProgress = initialProgress();
+    enrichmentProgress.jobs.websiteDiscovery = ['oak'];
+    jobs.settle.mockResolvedValueOnce({ state: 'PARTIAL', message: WEBSITE_PARTIAL_MESSAGE });
+    const enrichment = await stageRunner.tick(row({ status: 'RUNNING', currentStage: 'ENRICHMENT' }), enrichmentProgress);
+    expect(enrichment.type).toBe('advance');
+    if (enrichment.type === 'advance') {
+      expect(enrichment.progress.stages.enrichment).toBe('PARTIAL');
+      expect(enrichment.progress.failures.at(-1)).toEqual({ stage: 'ENRICHMENT', message: ENRICHMENT_EMPTY_MESSAGE });
+    }
   });
 
   it('does not expose another organization execution', async () => {

@@ -8,14 +8,14 @@ const SAFE_TERM = /^[a-z0-9_ ]{1,40}$/i;
 
 const CATEGORY_SELECTORS: Record<string, readonly string[]> = {
   real_estate: ['["office"="estate_agent"]', '["shop"="estate_agent"]'],
-  real_estate_investor: ['["office"="estate_agent"]', '["office"="property_management"]'],
-  cash_home_buyer: ['["office"="estate_agent"]'],
-  house_flipper: ['["office"="estate_agent"]', '["office"="property_management"]'],
-  fix_and_flip: ['["office"="estate_agent"]', '["office"="property_management"]'],
-  buy_and_hold: ['["office"="estate_agent"]', '["office"="property_management"]'],
-  brrrr: ['["office"="estate_agent"]', '["office"="property_management"]'],
-  commercial_real_estate_investor: ['["office"="estate_agent"]', '["office"="property_management"]'],
-  land_investor: ['["office"="estate_agent"]'],
+  real_estate_investor: ['["office"]["name"~"investor|investments|acquisition",i]'],
+  cash_home_buyer: ['["office"]["name"~"investor|investments|acquisition|home buyer",i]'],
+  house_flipper: ['["office"]["name"~"investor|investments|acquisition",i]'],
+  fix_and_flip: ['["office"]["name"~"investor|investments|acquisition",i]'],
+  buy_and_hold: ['["office"]["name"~"investor|investments|acquisition",i]'],
+  brrrr: ['["office"]["name"~"investor|investments|acquisition",i]'],
+  commercial_real_estate_investor: ['["office"]["name"~"investor|investments|acquisition",i]'],
+  land_investor: ['["office"]["name"~"investor|investments|acquisition|land",i]'],
   construction: ['["office"="construction_company"]', '["craft"="builder"]'],
   software: ['["office"="it"]'],
   marketing: ['["office"="advertising_agency"]'],
@@ -139,10 +139,17 @@ function coordinate(value: number, limit: number): string {
   return value.toFixed(6);
 }
 
+const INVESTOR_DISCOVERY_KEYS = new Set([
+  'real_estate_investor', 'cash_home_buyer', 'house_flipper', 'fix_and_flip', 'buy_and_hold', 'brrrr',
+  'commercial_real_estate_investor', 'land_investor',
+]);
+
 function categorySelectors(plan: SearchPlan): string[] {
   const selectors: string[] = [];
+  const investorSearch = [...plan.leadTypes, ...plan.industry].some((term) => INVESTOR_DISCOVERY_KEYS.has(term.trim().toLowerCase().replace(/\s+/g, '_')));
   for (const term of [...plan.industry, ...plan.leadTypes]) {
     const key = term.trim().toLowerCase().replace(/\s+/g, '_');
+    if (investorSearch && key === 'real_estate') continue;
     const known = CATEGORY_SELECTORS[key];
     if (known) {
       selectors.push(...known);

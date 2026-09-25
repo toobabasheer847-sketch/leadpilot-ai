@@ -18,6 +18,7 @@ export interface LeadFilterValues {
   hasDecisionMaker: string;
   hasEmail: string;
   hasPhone: string;
+  companySizeStatus: string;
 }
 
 const verificationStatuses = ['VERIFIED', 'SUPPORTED', 'UNVERIFIED', 'NOT_FOUND', 'CONFLICT', 'NEEDS_REVIEW', 'INVALID', 'PARTIALLY_VERIFIED'];
@@ -43,7 +44,28 @@ export function LeadFilters({ values, executions, onSearchChange, onChange }: {
       <label>State<input value={values.state} onChange={(event) => onChange('state', event.target.value)} /></label>
       <label>City<input value={values.city} onChange={(event) => onChange('city', event.target.value)} /></label>
       <label>ZIP<input value={values.zipCode} onChange={(event) => onChange('zipCode', event.target.value)} /></label>
-      <label>Investor type<input value={values.investorType} onChange={(event) => onChange('investorType', event.target.value)} /></label>
+      <label>Company size
+        <select value={values.companySizeStatus} onChange={(event) => onChange('companySizeStatus', event.target.value)}>
+          <option value="">Any</option>
+          <option value="MATCHED">MATCHED 1-50</option>
+          <option value="UNKNOWN">UNKNOWN</option>
+          <option value="OUTSIDE_RANGE">OUTSIDE RANGE</option>
+        </select>
+      </label>
+      <label>Investor type
+        <select value={values.investorType} onChange={(event) => onChange('investorType', event.target.value)}>
+          <option value="">Any</option>
+          <option value="CASH_HOME_BUYER">CASH_HOME_BUYER</option>
+          <option value="FIX_AND_FLIP">FIX_AND_FLIP</option>
+          <option value="BUY_AND_HOLD">BUY_AND_HOLD</option>
+          <option value="BRRRR">BRRRR</option>
+          <option value="COMMERCIAL_INVESTOR">COMMERCIAL_INVESTOR</option>
+          <option value="LAND_INVESTOR">LAND_INVESTOR</option>
+          <option value="MULTIFAMILY_INVESTOR">MULTIFAMILY_INVESTOR</option>
+          <option value="REAL_ESTATE_INVESTOR_OTHER">REAL_ESTATE_INVESTOR_OTHER</option>
+          <option value="NOT_DETERMINED">NOT_DETERMINED</option>
+        </select>
+      </label>
       <label>Qualification
         <select value={values.qualificationStatus} onChange={(event) => onChange('qualificationStatus', event.target.value)}>
           <option value="">Any</option>

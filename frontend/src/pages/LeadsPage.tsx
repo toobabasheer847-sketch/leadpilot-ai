@@ -26,6 +26,11 @@ function flag(value: string | null): boolean | undefined {
   return undefined;
 }
 
+function readSizeStatus(value: string | null): LeadQuery['companySizeStatus'] {
+  if (value === 'MATCHED' || value === 'UNKNOWN' || value === 'OUTSIDE_RANGE') return value;
+  return undefined;
+}
+
 function numberValue(value: string | null): number | undefined {
   if (!value) return undefined;
   const parsed = Number(value);
@@ -50,6 +55,7 @@ function valuesFrom(params: URLSearchParams, search: string): LeadFilterValues {
     hasDecisionMaker: params.get('hasDecisionMaker') ?? '',
     hasEmail: params.get('hasEmail') ?? '',
     hasPhone: params.get('hasPhone') ?? '',
+    companySizeStatus: params.get('companySizeStatus') ?? '',
   };
 }
 
@@ -75,6 +81,9 @@ function queryFrom(params: URLSearchParams): LeadQuery {
     hasDecisionMaker: flag(params.get('hasDecisionMaker')),
     hasEmail: flag(params.get('hasEmail')),
     hasPhone: flag(params.get('hasPhone')),
+    companySizeStatus: readSizeStatus(params.get('companySizeStatus')),
+    companySizeMin: params.get('companySizeStatus') === 'MATCHED' || params.get('companySizeStatus') === 'OUTSIDE_RANGE' ? 1 : undefined,
+    companySizeMax: params.get('companySizeStatus') === 'MATCHED' || params.get('companySizeStatus') === 'OUTSIDE_RANGE' ? 50 : undefined,
   };
 }
 

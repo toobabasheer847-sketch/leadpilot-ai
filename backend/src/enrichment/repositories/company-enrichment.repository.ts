@@ -60,7 +60,9 @@ export class CompanyEnrichmentRepository {
   }
 
   async updateCompany(companyId: string, values: Partial<typeof companies.$inferInsert>) {
-    const [updated] = await this.db.update(companies).set(values).where(eq(companies.id, companyId)).returning();
+    const entries = Object.entries(values).filter(([, value]) => value !== undefined);
+    if (entries.length === 0) return null;
+    const [updated] = await this.db.update(companies).set(Object.fromEntries(entries)).where(eq(companies.id, companyId)).returning();
     return updated ?? null;
   }
 

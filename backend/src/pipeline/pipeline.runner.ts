@@ -12,7 +12,7 @@ import { ResearchService } from '../research/research.service';
 import { ContactQualityService } from '../contacts/quality/contact-quality.service';
 import { TRACKED_QUEUES, type PipelineErrorCode, type WorkStage } from './pipeline.constants';
 import { PipelineJobInspector } from './pipeline.job-inspector';
-import { classifyPipelineError, nextWorkStage, progressKey, withStageState } from './pipeline.progress';
+import { classifyPipelineError, ENRICHMENT_EMPTY_MESSAGE, nextWorkStage, progressKey, WEBSITE_PARTIAL_MESSAGE, withStageState } from './pipeline.progress';
 import { PipelineRepository, type PipelineExecutionRow } from './pipeline.repository';
 import type { PipelineProgressState, StageTick } from './pipeline.types';
 
@@ -128,7 +128,8 @@ export class PipelineStageRunner {
       return this.fail(progress, KEY_TO_STAGE[key], classified.code, classified.message);
     }
     if (settlement.state === 'PARTIAL') {
-      const failures = [...progress.failures, { stage: KEY_TO_STAGE[key], message: settlement.message }];
+      const message = key === 'enrichment' && settlement.message === WEBSITE_PARTIAL_MESSAGE ? ENRICHMENT_EMPTY_MESSAGE : settlement.message;
+      const failures = [...progress.failures, { stage: KEY_TO_STAGE[key], message }];
       return this.advance({ ...progress, failures }, key, 'PARTIAL');
     }
     return this.advance(progress, key);

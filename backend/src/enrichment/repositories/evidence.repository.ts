@@ -10,7 +10,7 @@ import { SourceEvidence } from '../website/website.types';
 export class EvidenceRepository {
   constructor(@Inject(DRIZZLE) private readonly db: Database) {}
 
-  async persistEvidence(companyId: string, sourceUrl: string, evidence: SourceEvidence[], canonicalUrl?: string) {
+  async persistEvidence(companyId: string, sourceUrl: string, evidence: SourceEvidence[], canonicalUrl?: string, options?: { provider?: string; sourceType?: string; verified?: boolean }) {
     const inserted = [] as Array<typeof leadEvidence.$inferSelect>;
     for (const item of evidence) {
       const idempotencyKey = createHash('sha256').update(JSON.stringify({ companyId, field: item.field, sourceUrl: item.sourceUrl || sourceUrl, value: item.value, excerpt: item.evidenceExcerpt })).digest('hex');
@@ -21,8 +21,8 @@ export class EvidenceRepository {
         evidenceType: item.evidenceType,
         sourceUrl: item.sourceUrl || sourceUrl,
         canonicalUrl: canonicalUrl ?? null,
-        sourceType: 'WEBSITE',
-        provider: 'official_website',
+        sourceType: options?.sourceType ?? 'WEBSITE',
+        provider: options?.provider ?? 'official_website',
         evidenceText: item.evidenceExcerpt || item.value,
         evidenceTimestamp: item.retrievedAt ? new Date(item.retrievedAt) : new Date(),
         idempotencyKey,
@@ -31,9 +31,10 @@ export class EvidenceRepository {
           value: item.value,
           sourceUrl: item.sourceUrl,
           evidenceType: item.evidenceType,
-          sourceType: 'WEBSITE',
+          sourceType: options?.sourceType ?? 'WEBSITE',
           retrievedAt: item.retrievedAt,
           evidenceExcerpt: item.evidenceExcerpt || item.value,
+          ...(options?.verified === false ? { verified: false } : {}),
         },
       }).returning();
       if (record) {

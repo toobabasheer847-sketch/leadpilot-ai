@@ -5,6 +5,7 @@ import { Inject } from '@nestjs/common';
 import { DRIZZLE } from '../database/database.constants';
 import { companies, companyContacts, companyLocations, companySocialProfiles, leadClassifications, leadDuplicates, leadEvidence, leadQualifications, leadScores, leadVerifications, searchConfigurations, searchExecutions, sourceRecords } from '../database/schema/schema';
 import { normalizeDomain } from '../deduplication/normalization/normalization';
+import { companySizeFit } from '../qualification/engine/qualification-engine';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import type { ListExecutionsDto } from './dto/list-executions.dto';
 import { ListLeadsDto } from './dto/list-leads.dto';
@@ -29,6 +30,21 @@ export class LeadsService {
     if (filters.investorType) conditions.push(eq(companies.investorType, filters.investorType));
     if (filters.investmentStrategy) conditions.push(ilike(companies.investmentStrategy, `%${filters.investmentStrategy}%`));
     if (filters.companySize) conditions.push(or(eq(companies.employeeRange, filters.companySize), eq(companies.employeeCount, Number(filters.companySize) || -1))!);
+    if (filters.companySizeStatus === 'UNKNOWN') {
+      const min = filters.companySizeMin ?? 1;
+      const max = filters.companySizeMax ?? 50;
+      conditions.push(sql`${companies.employeeCount} is null and not ${containedSizeRange(min, max)} and not ${outsideSizeRange(min, max)}`);
+    }
+    if (filters.companySizeStatus === 'MATCHED') {
+      const min = filters.companySizeMin ?? 1;
+      const max = filters.companySizeMax ?? 50;
+      conditions.push(sql`(${companies.employeeCount} is not null and ${companies.employeeCount} >= ${min} and ${companies.employeeCount} <= ${max}) or (${companies.employeeCount} is null and ${containedSizeRange(min, max)})`);
+    }
+    if (filters.companySizeStatus === 'OUTSIDE_RANGE') {
+      const min = filters.companySizeMin ?? 1;
+      const max = filters.companySizeMax ?? 50;
+      conditions.push(sql`(${companies.employeeCount} is not null and (${companies.employeeCount} < ${min} or ${companies.employeeCount} > ${max})) or (${companies.employeeCount} is null and ${outsideSizeRange(min, max)})`);
+    }
     if (filters.search) {
       const query = `%${filters.search}%`;
       conditions.push(or(ilike(companies.name, query), ilike(companies.website, query), ilike(companies.description, query))!);
@@ -110,6 +126,16 @@ export class LeadsService {
       const rows = await this.db.select({ id: companies.id }).from(companies).where(and(eq(companies.organizationId, organizationId), filters.propertyType ? sql`${companies.propertyTypes}::text ilike ${`%${filters.propertyType}%`}` : undefined, filters.marketServed ? sql`${companies.marketsServed}::text ilike ${`%${filters.marketServed}%`}` : undefined));
       sets.push(this.uniqueIds(rows.map((row) => row.id)));
     }
+    if (filters.state || filters.city || filters.country || filters.zipCode) {
+      const rows = await this.db.select({ companyId: companyLocations.companyId }).from(companyLocations).innerJoin(companies, eq(companies.id, companyLocations.companyId)).where(and(
+        eq(companies.organizationId, organizationId),
+        filters.state ? or(...stateTerms(filters.state).map((term) => ilike(companyLocations.state, term))) : undefined,
+        filters.city ? ilike(companyLocations.city, filters.city) : undefined,
+        filters.country ? ilike(companyLocations.country, filters.country) : undefined,
+        filters.zipCode ? eq(companyLocations.postalCode, filters.zipCode) : undefined,
+      ));
+      sets.push(this.uniqueIds(rows.map((row) => row.companyId)));
+    }
     if (filters.duplicateStatus) {
       const rows = await this.db.select({ companyId: leadDuplicates.entityAId }).from(leadDuplicates).where(and(eq(leadDuplicates.organizationId, organizationId), eq(leadDuplicates.entityType, 'COMPANY'), eq(leadDuplicates.status, filters.duplicateStatus)));
       sets.push(this.uniqueIds(rows.map((row) => row.companyId)));
@@ -145,7 +171,8 @@ export class LeadsService {
       const verification = verifications.find((item) => item.companyId === company.id && item.contactId === null) ?? null;
       const duplicate = duplicates.find((item) => item.entityAId === company.id || item.entityBId === company.id) ?? null;
       const qualification = qualifications.find((item) => item.companyId === company.id) ?? null;
-      return { id: company.id, company: { id: company.id, name: company.name, website: company.website, domain: normalizeDomain(company.website), phone: company.phone, email: company.email, description: company.description, investorType: company.investorType, investmentStrategy: company.investmentStrategy, propertyTypes: company.propertyTypes, marketsServed: company.marketsServed, companySize: company.employeeCount ?? company.employeeRange, location: location ? { city: location.city, state: location.state, zipCode: location.postalCode, country: location.country, address: location.addressLine1 } : null }, contact: contact ? { id: contact.id, name: contact.fullName, title: contact.title, email: contact.email, phone: contact.phone, linkedin: contact.linkedinUrl, facebook: contact.facebookUrl, instagram: contact.instagramUrl } : null, socialProfiles: socials.filter((item) => item.companyId === company.id), classification: classification ? { decision: classification.decision, confidence: classification.confidence ? Number(classification.confidence) : null } : null, score: score ? { value: score.score, band: score.band, breakdown: score.breakdown } : null, verification: verification ? { status: verification.status, field: verification.field } : null, qualification: qualification ? { status: qualification.status, score: qualification.score, scoreBand: qualification.scoreBand, qualifiedReasons: qualification.qualifiedReasons, disqualifiedReasons: qualification.disqualifiedReasons, needsReviewReasons: qualification.needsReviewReasons, missingOptional: qualification.missingOptional, criterionResults: qualification.criterionResults, evaluatedAt: qualification.evaluatedAt } : null, duplicate: duplicate ? { status: duplicate.status, matchType: duplicate.matchType, confidence: duplicate.confidence ? Number(duplicate.confidence) : null } : { status: 'NO_DUPLICATE' }, evidence: evidenceRows.filter((item) => item.companyId === company.id), sourceUrls: sourceRows.filter((item) => item.companyId === company.id).map((item) => item.sourceUrl), createdAt: company.createdAt, updatedAt: company.updatedAt, lastVerifiedAt: company.lastVerifiedAt };
+      const sizeStatus = companySizeFit(company.employeeCount, company.employeeRange, { min: 1, max: 50 });
+      return { id: company.id, company: { id: company.id, name: company.name, website: company.website, domain: normalizeDomain(company.website), phone: company.phone, email: company.email, description: company.description, category: company.category, investorType: company.investorType, investmentStrategy: company.investmentStrategy, propertyTypes: company.propertyTypes, marketsServed: company.marketsServed, companySize: company.employeeCount ?? company.employeeRange ?? null, companySizeStatus: sizeStatus, location: location ? { city: location.city, state: location.state, zipCode: location.postalCode, country: location.country, address: location.addressLine1 } : null }, contact: contact ? { id: contact.id, name: contact.fullName, title: contact.title, email: contact.email, phone: contact.phone, linkedin: contact.linkedinUrl, facebook: contact.facebookUrl, instagram: contact.instagramUrl, youtube: contact.youtubeUrl } : null, socialProfiles: socials.filter((item) => item.companyId === company.id), classification: classification ? { decision: classification.decision, confidence: classification.confidence ? Number(classification.confidence) : null } : null, score: score ? { value: score.score, band: score.band, breakdown: score.breakdown } : null, verification: verification ? { status: verification.status, field: verification.field } : null, qualification: qualification ? { status: qualification.status, score: qualification.score, scoreBand: qualification.scoreBand, qualifiedReasons: qualification.qualifiedReasons, disqualifiedReasons: qualification.disqualifiedReasons, needsReviewReasons: qualification.needsReviewReasons, missingOptional: qualification.missingOptional, criterionResults: qualification.criterionResults, evaluatedAt: qualification.evaluatedAt } : null, duplicate: duplicate ? { status: duplicate.status, matchType: duplicate.matchType, confidence: duplicate.confidence ? Number(duplicate.confidence) : null } : { status: 'NO_DUPLICATE' }, evidence: evidenceRows.filter((item) => item.companyId === company.id), sourceUrls: sourceRows.filter((item) => item.companyId === company.id).map((item) => item.sourceUrl), createdAt: company.createdAt, updatedAt: company.updatedAt, lastVerifiedAt: company.lastVerifiedAt };
     });
   }
 
@@ -162,4 +189,21 @@ export class LeadsService {
   }
 
   private uniqueIds(ids: string[]) { return [...new Set(ids)]; }
+}
+
+function stateTerms(value: string): string[] {
+  const aliases: Record<string, string[]> = { texas: ['Texas', 'TX'], tx: ['Texas', 'TX'] };
+  return aliases[value.trim().toLowerCase()] ?? [value.trim()];
+}
+
+function sizeSpan(column: typeof companies.employeeRange) {
+  return sql`regexp_match(replace(${column}, '–', '-'), '^([0-9]+)-([0-9]+)$')`;
+}
+
+function containedSizeRange(min: number, max: number) {
+  return sql`${sizeSpan(companies.employeeRange)} is not null and (${sizeSpan(companies.employeeRange)})[1]::int >= ${min} and (${sizeSpan(companies.employeeRange)})[2]::int <= ${max} and (${sizeSpan(companies.employeeRange)})[1]::int <= (${sizeSpan(companies.employeeRange)})[2]::int`;
+}
+
+function outsideSizeRange(min: number, max: number) {
+  return sql`${sizeSpan(companies.employeeRange)} is not null and ((${sizeSpan(companies.employeeRange)})[2]::int < ${min} or (${sizeSpan(companies.employeeRange)})[1]::int > ${max})`;
 }

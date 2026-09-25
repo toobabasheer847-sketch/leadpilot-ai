@@ -11,6 +11,8 @@ import { EnrichmentService } from './enrichment.service';
 import { CompanyEnrichmentRepository } from './repositories/company-enrichment.repository';
 import { EvidenceRepository } from './repositories/evidence.repository';
 import { CompanySocialDiscoveryService } from './social/company-social-discovery.service';
+import { TavilyWebSearchProvider } from './website/tavily-web-search.provider';
+import { WEB_SEARCH_PROVIDER } from './website/web-search.types';
 import { WebsiteDiscoveryService } from './website/website-discovery.service';
 import { WebsiteFetchService } from './website/website-fetch.service';
 import { WebsiteNormalizerService } from './website/website-normalizer.service';
@@ -23,6 +25,8 @@ import { UsageModule } from '../usage/usage.module';
   providers: [
     WebsiteNormalizerService,
     WebsiteFetchService,
+    TavilyWebSearchProvider,
+    { provide: WEB_SEARCH_PROVIDER, useExisting: TavilyWebSearchProvider },
     WebsiteDiscoveryService,
     WebsiteParserService,
     CompanySocialDiscoveryService,

@@ -49,9 +49,9 @@ export default () => ({
   },
 
   openRouter: {
-    apiKey: process.env.OPENROUTER_API_KEY,
-    model: process.env.OPENROUTER_MODEL,
-    baseUrl: process.env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1',
+    apiKey: process.env.OPENROUTER_API_KEY?.trim() || undefined,
+    model: process.env.OPENROUTER_MODEL?.trim() || undefined,
+    baseUrl: process.env.OPENROUTER_BASE_URL?.trim() || 'https://openrouter.ai/api/v1',
     timeoutMs: parseInt(process.env.OPENROUTER_TIMEOUT_MS ?? '20000', 10),
     retries: parseInt(process.env.OPENROUTER_RETRIES ?? '2', 10),
   },
@@ -75,6 +75,14 @@ export default () => ({
       }
     })(),
     reVerifyAfterDays: parseInt(process.env.VERIFICATION_REVERIFY_AFTER_DAYS ?? '30', 10),
+  },
+
+  webSearch: {
+    provider: process.env.WEB_SEARCH_PROVIDER?.trim() || 'tavily',
+    tavilyApiKey: process.env.TAVILY_API_KEY?.trim() || undefined,
+    tavilyApiUrl: process.env.TAVILY_API_URL?.trim() || 'https://api.tavily.com/search',
+    timeoutMs: parseInt(process.env.WEB_SEARCH_TIMEOUT_MS ?? '10000', 10),
+    maxResults: parseInt(process.env.WEB_SEARCH_MAX_RESULTS ?? '5', 10),
   },
 
   website: {
@@ -163,13 +171,47 @@ export function validateEnvironment(config: Record<string, unknown>) {
     throw new Error('CORS_ORIGIN cannot be "*" in production');
   }
 
+  const openRouterKey = typeof config.OPENROUTER_API_KEY === 'string' ? config.OPENROUTER_API_KEY.trim() : '';
+  const openRouterModel = typeof config.OPENROUTER_MODEL === 'string' ? config.OPENROUTER_MODEL.trim() : '';
+
   if (nodeEnv === 'production') {
     const sourceProvider = typeof config.SOURCE_PROVIDER === 'string' ? config.SOURCE_PROVIDER : 'google_places';
     if (sourceProvider === 'fake' || sourceProvider === 'fake_source') {
       throw new Error('SOURCE_PROVIDER=fake is not allowed in production');
     }
-    if (!config.OPENROUTER_API_KEY || !config.OPENROUTER_MODEL) {
+    if (!openRouterKey || !openRouterModel) {
       throw new Error('OPENROUTER_API_KEY and OPENROUTER_MODEL are required in production');
+    }
+  }
+
+  if ((typeof config.OPENROUTER_API_KEY === 'string' && config.OPENROUTER_API_KEY.length > 0 && !openRouterKey)
+    || (typeof config.OPENROUTER_MODEL === 'string' && config.OPENROUTER_MODEL.length > 0 && !openRouterModel)) {
+    throw new Error('OPENROUTER_API_KEY and OPENROUTER_MODEL must be non-empty when set');
+  }
+  if (Boolean(openRouterKey) !== Boolean(openRouterModel)) {
+    throw new Error('OPENROUTER_API_KEY and OPENROUTER_MODEL must both be set');
+  }
+  if (typeof config.OPENROUTER_BASE_URL === 'string' && config.OPENROUTER_BASE_URL.trim()) {
+    let openRouterUrl: URL;
+    try {
+      openRouterUrl = new URL(config.OPENROUTER_BASE_URL);
+    } catch {
+      throw new Error('OPENROUTER_BASE_URL must be a valid https URL');
+    }
+    if (openRouterUrl.protocol !== 'https:') {
+      throw new Error('OPENROUTER_BASE_URL must be a valid https URL');
+    }
+  }
+  if (typeof config.OPENROUTER_TIMEOUT_MS !== 'undefined') {
+    const openRouterTimeoutMs = Number(config.OPENROUTER_TIMEOUT_MS);
+    if (!Number.isInteger(openRouterTimeoutMs) || openRouterTimeoutMs < 1000 || openRouterTimeoutMs > 120000) {
+      throw new Error('OPENROUTER_TIMEOUT_MS must be an integer between 1000 and 120000');
+    }
+  }
+  if (typeof config.OPENROUTER_RETRIES !== 'undefined') {
+    const openRouterRetries = Number(config.OPENROUTER_RETRIES);
+    if (!Number.isInteger(openRouterRetries) || openRouterRetries < 0 || openRouterRetries > 5) {
+      throw new Error('OPENROUTER_RETRIES must be an integer between 0 and 5');
     }
   }
 
@@ -226,6 +268,37 @@ export function validateEnvironment(config: Record<string, unknown>) {
 
   if (typeof config.JWT_EXPIRES_IN !== 'undefined' && typeof config.JWT_EXPIRES_IN !== 'string') {
     throw new Error('JWT_EXPIRES_IN must be a string');
+  }
+
+  const webSearchProvider = typeof config.WEB_SEARCH_PROVIDER === 'string' && config.WEB_SEARCH_PROVIDER.trim()
+    ? config.WEB_SEARCH_PROVIDER.trim().toLowerCase()
+    : 'tavily';
+  if (!['tavily', 'fake', 'fake_web_search'].includes(webSearchProvider)) {
+    throw new Error(`Unsupported WEB_SEARCH_PROVIDER: ${webSearchProvider}`);
+  }
+  if ((webSearchProvider === 'fake' || webSearchProvider === 'fake_web_search') && nodeEnv !== 'test') {
+    throw new Error('WEB_SEARCH_PROVIDER=fake is only allowed in tests');
+  }
+  if (typeof config.TAVILY_API_URL === 'string' && config.TAVILY_API_URL.trim()) {
+    let tavilyUrl: URL;
+    try {
+      tavilyUrl = new URL(config.TAVILY_API_URL);
+    } catch {
+      throw new Error('TAVILY_API_URL must be a valid https URL');
+    }
+    if (tavilyUrl.protocol !== 'https:') throw new Error('TAVILY_API_URL must be a valid https URL');
+  }
+  if (typeof config.WEB_SEARCH_TIMEOUT_MS !== 'undefined') {
+    const webSearchTimeoutMs = Number(config.WEB_SEARCH_TIMEOUT_MS);
+    if (!Number.isInteger(webSearchTimeoutMs) || webSearchTimeoutMs < 1000 || webSearchTimeoutMs > 60000) {
+      throw new Error('WEB_SEARCH_TIMEOUT_MS must be an integer between 1000 and 60000');
+    }
+  }
+  if (typeof config.WEB_SEARCH_MAX_RESULTS !== 'undefined') {
+    const webSearchMaxResults = Number(config.WEB_SEARCH_MAX_RESULTS);
+    if (!Number.isInteger(webSearchMaxResults) || webSearchMaxResults < 1 || webSearchMaxResults > 10) {
+      throw new Error('WEB_SEARCH_MAX_RESULTS must be an integer between 1 and 10');
+    }
   }
 
   const websiteFetchTimeoutMs = Number(config.WEBSITE_FETCH_TIMEOUT_MS ?? 10000);
