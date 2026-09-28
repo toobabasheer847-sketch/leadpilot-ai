@@ -2,15 +2,17 @@ import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { DRIZZLE } from '../database/database.constants';
 import type { Database } from '../database/database.types';
-import { auditLogs, companies, companyContacts, leadEvidence } from '../database/schema/schema';
+import { auditLogs, companies, companyContacts, leadEvidence, pipelineJobs, searchExecutions } from '../database/schema/schema';
 import { ContactDiscoveryQueue } from './contact-discovery.queue';
 import { PersonDiscoveryService } from './discovery/person-discovery.service';
 import { ContactEvidenceService } from './verification/contact-evidence.service';
 import { ContactDiscoveryContext } from './types/contact.types';
 import { UsageService } from '../usage/usage.service';
 import { ProviderObservabilityService } from '../common/observability/provider-observability.service';
-import { pipelineJobs } from '../database/schema/schema';
 import { createHash } from 'node:crypto';
+import type { SearchPlan } from '../search/types/search-plan.types';
+import { decisionMakerRolesForPlan } from '../search/search-plan.limits';
+import { companyDomainFromWebsite } from './discovery/public-decision-maker';
 
 @Injectable()
 export class ContactsService {
@@ -46,7 +48,21 @@ export class ContactsService {
     )).limit(1);
     if (!company) throw new NotFoundException('Company not found');
 
-    const context: ContactDiscoveryContext = { companyId, organizationId, searchExecutionId: searchExecutionId ?? null, companyWebsite: company.website ?? null, correlationId };
+    const plan = await this.loadPlan(searchExecutionId, organizationId);
+    const roles = decisionMakerRolesForPlan(plan);
+    const context: ContactDiscoveryContext = {
+      companyId,
+      organizationId,
+      searchExecutionId: searchExecutionId ?? null,
+      companyWebsite: company.website ?? null,
+      companyDomain: companyDomainFromWebsite(company.website),
+      correlationId,
+      decisionMakerRoles: roles,
+      personFields: plan?.personFields ?? [],
+      socialPlatforms: plan?.socialPlatforms ?? [],
+      emailRequested: Boolean(plan?.emailRequirement?.requested || plan?.personFields?.some((field) => /email/i.test(field))),
+      allowProviderEnrichment: true,
+    };
     await this.usage.checkRequestRate(organizationId, undefined, 'CONTACT_DISCOVERY');
     let result;
     try {
@@ -108,15 +124,26 @@ export class ContactsService {
       }
     }
 
+    const outcome = saved > 0 ? 'COMPLETED' : 'NOT_FOUND';
     await this.db.insert(auditLogs).values({
       organizationId,
       entityId: companyId,
-      action: 'CONTACT_DISCOVERY_COMPLETED',
+      action: saved > 0 ? 'CONTACT_DISCOVERY_COMPLETED' : 'CONTACT_DISCOVERY_NOT_FOUND',
       entityType: 'company',
-      metadata: { companyId, candidates: String(saved) },
+      metadata: { companyId, candidates: String(saved), outcome, roles: roles.join(',') },
     });
 
-    return { companyId, candidates: saved, status: 'COMPLETED' };
+    // Missing contacts are PARTIAL/NOT_FOUND data, never a failed company job.
+    return { companyId, candidates: saved, status: outcome === 'NOT_FOUND' ? 'COMPLETED' : 'COMPLETED', outcome };
+  }
+
+  private async loadPlan(searchExecutionId: string | null | undefined, organizationId: string): Promise<SearchPlan | null> {
+    if (!searchExecutionId) return null;
+    const [row] = await this.db.select({ plan: searchExecutions.structuredPlan }).from(searchExecutions).where(and(
+      eq(searchExecutions.id, searchExecutionId),
+      eq(searchExecutions.organizationId, organizationId),
+    )).limit(1);
+    return row?.plan && typeof row.plan === 'object' ? row.plan as SearchPlan : null;
   }
 
   private jobKey(companyId: string, organizationId: string, searchExecutionId: string | null) {

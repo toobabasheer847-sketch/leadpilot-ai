@@ -90,14 +90,17 @@ export class ContactExtractorService {
     return match?.[0]?.trim() ?? null;
   }
 
-  extractNameTitlePairs(text: string): Array<{ fullName: string; title: string | null; originalTitle: string | null }> {
+  extractNameTitlePairs(text: string, targetRoles?: string[]): Array<{ fullName: string; title: string | null; originalTitle: string | null }> {
     const pairs: Array<{ fullName: string; title: string | null; originalTitle: string | null }> = [];
     const nameRegex = /([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})/g;
     const names = Array.from(new Set((text.match(nameRegex) ?? [])
       .map((name) => this.normalizeName(name.trim()))
       .filter((name) => name && !/^\d+$/.test(name))));
     const configuredRoles = this.config.get<string[]>('decisionMaker.rolePriorities', []);
-    const titlePriority = configuredRoles.length ? configuredRoles : ['CEO', 'FOUNDER', 'CO_FOUNDER', 'PRESIDENT', 'OWNER', 'MANAGING_PARTNER', 'PARTNER', 'PRINCIPAL', 'MANAGING_DIRECTOR', 'DIRECTOR', 'GENERAL_MANAGER', 'MANAGER'];
+    const titlePriority = (targetRoles?.length
+      ? targetRoles.map((role) => role.trim().toUpperCase().replace(/\s+/g, '_'))
+      : (configuredRoles.length ? configuredRoles : ['CEO', 'FOUNDER', 'CO_FOUNDER', 'PRESIDENT', 'OWNER', 'MANAGING_DIRECTOR', 'DIRECTOR', 'MANAGER']))
+      .filter(Boolean);
 
     for (const name of names) {
       const lowerText = text.toLowerCase();
@@ -107,13 +110,16 @@ export class ContactExtractorService {
       const before = text.slice(Math.max(0, idx - 120), idx);
       const after = text.slice(idx + name.length, idx + name.length + 180);
       const combined = `${before} ${after}`.toLowerCase();
-      const matchedTitles = titlePriority.filter((title) => combined.includes(title.toLowerCase()));
+      const matchedTitles = titlePriority.filter((title) => {
+        const needle = title.toLowerCase().replace(/_/g, ' ');
+        return combined.includes(needle) || combined.includes(title.toLowerCase().replace(/_/g, ''));
+      });
       if (matchedTitles.length === 0) {
         pairs.push({ fullName: this.normalizeName(name), title: null, originalTitle: null });
         continue;
       }
       for (const title of matchedTitles) {
-        pairs.push({ fullName: this.normalizeName(name), title: this.normalizeTitle(title), originalTitle: title });
+        pairs.push({ fullName: this.normalizeName(name), title: this.normalizeTitle(title.replace(/_/g, ' ')), originalTitle: title.replace(/_/g, ' ') });
       }
     }
     return pairs;

@@ -16,30 +16,34 @@ const TITLES: Array<[RegExp, string]> = [
   [/\bprincipal\b/i, 'Principal'],
   [/\bpartner\b/i, 'Partner'],
   [/\bdirector\b/i, 'Director'],
+  [/\bmanager\b/i, 'Manager'],
 ];
 
 const NAME = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g;
 const BLOCKED_NAMES = /^(real estate|texas|linkedin|facebook|instagram|youtube|twitter|managing partner|managing director|general manager|investment manager|chief executive|private equity)$/i;
 
-export function decisionMakerQueries(companyName: string): string[] {
+export function decisionMakerQueries(companyName: string, roles?: string[]): string[] {
   const name = companyName.trim();
   if (!name) return [];
-  return [
-    `"${name}" founder`,
-    `"${name}" CEO`,
-    `"${name}" president`,
-    `"${name}" "managing partner"`,
-    `"${name}" principal`,
-  ];
+  const roleTerms = (roles?.length ? roles : ['Founder', 'CEO', 'President', 'Owner', 'Managing Director'])
+    .map((role) => role.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  return roleTerms.map((role) => {
+    const term = /\s/.test(role) ? `"${role}"` : role;
+    return `"${name}" ${term}`;
+  });
 }
 
 export function assessPublicDecisionMaker(
   companyName: string,
   hit: { title: string; url: string; snippet: string; source?: string; retrievedAt?: string },
+  options?: { allowedRoles?: string[] },
 ): ContactCandidate | null {
   const text = `${hit.title}. ${hit.snippet}`.replace(/\s+/g, ' ').trim();
   const title = TITLES.find(([pattern]) => pattern.test(text));
   if (!title) return null;
+  if (options?.allowedRoles?.length && !roleMatches(title[1], options.allowedRoles)) return null;
   const fullName = personName(text, title[1], companyName);
   if (!fullName) return null;
   const clause = personWindows(text, fullName);
@@ -77,6 +81,19 @@ export function assessPublicDecisionMaker(
     status: 'DISCOVERED',
     verificationStatus: 'NOT_VERIFIED',
   };
+}
+
+export function roleMatches(title: string, allowedRoles: string[]): boolean {
+  const normalizedTitle = title.trim().toLowerCase().replace(/[_-]+/g, ' ');
+  return allowedRoles.some((role) => {
+    const normalizedRole = role.trim().toLowerCase().replace(/[_-]+/g, ' ');
+    if (!normalizedRole) return false;
+    if (normalizedTitle === normalizedRole) return true;
+    if (normalizedTitle.includes(normalizedRole) || normalizedRole.includes(normalizedTitle)) return true;
+    const compactTitle = normalizedTitle.replace(/\s+/g, '');
+    const compactRole = normalizedRole.replace(/\s+/g, '');
+    return compactTitle === compactRole || compactTitle.includes(compactRole) || compactRole.includes(compactTitle);
+  });
 }
 
 function companyAssociated(companyName: string, text: string): boolean {
@@ -181,4 +198,14 @@ export function isCompanyProfileUrl(url: string): boolean {
 
 function evidenceEntry(field: string, value: string, sourceUrl: string, excerpt: string, retrievedAt: string) {
   return { field, value, sourceUrl, evidenceExcerpt: excerpt, retrievedAt, evidenceType: 'PUBLIC_WEB_SEARCH' };
+}
+
+export function companyDomainFromWebsite(website?: string | null): string | null {
+  if (!website?.trim()) return null;
+  try {
+    const host = new URL(website.includes('://') ? website : `https://${website}`).hostname.toLowerCase().replace(/^www\./, '');
+    return host || null;
+  } catch {
+    return null;
+  }
 }

@@ -6,6 +6,8 @@ export interface ContactQualityJobData {
   organizationId: string;
   companyId: string;
   contactId: string;
+  searchExecutionId?: string | null;
+  targetRoles?: string[];
 }
 
 @Injectable()

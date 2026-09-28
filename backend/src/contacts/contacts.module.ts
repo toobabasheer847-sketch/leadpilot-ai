@@ -13,6 +13,7 @@ import { ContactExtractorService } from './extraction/contact-extractor.service'
 import { PersonIdentityMatcherService } from './matching/person-identity-matcher.service';
 import { CONTACT_DISCOVERY_PROVIDER } from './providers/contact-provider.interface';
 import { WebsiteContactProvider } from './providers/website-contact.provider';
+import { SnovContactProvider } from './providers/snov-contact.provider';
 import { ContactEvidenceService } from './verification/contact-evidence.service';
 import { EnrichmentModule } from '../enrichment/enrichment.module';
 import { ScoringModule } from '../scoring/scoring.module';
@@ -20,9 +21,10 @@ import { ContactQualityQueue } from './quality/contact-quality.queue';
 import { ContactQualityProcessor } from './quality/contact-quality.processor';
 import { ContactQualityService } from './quality/contact-quality.service';
 import { UsageModule } from '../usage/usage.module';
+import { CommonModule } from '../common/common.module';
 
 @Module({
-  imports: [ConfigModule, AuthModule, UsersModule, EnrichmentModule, UsageModule, ScoringModule, BullModule.registerQueue({ name: 'contact-discovery-queue' }), BullModule.registerQueue({ name: 'contact-quality-queue' })],
+  imports: [ConfigModule, AuthModule, UsersModule, EnrichmentModule, UsageModule, ScoringModule, CommonModule, BullModule.registerQueue({ name: 'contact-discovery-queue' }), BullModule.registerQueue({ name: 'contact-quality-queue' })],
   controllers: [ContactsController],
   providers: [
     ContactsService,
@@ -30,6 +32,7 @@ import { UsageModule } from '../usage/usage.module';
     PersonCandidateService,
     PersonIdentityMatcherService,
     WebsiteContactProvider,
+    SnovContactProvider,
     PersonDiscoveryService,
     ContactEvidenceService,
     ContactDiscoveryQueue,

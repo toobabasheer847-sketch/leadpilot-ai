@@ -4,11 +4,18 @@ import { assessPublicDecisionMaker, decisionMakerQueries } from './public-decisi
 describe('public decision maker discovery', () => {
   it('builds company-scoped title queries', () => {
     expect(decisionMakerQueries('Oak Stream Investors')).toEqual([
-      '"Oak Stream Investors" founder',
+      '"Oak Stream Investors" Founder',
       '"Oak Stream Investors" CEO',
-      '"Oak Stream Investors" president',
-      '"Oak Stream Investors" "managing partner"',
-      '"Oak Stream Investors" principal',
+      '"Oak Stream Investors" President',
+      '"Oak Stream Investors" Owner',
+      '"Oak Stream Investors" "Managing Director"',
+    ]);
+  });
+
+  it('builds role-filtered queries from SearchPlan roles', () => {
+    expect(decisionMakerQueries('Oak Stream Investors', ['CEO', 'Founder'])).toEqual([
+      '"Oak Stream Investors" CEO',
+      '"Oak Stream Investors" Founder',
     ]);
   });
 

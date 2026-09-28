@@ -4,11 +4,13 @@ import { createHash } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { DRIZZLE } from '../../database/database.constants';
 import type { Database } from '../../database/database.types';
-import { companies, companyContacts, leadDuplicates, leadEvidence, leadVerifications, verificationConflicts } from '../../database/schema/schema';
+import { companies, companyContacts, leadDuplicates, leadEvidence, leadVerifications, searchExecutions, verificationConflicts } from '../../database/schema/schema';
 import { ScoringService } from '../../scoring/scoring.service';
 import { StructuredLoggerService } from '../../common/observability/structured-logger.service';
 import { ContactQualityJobData, ContactQualityQueue } from './contact-quality.queue';
 import { ContactFieldStatus, ContactQualityEvidence, ContactQualityResult, contactAccessAllowed, evaluateContactQuality } from './contact-quality.engine';
+import { decisionMakerRolesForPlan } from '../../search/search-plan.limits';
+import type { SearchPlan } from '../../search/types/search-plan.types';
 
 const FIELD_COLUMNS = {
   name: 'fullName',
@@ -31,10 +33,16 @@ export class ContactQualityService {
     private readonly logger: StructuredLoggerService,
   ) {}
 
-  async enqueue(companyId: string, contactId: string, organizationId: string) {
+  async enqueue(companyId: string, contactId: string, organizationId: string, options?: { searchExecutionId?: string | null; targetRoles?: string[] }) {
     await this.loadOwnedContact(companyId, contactId, organizationId);
     const jobId = `contact-quality-${createHash('sha256').update(`${organizationId}-${companyId}-${contactId}`).digest('hex')}`;
-    const job = await this.queue.enqueue({ organizationId, companyId, contactId }, jobId);
+    const job = await this.queue.enqueue({
+      organizationId,
+      companyId,
+      contactId,
+      searchExecutionId: options?.searchExecutionId ?? null,
+      targetRoles: options?.targetRoles,
+    }, jobId);
     this.logger.info('job.contact_quality.queued', { jobId: job.id, organizationId, companyId, contactId });
     return { status: 'QUEUED' as const, jobId: job.id ?? jobId };
   }
@@ -50,6 +58,9 @@ export class ContactQualityService {
       linkedinUrl: companyContacts.linkedinUrl,
       title: companyContacts.title,
     }).from(companyContacts).where(eq(companyContacts.companyId, loaded.company.id));
+    const planRoles = data.targetRoles?.length
+      ? data.targetRoles
+      : decisionMakerRolesForPlan(await this.loadPlan(data.searchExecutionId, data.organizationId));
     const result = evaluateContactQuality({
       contact: {
         id: loaded.contact.id,
@@ -67,7 +78,7 @@ export class ContactQualityService {
       company: { id: loaded.company.id, name: loaded.company.name, website: loaded.company.website, phone: loaded.company.phone },
       evidence: evidenceRows.map((row) => this.toEvidence(row)),
       peers: peers.map((peer) => ({ ...peer, fullName: peer.fullName ?? '' })),
-      targetRoles: this.config.get<string[]>('decisionMaker.rolePriorities') ?? [],
+      targetRoles: planRoles.length ? planRoles.map((role) => role.toUpperCase().replace(/\s+/g, '_')) : (this.config.get<string[]>('decisionMaker.rolePriorities') ?? []),
       reverifyAfterDays: this.config.get<number>('verification.reVerifyAfterDays') ?? 30,
     });
     await this.persist(loaded.company.id, loaded.contact.id, data.organizationId, result);
@@ -75,7 +86,7 @@ export class ContactQualityService {
       companyId: loaded.company.id,
       contactId: loaded.contact.id,
       organizationId: data.organizationId,
-      searchExecutionId: null,
+      searchExecutionId: data.searchExecutionId ?? null,
       force: true,
       idempotencyKey: createHash('sha256').update(`contact-quality-score-${data.organizationId}-${loaded.contact.id}-${result.lastVerifiedAt}`).digest('hex'),
     });
@@ -239,6 +250,15 @@ export class ContactQualityService {
       .limit(1);
     if (!row || !contactAccessAllowed(row.company.organizationId, organizationId)) throw new NotFoundException('Contact not found');
     return row;
+  }
+
+  private async loadPlan(searchExecutionId: string | null | undefined, organizationId: string): Promise<SearchPlan | null> {
+    if (!searchExecutionId) return null;
+    const [row] = await this.db.select({ plan: searchExecutions.structuredPlan }).from(searchExecutions).where(and(
+      eq(searchExecutions.id, searchExecutionId),
+      eq(searchExecutions.organizationId, organizationId),
+    )).limit(1);
+    return row?.plan && typeof row.plan === 'object' ? row.plan as SearchPlan : null;
   }
 
   private confidence(status: ContactFieldStatus) {

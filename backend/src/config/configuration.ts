@@ -58,6 +58,10 @@ export default () => ({
 
   contactProvider: {
     apiKey: process.env.CONTACT_PROVIDER_API_KEY,
+    clientId: process.env.CONTACT_PROVIDER_CLIENT_ID?.trim() || undefined,
+    clientSecret: process.env.CONTACT_PROVIDER_CLIENT_SECRET?.trim() || process.env.CONTACT_PROVIDER_API_KEY?.trim() || undefined,
+    baseUrl: process.env.CONTACT_PROVIDER_BASE_URL?.trim() || 'https://api.snov.io',
+    timeoutMs: parseInt(process.env.CONTACT_PROVIDER_TIMEOUT_MS ?? '10000', 10),
     emailApiKey: process.env.EMAIL_ENRICHMENT_API_KEY,
   },
 

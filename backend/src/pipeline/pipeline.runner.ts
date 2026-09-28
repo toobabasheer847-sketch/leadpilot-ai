@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { SearchPlan } from '../search/types/search-plan.types';
-import { employeeSizeRequested } from '../search/search-plan.limits';
+import { employeeSizeRequested, contactDiscoveryRequested, decisionMakerRolesForPlan } from '../search/search-plan.limits';
 import type { ClassificationCriteria } from '../ai/classification/types/classification.types';
 import { EnrichmentService } from '../enrichment/enrichment.service';
 import { ContactsService } from '../contacts/contacts.service';
@@ -157,6 +157,9 @@ export class PipelineStageRunner {
     if (key === 'employeeSize') {
       if (!row.searchExecutionId || !employeeSizeRequested(await this.planFor(row))) return [];
     }
+    if (key === 'decisionMakerDiscovery') {
+      if (!row.searchExecutionId || !contactDiscoveryRequested(await this.planFor(row))) return [];
+    }
     if (key === 'websiteDiscovery') {
       if (!row.searchExecutionId) return [];
       const enqueued = await this.enrichment.enqueueCompanyEnrichment(row.searchExecutionId, row.organizationId);
@@ -216,9 +219,13 @@ export class PipelineStageRunner {
     if (!row.searchExecutionId) return [];
     const companyIds = await this.repository.listCompanyIds(row.organizationId, row.searchExecutionId);
     const contacts = await this.repository.listContactIds(row.organizationId, companyIds);
+    const targetRoles = decisionMakerRolesForPlan(await this.planFor(row));
     const jobIds: string[] = [];
     for (const contact of contacts) {
-      const result = await this.contactQuality.enqueue(contact.companyId, contact.id, row.organizationId);
+      const result = await this.contactQuality.enqueue(contact.companyId, contact.id, row.organizationId, {
+        searchExecutionId: row.searchExecutionId,
+        targetRoles,
+      });
       if (result.jobId) jobIds.push(String(result.jobId));
     }
     return jobIds;

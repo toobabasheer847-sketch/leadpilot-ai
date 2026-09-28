@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { WebsiteDiscoveryService } from '../../enrichment/website/website-discovery.service';
 import { WebsiteNormalizerService } from '../../enrichment/website/website-normalizer.service';
-import { isPersonProfileUrl } from '../discovery/public-decision-maker';
+import { isPersonProfileUrl, roleMatches } from '../discovery/public-decision-maker';
 import { ContactExtractorService } from '../extraction/contact-extractor.service';
 import { ContactCandidate, ContactDiscoveryContext, ContactDiscoveryResult } from '../types/contact.types';
 import { ContactDiscoveryProvider } from './contact-provider.interface';
@@ -15,8 +15,10 @@ export class WebsiteContactProvider implements ContactDiscoveryProvider {
   ) {}
 
   async discover(company: { id: string; name: string; website?: string | null }, context: ContactDiscoveryContext): Promise<ContactDiscoveryResult> {
+    // Prefer the known official website so Phase D does not re-run web-search website discovery.
     const result = await this.websiteDiscovery.discover(company.website ?? context.companyWebsite, company.name);
-    const candidates = (result.pages ?? (result.page ? [result.page] : [])).flatMap((page) => this.extractCandidatesFromHtml(page.finalUrl, page.content, company.name));
+    const roles = context.decisionMakerRoles;
+    const candidates = (result.pages ?? (result.page ? [result.page] : [])).flatMap((page) => this.extractCandidatesFromHtml(page.finalUrl, page.content, company.name, roles));
     const unique = new Map<string, ContactCandidate>();
     for (const candidate of candidates) {
       const key = `${candidate.fullName.toLowerCase()}|${candidate.normalizedRole ?? candidate.title ?? ''}`;
@@ -27,27 +29,28 @@ export class WebsiteContactProvider implements ContactDiscoveryProvider {
     return { candidates: [...unique.values()] };
   }
 
-  extractCandidatesFromHtml(url: string, html: string, companyName: string): ContactCandidate[] {
+  extractCandidatesFromHtml(url: string, html: string, companyName: string, targetRoles?: string[]): ContactCandidate[] {
     const text = this.stripHtml(html);
     const candidates: ContactCandidate[] = [];
-    for (const pair of this.extractor.extractNameTitlePairs(text)) {
+    for (const pair of this.extractor.extractNameTitlePairs(text, targetRoles)) {
       if (!pair.title) continue;
+      if (targetRoles?.length && !roleMatches(pair.originalTitle ?? pair.title, targetRoles) && !roleMatches(pair.title, targetRoles)) continue;
       const nameIndex = text.toLowerCase().indexOf(pair.fullName.toLowerCase());
       if (nameIndex < 0) continue;
       const excerpt = text.slice(Math.max(0, nameIndex - 160), Math.min(text.length, nameIndex + pair.fullName.length + 220)).trim();
-      const relationshipSupported = excerpt.toLowerCase().includes(companyName.toLowerCase()) || /\b(of|at|for)\b/i.test(excerpt);
-      if (!relationshipSupported) continue;
+      if (!this.companyRelationshipSupported(excerpt, companyName)) continue;
       const email = this.extractor.extractPublicEmail(excerpt);
       const phone = this.extractor.extractPublicPhone(excerpt);
       const profiles = this.profileLinksForPerson(html, url, pair.fullName);
+      const evidenceType = this.evidenceTypeForUrl(url);
       const evidence = [
-        this.extractor.buildEvidence('fullName', pair.fullName, url, 'COMPANY_WEBSITE', excerpt),
-        this.extractor.buildEvidence('title', pair.originalTitle ?? pair.title, url, 'COMPANY_WEBSITE', excerpt),
-        this.extractor.buildEvidence('companyRelationship', companyName, url, 'COMPANY_WEBSITE', excerpt),
+        this.extractor.buildEvidence('fullName', pair.fullName, url, evidenceType, excerpt),
+        this.extractor.buildEvidence('title', pair.originalTitle ?? pair.title, url, evidenceType, excerpt),
+        this.extractor.buildEvidence('companyRelationship', companyName, url, evidenceType, excerpt),
       ];
-      if (email) evidence.push(this.extractor.buildEvidence('email', email, url, 'COMPANY_WEBSITE', excerpt));
-      if (phone) evidence.push(this.extractor.buildEvidence('phone', phone, url, 'COMPANY_WEBSITE', excerpt));
-      for (const profile of profiles) evidence.push(this.extractor.buildEvidence('profileUrl', profile.url, url, 'COMPANY_WEBSITE', profile.excerpt));
+      if (email) evidence.push(this.extractor.buildEvidence('email', email, url, evidenceType, excerpt));
+      if (phone) evidence.push(this.extractor.buildEvidence('phone', phone, url, evidenceType, excerpt));
+      for (const profile of profiles) evidence.push(this.extractor.buildEvidence('profileUrl', profile.url, url, evidenceType, profile.excerpt));
       candidates.push({
         fullName: pair.fullName,
         originalTitle: pair.originalTitle,
@@ -68,6 +71,24 @@ export class WebsiteContactProvider implements ContactDiscoveryProvider {
       });
     }
     return candidates;
+  }
+
+  private companyRelationshipSupported(excerpt: string, companyName: string): boolean {
+    const lower = excerpt.toLowerCase();
+    const normalized = companyName.trim().toLowerCase();
+    if (normalized.length >= 3 && lower.includes(normalized)) return true;
+    const tokens = normalized.split(/[^a-z0-9]+/).filter((token) => token.length >= 4 && !['investments', 'investment', 'capital', 'group', 'partners', 'properties', 'company', 'holdings', 'inc', 'llc'].includes(token));
+    return tokens.length > 0 && tokens.every((token) => lower.includes(token));
+  }
+
+  private evidenceTypeForUrl(url: string): string {
+    const path = (() => {
+      try { return new URL(url).pathname.toLowerCase(); } catch { return url.toLowerCase(); }
+    })();
+    if (/\/(team|our-team|leadership|management)\b/.test(path)) return 'WEBSITE_TEAM_PAGE';
+    if (/\/(about|about-us|company)\b/.test(path)) return 'WEBSITE_ABOUT_PAGE';
+    if (/\/contact\b/.test(path)) return 'WEBSITE_CONTACT_PAGE';
+    return 'COMPANY_WEBSITE';
   }
 
   private profileLinksForPerson(html: string, sourceUrl: string, name: string) {

@@ -41,7 +41,15 @@ export interface ContactDiscoveryContext {
   organizationId: string;
   searchExecutionId?: string | null;
   companyWebsite?: string | null;
+  companyDomain?: string | null;
   correlationId?: string;
+  /** Roles from SearchPlan; defaults applied by the caller when empty. */
+  decisionMakerRoles?: string[];
+  personFields?: string[];
+  socialPlatforms?: string[];
+  emailRequested?: boolean;
+  /** When false, external contact providers must not be called. */
+  allowProviderEnrichment?: boolean;
 }
 
 export interface ContactDiscoveryResult {
