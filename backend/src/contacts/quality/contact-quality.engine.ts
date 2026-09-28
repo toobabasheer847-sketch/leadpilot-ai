@@ -461,6 +461,7 @@ function toNormalized(id: string, companyId: string, contact: { fullName: string
     name: normalizePersonName(contact.fullName),
     email: contact.email?.toLowerCase() ?? null,
     phone: normalizeContactPhone(contact.phone),
+    linkedinUrl: contact.linkedinUrl,
     socialUrls: [contact.linkedinUrl].filter((item): item is string => Boolean(item)),
     title: contact.title,
   };

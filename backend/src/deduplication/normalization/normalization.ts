@@ -55,6 +55,8 @@ export function normalizeAddress(...parts: Array<string | null | undefined>): st
 export function normalizeCompany(input: {
   id: string; name: string; website?: string | null; phone?: string | null; googlePlaceId?: string | null;
   address?: string | null; city?: string | null; state?: string | null; email?: string | null; socialUrls?: string[];
+  externalIds?: string[]; phoneVerified?: boolean; emailVerified?: boolean; verificationStatus?: string | null;
+  evidenceCount?: number; contactCount?: number; fieldCompleteness?: number;
 }): NormalizedCompany {
   return {
     id: input.id,
@@ -65,19 +67,53 @@ export function normalizeCompany(input: {
     address: normalizeAddress(input.address),
     city: normalizeText(input.city),
     state: normalizeText(input.state),
+    email: normalizeEmail(input.email),
     emailDomain: normalizeEmail(input.email)?.split('@')[1] ?? null,
     socialUrls: (input.socialUrls ?? []).map(normalizeSocialUrl).filter((value): value is string => Boolean(value)),
+    externalIds: [...new Set((input.externalIds ?? []).map((id) => id.trim()).filter(Boolean))],
+    phoneVerified: Boolean(input.phoneVerified),
+    emailVerified: Boolean(input.emailVerified),
+    verificationStatus: input.verificationStatus ?? null,
+    evidenceCount: input.evidenceCount ?? 0,
+    contactCount: input.contactCount ?? 0,
+    fieldCompleteness: input.fieldCompleteness ?? 0,
   };
 }
 
-export function normalizeContact(input: { id: string; companyId: string; fullName?: string | null; firstName?: string | null; lastName?: string | null; email?: string | null; phone?: string | null; socialUrls?: string[]; title?: string | null }): NormalizedContact {
+export function normalizeContact(input: {
+  id: string; companyId: string; fullName?: string | null; firstName?: string | null; lastName?: string | null;
+  email?: string | null; phone?: string | null; socialUrls?: string[]; title?: string | null; linkedinUrl?: string | null;
+  emailVerified?: boolean; phoneVerified?: boolean; verificationStatus?: string | null; evidenceCount?: number; fieldCompleteness?: number;
+}): NormalizedContact {
+  const linkedinUrl = normalizeSocialUrl(input.linkedinUrl);
+  const socialUrls = (input.socialUrls ?? []).map(normalizeSocialUrl).filter((value): value is string => Boolean(value));
+  if (linkedinUrl && !socialUrls.includes(linkedinUrl)) socialUrls.push(linkedinUrl);
   return {
     id: input.id,
     companyId: input.companyId,
     name: normalizeText(input.fullName || `${input.firstName ?? ''} ${input.lastName ?? ''}`),
     email: normalizeEmail(input.email),
     phone: normalizePhone(input.phone),
-    socialUrls: (input.socialUrls ?? []).map(normalizeSocialUrl).filter((value): value is string => Boolean(value)),
+    linkedinUrl,
+    socialUrls,
     title: normalizeText(input.title),
+    emailVerified: Boolean(input.emailVerified),
+    phoneVerified: Boolean(input.phoneVerified),
+    verificationStatus: input.verificationStatus ?? null,
+    evidenceCount: input.evidenceCount ?? 0,
+    fieldCompleteness: input.fieldCompleteness ?? 0,
   };
+}
+
+export function companyFieldCompleteness(input: {
+  website?: string | null; phone?: string | null; email?: string | null; description?: string | null;
+  category?: string | null; employeeCount?: number | null; employeeRange?: string | null;
+}): number {
+  return [input.website, input.phone, input.email, input.description, input.category, input.employeeCount ?? input.employeeRange].filter(Boolean).length;
+}
+
+export function contactFieldCompleteness(input: {
+  fullName?: string | null; title?: string | null; email?: string | null; phone?: string | null; linkedinUrl?: string | null;
+}): number {
+  return [input.fullName, input.title, input.email, input.phone, input.linkedinUrl].filter(Boolean).length;
 }

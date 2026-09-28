@@ -1,6 +1,7 @@
-import { IsUUID } from 'class-validator';
+import { IsOptional, IsUUID } from 'class-validator';
 
 export class MergeDuplicateDto {
+  @IsOptional()
   @IsUUID()
-  canonicalEntityId!: string;
+  canonicalEntityId?: string;
 }

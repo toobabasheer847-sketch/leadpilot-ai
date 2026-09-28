@@ -1,6 +1,15 @@
 export type EntityType = 'COMPANY' | 'CONTACT';
-export type MatchType = 'EXACT_MATCH' | 'STRONG_MATCH' | 'POSSIBLE_MATCH' | 'NO_MATCH' | 'CONFLICT';
-export type DuplicateStatus = 'PENDING' | 'AUTO_DUPLICATE' | 'REVIEW_REQUIRED' | 'CONFIRMED_DUPLICATE' | 'NOT_DUPLICATE' | 'CONFLICT';
+export type MatchType = 'EXACT_MATCH' | 'STRONG_MATCH' | 'POSSIBLE_MATCH' | 'POTENTIAL_DUPLICATE' | 'NO_MATCH' | 'CONFLICT';
+export type DuplicateStatus =
+  | 'PENDING'
+  | 'AUTO_DUPLICATE'
+  | 'REVIEW_REQUIRED'
+  | 'NEEDS_REVIEW'
+  | 'POTENTIAL_DUPLICATE'
+  | 'CONFIRMED_DUPLICATE'
+  | 'NOT_DUPLICATE'
+  | 'CONFLICT'
+  | 'MERGED';
 
 export interface MatchSignal {
   type: string;
@@ -18,6 +27,8 @@ export interface MatchDecision {
   confidence: number;
   signals: MatchSignal[];
   reason: string;
+  /** When true, pipeline may auto-merge into an elected master. */
+  autoMergeEligible?: boolean;
 }
 
 export interface NormalizedCompany {
@@ -29,8 +40,16 @@ export interface NormalizedCompany {
   address: string | null;
   city: string | null;
   state: string | null;
+  email: string | null;
   emailDomain: string | null;
   socialUrls: string[];
+  externalIds: string[];
+  phoneVerified?: boolean;
+  emailVerified?: boolean;
+  verificationStatus?: string | null;
+  evidenceCount?: number;
+  contactCount?: number;
+  fieldCompleteness?: number;
 }
 
 export interface NormalizedContact {
@@ -39,6 +58,23 @@ export interface NormalizedContact {
   name: string;
   email: string | null;
   phone: string | null;
+  linkedinUrl: string | null;
   socialUrls: string[];
   title: string | null;
+  emailVerified?: boolean;
+  phoneVerified?: boolean;
+  verificationStatus?: string | null;
+  evidenceCount?: number;
+  fieldCompleteness?: number;
+}
+
+export interface MasterCandidate {
+  id: string;
+  verificationStatus?: string | null;
+  evidenceCount: number;
+  contactCount?: number;
+  fieldCompleteness: number;
+  hasWebsite?: boolean;
+  hasPhone?: boolean;
+  hasEmail?: boolean;
 }

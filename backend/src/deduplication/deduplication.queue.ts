@@ -7,6 +7,7 @@ export interface DeduplicationJobData {
   entityType: 'COMPANY' | 'CONTACT';
   entityId: string;
   organizationId: string;
+  searchExecutionId?: string | null;
 }
 
 @Injectable()

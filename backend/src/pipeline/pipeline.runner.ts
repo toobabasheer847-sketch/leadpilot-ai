@@ -166,6 +166,7 @@ export class PipelineStageRunner {
       return enqueued.flatMap((item) => item.jobId ? [String(item.jobId)] : []);
     }
     if (key === 'contactQuality') return this.dispatchContactQuality(row);
+    if (key === 'deduplication') return this.dispatchDeduplication(row);
     if (key === 'verification') return this.dispatchVerification(row);
     if (!row.searchExecutionId) return [];
     const companyIds = await this.repository.listCompanyIds(row.organizationId, row.searchExecutionId);
@@ -206,14 +207,30 @@ export class PipelineStageRunner {
       return null;
     }
     if (key === 'deduplication') {
-      const result = await this.deduplication.enqueueCompany(companyId, row.organizationId);
-      return result.jobId ? String(result.jobId) : null;
+      // Handled by dispatchDeduplication (company + contacts).
+      return null;
     }
     if (key === 'scoring') {
       const result = await this.scoring.enqueueCompany(companyId, row.organizationId, false, row.searchExecutionId);
       return result.status === 'QUEUED' && result.jobId ? String(result.jobId) : null;
     }
     return null;
+  }
+
+  private async dispatchDeduplication(row: PipelineExecutionRow): Promise<string[]> {
+    if (!row.searchExecutionId) return [];
+    const companyIds = await this.repository.listCompanyIds(row.organizationId, row.searchExecutionId);
+    const jobIds: string[] = [];
+    for (const companyId of companyIds) {
+      const companyResult = await this.deduplication.enqueueCompany(companyId, row.organizationId, row.searchExecutionId);
+      if (companyResult.jobId) jobIds.push(String(companyResult.jobId));
+      const contacts = await this.repository.listContactIds(row.organizationId, [companyId]);
+      for (const contact of contacts) {
+        const contactResult = await this.deduplication.enqueueContact(contact.id, row.organizationId, row.searchExecutionId);
+        if (contactResult.jobId) jobIds.push(String(contactResult.jobId));
+      }
+    }
+    return jobIds;
   }
 
   private async dispatchVerification(row: PipelineExecutionRow): Promise<string[]> {

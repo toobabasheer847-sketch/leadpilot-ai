@@ -30,7 +30,9 @@ export class DeduplicationController {
   review(@Param('id') id: string, @Body() dto: ReviewDuplicateDto, @CurrentUser() user: AuthenticatedUser) { return this.service.review(id, user.organizationId, user.id, dto.decision, dto.reason); }
 
   @Post('duplicate-groups/:id/merge')
-  merge(@Param('id') id: string, @Body() dto: MergeDuplicateDto, @CurrentUser() user: AuthenticatedUser) { return this.service.mergeGroup(id, user.organizationId, dto.canonicalEntityId); }
+  merge(@Param('id') id: string, @Body() dto: MergeDuplicateDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.service.mergeGroup(id, user.organizationId, dto.canonicalEntityId);
+  }
 
   @Post('duplicate-groups/:id/reject')
   reject(@Param('id') id: string, @Body() dto: ReviewDuplicateDto, @CurrentUser() user: AuthenticatedUser) { return this.service.rejectGroup(id, user.organizationId, user.id, dto.reason); }
