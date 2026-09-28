@@ -9,7 +9,7 @@ import { and, eq } from 'drizzle-orm';
 import { pipelineJobs } from '../database/schema/schema';
 import { StructuredLoggerService } from '../common/observability/structured-logger.service';
 
-@Processor('contact-discovery-queue', { concurrency: 2, lockDuration: 180000 })
+@Processor('contact-discovery-queue', { concurrency: 2, lockDuration: 300_000, lockRenewTime: 15_000, stalledInterval: 30_000, maxStalledCount: 2 })
 export class ContactDiscoveryProcessor extends WorkerHost {
   constructor(
     private readonly contactsService: ContactsService,

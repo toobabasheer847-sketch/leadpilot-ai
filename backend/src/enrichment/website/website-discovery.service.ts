@@ -168,8 +168,8 @@ export class WebsiteDiscoveryService {
     const maxPages = this.config.get<number>('website.maxPagesPerCompany', 5);
     const maxDepth = this.config.get<number>('website.maxCrawlDepth', 1);
     const origin = new URL(page.finalUrl).origin;
-    const pending = this.extractInternalLinks(page.body, page.finalUrl)
-      .filter((link) => new URL(link).origin === origin)
+    const pending = prioritizeCompanyPages(this.extractInternalLinks(page.body, page.finalUrl)
+      .filter((link) => new URL(link).origin === origin))
       .map((url) => ({ url, depth: 1 }));
     const visited = new Set([candidate.url, page.finalUrl]);
     while (pending.length > 0 && pages.length < maxPages) {
@@ -314,5 +314,23 @@ export class WebsiteDiscoveryService {
       }
     }
     return [...links].filter((link) => link !== this.normalizer.normalizeUrl(baseUrl));
+  }
+}
+
+const COMPANY_PAGE = /\/(about(?:-us)?|team|our-team|leadership|management|contact|company|who-we-are)(?:\/|$)/i;
+
+/** About, team, and contact pages are fetched before generic links so public people and emails are not crowded out. */
+export function prioritizeCompanyPages(urls: string[]): string[] {
+  return urls
+    .map((url, index) => ({ url, index, rank: companyPageRank(url) }))
+    .sort((left, right) => right.rank - left.rank || left.index - right.index)
+    .map((item) => item.url);
+}
+
+function companyPageRank(url: string): number {
+  try {
+    return COMPANY_PAGE.test(new URL(url).pathname) ? 2 : 0;
+  } catch {
+    return 0;
   }
 }

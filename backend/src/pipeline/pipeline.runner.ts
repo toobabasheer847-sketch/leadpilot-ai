@@ -153,6 +153,9 @@ export class PipelineStageRunner {
   }
 
   private async dispatch(row: PipelineExecutionRow, key: TrackedKey): Promise<string[]> {
+    if (key === 'employeeSize') {
+      if (!row.searchExecutionId || !employeeSizeRequested(await this.planFor(row))) return [];
+    }
     if (key === 'websiteDiscovery') {
       if (!row.searchExecutionId) return [];
       const enqueued = await this.enrichment.enqueueCompanyEnrichment(row.searchExecutionId, row.organizationId);
@@ -167,6 +170,12 @@ export class PipelineStageRunner {
       if (jobId) jobIds.push(jobId);
     }
     return jobIds;
+  }
+
+  private async planFor(row: PipelineExecutionRow): Promise<unknown> {
+    if (!row.searchExecutionId) return null;
+    const execution = await this.repository.getSearchExecution(row.organizationId, row.searchExecutionId);
+    return execution?.structuredPlan ?? null;
   }
 
   private async dispatchCompany(row: PipelineExecutionRow, key: TrackedKey, companyId: string): Promise<string | null> {
@@ -235,6 +244,12 @@ export class PipelineStageRunner {
       progress: key ? withStageState(progress, key, 'FAILED') : progress,
     };
   }
+}
+
+export function employeeSizeRequested(plan: unknown): boolean {
+  if (!plan || typeof plan !== 'object' || !('companySize' in plan)) return false;
+  const size = (plan as { companySize?: { min?: unknown; max?: unknown } }).companySize;
+  return Boolean(size && (typeof size.min === 'number' || typeof size.max === 'number'));
 }
 
 function criteriaFromPlan(plan: unknown): ClassificationCriteria {

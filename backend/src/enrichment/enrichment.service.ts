@@ -182,6 +182,20 @@ export class EnrichmentService {
         evidenceType: 'META_DATA',
       }], undefined, { provider: 'website_discovery', sourceType: websiteResult.sourceType ?? attempt?.sourceType ?? 'WEBSITE', verified: false });
     }
+    const profileHits = (websiteResult.rejectedSearchHits ?? []).map((item) => item.hit);
+    const profiles = this.socialDiscovery.fromSearchHits?.(company.name, profileHits) ?? [];
+    for (const socialUrl of profiles) {
+      if (discoveredSocial.has(socialUrl)) continue;
+      discoveredSocial.add(socialUrl);
+      await this.evidenceRepository.persistEvidence(company.id, socialUrl, [{
+        field: 'socialProfile',
+        value: socialUrl,
+        sourceUrl: socialUrl,
+        evidenceExcerpt: (websiteResult.rejectedSearchHits ?? []).find((item) => item.hit.url.startsWith(socialUrl))?.hit.snippet || socialUrl,
+        retrievedAt: new Date().toISOString(),
+        evidenceType: 'SOCIAL_LINK',
+      }], undefined, { provider: 'web_search', sourceType: 'WEB_SEARCH', verified: false });
+    }
     for (const socialUrl of discoveredSocial) {
       const host = new URL(socialUrl).hostname.toLowerCase();
       const platform = host.includes('linkedin') ? 'linkedin' : host.includes('facebook') ? 'facebook' : host.includes('instagram') ? 'instagram' : host.includes('youtube') ? 'youtube' : host.includes('x.com') || host.includes('twitter') ? 'x' : 'other';

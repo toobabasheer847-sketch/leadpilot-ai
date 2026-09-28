@@ -153,17 +153,38 @@ describe('OsmSourceProvider', () => {
     expect(() => provider.normalizeResult({ type: 'node', id: 1, tags: {} })).toThrow(/required provenance/);
   });
 
+  it('keeps partial OpenStreetMap results when a later request is rate limited', async () => {
+    const limited = jest.fn()
+      .mockResolvedValueOnce(geocodeResponse())
+      .mockResolvedValueOnce(httpResponse({ elements: [taggedElement] }))
+      .mockResolvedValueOnce(httpResponse({ remark: 'rate limited' }, 429));
+    const result = await providerWith({}, 200, {}, limited).provider.searchBusinesses({
+      ...plan,
+      locations: [
+        { country: 'US', state: 'Florida', city: 'Miami' },
+        { country: 'US', state: 'Florida', city: 'Tampa' },
+      ],
+    }, context);
+    expect(result.results.map((company) => company.name)).toEqual(['Coast Counsel']);
+    expect(result.providerError).toMatch(/rate limit/i);
+    expect(limited).toHaveBeenCalledTimes(3);
+  });
+
   it('maps timeouts, HTTP 429, and HTTP 5xx without retrying rate limits', async () => {
     const timeoutFetch = jest.fn()
       .mockResolvedValueOnce(geocodeResponse())
       .mockRejectedValueOnce(new OutboundRequestError('Outbound request timed out'));
-    await expect(providerWith({}, 200, {}, timeoutFetch).provider.searchBusinesses(plan, context)).rejects.toMatchObject({ code: 'PROVIDER_TIMEOUT' });
+    const timedOut = await providerWith({}, 200, {}, timeoutFetch).provider.searchBusinesses(plan, context);
+    expect(timedOut.results).toEqual([]);
+    expect(timedOut.providerError).toMatch(/timed out/i);
     expect(timeoutFetch).toHaveBeenCalledTimes(2);
 
     const limited = jest.fn()
       .mockResolvedValueOnce(geocodeResponse())
       .mockResolvedValueOnce(httpResponse({ remark: 'rate limited' }, 429));
-    await expect(providerWith({}, 429, { 'sourceProvider.retries': 2 }, limited).provider.searchBusinesses(plan, context)).rejects.toMatchObject({ code: 'PROVIDER_RATE_LIMITED' });
+    const rateLimited = await providerWith({}, 429, { 'sourceProvider.retries': 2 }, limited).provider.searchBusinesses(plan, context);
+    expect(rateLimited.results).toEqual([]);
+    expect(rateLimited.providerError).toMatch(/rate limit/i);
     expect(limited).toHaveBeenCalledTimes(2);
 
     const unavailable = jest.fn()
@@ -174,7 +195,9 @@ describe('OsmSourceProvider', () => {
     await expect(recovered.provider.searchBusinesses(plan, context)).resolves.toEqual({ provider: 'osm', results: [], duplicatesRemoved: 0, rejectedCandidates: 0 });
     expect(unavailable).toHaveBeenCalledTimes(3);
 
-    await expect(providerWith({ remark: 'server error' }, 503).provider.searchBusinesses(plan, context)).rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE' });
+    const down = await providerWith({ remark: 'server error' }, 503).provider.searchBusinesses(plan, context);
+    expect(down.results).toEqual([]);
+    expect(down.providerError).toMatch(/unavailable/i);
   });
 
   it('respects the configured result limit and collapses duplicate businesses', async () => {

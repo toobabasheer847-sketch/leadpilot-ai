@@ -195,6 +195,39 @@ describe('qualification engine', () => {
     }), criteria({ locations: [{ country: 'US', state: 'California' }] }));
     expect(cityWithoutState.criterionResults.find((item) => item.criterion === 'location')?.result).toBe('NEEDS_REVIEW');
     expect(cityWithoutState.status).not.toBe('NOT_QUALIFIED');
+    const missing = evaluateQualification(baseContext({
+      location: { city: null, state: null, country: null, postalCode: null },
+      verifications: [],
+    }), criteria({ locations: [{ city: 'Dubai', country: 'United Arab Emirates' }] }));
+    expect(missing.criterionResults.find((item) => item.criterion === 'location')?.result).toBe('NOT_FOUND');
+    expect(missing.status).not.toBe('QUALIFIED');
+    const countryOnly = evaluateQualification(baseContext({
+      location: { city: null, state: null, country: 'Germany', postalCode: null },
+      verifications: [],
+    }), criteria({ industry: ['software'], leadTypes: [], locations: [{ country: 'DE' }], companySize: undefined, requiredRoles: [], requiredFields: [] }));
+    expect(countryOnly.criterionResults.find((item) => item.criterion === 'location')?.result).toBe('MATCH');
+  });
+
+  it('rejects an unrelated trade and does not qualify from the company name alone', () => {
+    const repair = evaluateQualification(baseContext({
+      company: { ...baseContext().company, name: 'Desk Repair Co', category: 'it', employeeCount: null, employeeRange: null },
+      evidence: [{ ...baseContext().evidence[0], evidenceText: 'Desk Repair Co provides computer repair and it support.' }],
+    }), criteria({ industry: ['software'], leadTypes: [], companySize: undefined, requiredRoles: [], requiredFields: ['companyName'] }));
+    expect(repair.criterionResults.find((item) => item.criterion === 'category')?.result).toBe('NO_MATCH');
+    expect(repair.status).toBe('NOT_QUALIFIED');
+
+    const nameOnly = evaluateQualification(baseContext({
+      company: { ...baseContext().company, name: 'Northwind Software', category: null, employeeCount: null, employeeRange: null },
+      evidence: [{ ...baseContext().evidence[0], evidenceText: 'Northwind Software' }],
+    }), criteria({ industry: ['software'], leadTypes: [], companySize: undefined, requiredRoles: [], requiredFields: ['companyName'] }));
+    expect(nameOnly.criterionResults.find((item) => item.criterion === 'category')?.result).toBe('NEEDS_REVIEW');
+    expect(nameOnly.status).not.toBe('QUALIFIED');
+
+    const supported = evaluateQualification(baseContext({
+      company: { ...baseContext().company, name: 'Northwind', category: null, employeeCount: null, employeeRange: null },
+      evidence: [{ ...baseContext().evidence[0], evidenceText: 'Northwind builds developer tools and application development platforms.' }],
+    }), criteria({ industry: ['software'], leadTypes: [], companySize: undefined, requiredRoles: [], requiredFields: ['companyName'] }));
+    expect(supported.criterionResults.find((item) => item.criterion === 'category')?.result).toBe('MATCH');
   });
 
   it('matches and mismatches company size without inventing counts', () => {

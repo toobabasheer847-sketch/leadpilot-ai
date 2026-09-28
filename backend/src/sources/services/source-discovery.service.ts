@@ -1,4 +1,4 @@
-import { Inject, Injectable, Optional } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { DRIZZLE } from '../../database/database.constants';
 import type { Database } from '../../database/database.types';
@@ -8,10 +8,13 @@ import { RequestContextService } from '../../common/observability/request-contex
 import { UsageService } from '../../usage/usage.service';
 import { SearchPlan } from '../../search/types/search-plan.types';
 import { discoveryTarget, explicitResultCount } from '../../search/search-plan.limits';
+import { toCountryCode } from '../location/location-evidence';
+import { isRecoverableDiscoveryError, SourceProviderError } from '../providers/source-provider.error';
 import { SOURCE_PROVIDER } from '../interfaces/source-provider.interface';
-import type { SourceProvider, SourceSearchContext } from '../types/source.types';
+import type { NormalizedSourceResult, SourceProvider, SourceSearchContext } from '../types/source.types';
 import { SourceNormalizerService } from './source-normalizer.service';
 import { fillEmptyCompanyFields, phoneMatchKey } from './company-field-merge';
+import { discoveryProviderFailure, resolveDiscoveryFallback } from './discovery-fallback';
 import { WebSearchCompanyDiscovery } from '../providers/web-search/web-search-company.discovery';
 
 export function canAttachDiscoveryToOrganization(companyOrganizationId: string, requestOrganizationId: string): boolean {
@@ -49,7 +52,7 @@ export class SourceDiscoveryService {
     private readonly usage: UsageService,
     private readonly providerObservability: ProviderObservabilityService,
     private readonly requestContext: RequestContextService,
-    @Optional() private readonly webDiscovery?: WebSearchCompanyDiscovery,
+    private readonly webDiscovery: WebSearchCompanyDiscovery,
   ) {}
 
   async discover(executionId: string, organizationId: string, plan: SearchPlan, trace: Pick<SourceSearchContext, 'requestId' | 'correlationId'> = {}) {
@@ -60,29 +63,34 @@ export class SourceDiscoveryService {
     const target = discoveryTarget(plan);
     const explicit = explicitResultCount(plan);
     const synthetic = this.provider.metadata().synthetic;
-    let candidates = 0;
     let rejected = 0;
     let duplicates = 0;
-    let primaryError: unknown = null;
+    let primaryResults: NormalizedSourceResult[] = [];
+    let primaryError: string | null = null;
     try {
       const result = await this.providerObservability.track(this.provider.providerName(), 'DISCOVERY', async () => ({ value: await this.provider.searchBusinesses(plan, context) }));
-      candidates += await this.persistResults(organizationId, executionId, this.provider.getSourceType(), result.results, synthetic, context);
+      primaryResults = result.results;
+      primaryError = result.providerError ?? null;
       rejected += result.rejectedCandidates ?? 0;
       duplicates += result.duplicatesRemoved ?? 0;
     } catch (error) {
-      primaryError = error;
+      if (!isRecoverableDiscoveryError(error)) throw error;
+      primaryError = error.message;
+    }
+    if (primaryError) {
       await this.audit(organizationId, executionId, 'SOURCE_PROVIDER_PARTIAL', undefined, {
         provider: this.provider.providerName(),
-        error: error instanceof Error ? error.message : 'Source discovery failed.',
+        error: primaryError,
       });
     }
 
+    let webResults: NormalizedSourceResult[] = [];
     let webError: string | null = null;
-    if (!synthetic && candidates < target && this.webDiscovery) {
+    if (!synthetic && primaryResults.length < target) {
       try {
-        const extra = await this.webDiscovery.collect(plan, target - candidates);
+        const extra = await this.webDiscovery.collect(plan, target - primaryResults.length, primaryResults);
+        webResults = extra.results;
         webError = extra.providerError;
-        candidates += await this.persistResults(organizationId, executionId, 'web_search', extra.results, false, context);
         rejected += extra.rejected;
       } catch (error) {
         webError = error instanceof Error ? error.message : 'Web company discovery failed.';
@@ -92,9 +100,23 @@ export class SourceDiscoveryService {
       }
     }
 
-    if (candidates === 0 && primaryError) {
+    const resolved = resolveDiscoveryFallback({
+      primary: { results: primaryResults, error: primaryError },
+      web: { results: webResults, error: webError },
+    });
+    duplicates += resolved.duplicatesRemoved;
+    let candidates = 0;
+    candidates += await this.persistResults(organizationId, executionId, this.provider.getSourceType(), resolved.primary, synthetic, context);
+    if (!synthetic) candidates += await this.persistResults(organizationId, executionId, 'web_search', resolved.web, false, context);
+    const failure = discoveryProviderFailure(
+      candidates,
+      this.provider.providerName(),
+      primaryError,
+      synthetic ? null : { error: webError },
+    );
+    if (failure) {
       await this.usage.recordUsage({ organizationId, operation: 'DISCOVERY', provider: this.provider.providerName(), resourceType: 'search_execution', resourceId: executionId, units: 1, status: 'FAILED', requestId: context.requestId });
-      throw primaryError;
+      throw new SourceProviderError(discoveryFailureCode(failure), failure, true);
     }
 
     await this.usage.recordUsage({ organizationId, operation: 'DISCOVERY', provider: this.provider.providerName(), resourceType: 'search_execution', resourceId: executionId, units: 1, status: 'COMPLETED', requestId: context.requestId, metadata: { candidates } });
@@ -201,18 +223,14 @@ export class SourceDiscoveryService {
     }).returning();
 
     if (result.address) {
-      await this.db.insert(companyLocations).values({
-        companyId: company.id,
-        addressLine1: result.address.addressLine1,
-        addressLine2: result.address.addressLine2,
-        city: result.address.city,
-        state: result.address.state,
-        postalCode: result.address.postalCode,
-        country: result.address.country,
-        latitude: result.address.latitude?.toString(),
-        longitude: result.address.longitude?.toString(),
-        isPrimary: true,
-      });
+      const location = storableLocation(result.address);
+      if (location) {
+        await this.db.insert(companyLocations).values({
+          companyId: company.id,
+          ...location,
+          isPrimary: true,
+        });
+      }
     }
     return company;
   }
@@ -223,14 +241,24 @@ export class SourceDiscoveryService {
       try {
         const normalized = this.normalizer.normalize(raw);
         const company = await this.upsertCompany(organizationId, provider, normalized);
+        const alreadyLinked = await this.companyAlreadyInExecution(organizationId, executionId, company.id);
         const sourceRecord = await this.upsertSourceRecord(organizationId, executionId, company.id, provider, normalized, context);
         if (!synthetic) await this.createEvidence(company.id, sourceRecord.id, normalized, provider);
-        accepted += 1;
+        if (!alreadyLinked) accepted += 1;
       } catch (error) {
         await this.audit(organizationId, executionId, 'SOURCE_RESULT_REJECTED', undefined, { reason: error instanceof Error ? error.name : 'unknown' });
       }
     }
     return accepted;
+  }
+
+  private async companyAlreadyInExecution(organizationId: string, executionId: string, companyId: string) {
+    const [row] = await this.db.select({ id: sourceRecords.id }).from(sourceRecords).where(and(
+      eq(sourceRecords.organizationId, organizationId),
+      eq(sourceRecords.searchExecutionId, executionId),
+      eq(sourceRecords.companyId, companyId),
+    )).limit(1);
+    return Boolean(row);
   }
 
   private async findCompanyByExternalId(organizationId: string, provider: string, externalId: string) {
@@ -281,10 +309,50 @@ export class SourceDiscoveryService {
     const snippet = typeof result.rawData?.snippet === 'string' ? result.rawData.snippet : '';
     const facts = [result.name, result.website, result.phone, result.email, result.category, result.address?.addressLine1, result.address?.city, result.address?.state, result.address?.postalCode, snippet].filter(Boolean).join(' | ');
     if (!facts) return;
-    await this.db.insert(leadEvidence).values({ companyId, sourceRecordId, evidenceType: 'PROVIDER_RESULT', sourceUrl: result.sourceUrl, evidenceText: facts, evidenceTimestamp: new Date(), provider, metadata: { externalId: result.externalId, verified: false } });
+    const locationEvidence = result.rawData?.locationEvidence;
+    await this.db.insert(leadEvidence).values({ companyId, sourceRecordId, evidenceType: 'PROVIDER_RESULT', sourceUrl: result.sourceUrl, evidenceText: facts, evidenceTimestamp: new Date(), provider, metadata: { externalId: result.externalId, verified: false, ...(locationEvidence ? { locationEvidence } : {}) } });
   }
 
   private async audit(organizationId: string, entityId: string, action: string, userId?: string, metadata?: Record<string, string>) {
     await this.db.insert(auditLogs).values({ organizationId, entityId, userId, action, entityType: 'search_execution', metadata });
   }
+}
+
+function discoveryFailureCode(failure: string): 'PROVIDER_RATE_LIMITED' | 'PROVIDER_TIMEOUT' | 'PROVIDER_QUOTA_EXCEEDED' | 'PROVIDER_UNAVAILABLE' {
+  if (/plan limit|pay-as-you-go limit|quota|HTTP 432|HTTP 433/i.test(failure)) return 'PROVIDER_QUOTA_EXCEEDED';
+  if (/rate limit|429/i.test(failure)) return 'PROVIDER_RATE_LIMITED';
+  if (/timed out|timeout/i.test(failure)) return 'PROVIDER_TIMEOUT';
+  return 'PROVIDER_UNAVAILABLE';
+}
+
+function columnText(value: string | null | undefined, max: number): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed.length > max) return null;
+  return trimmed;
+}
+
+/** Country is varchar(2). A longer place name is stored as an ISO code, or omitted so the company is not dropped. */
+function storableLocation(address: {
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
+  country?: string | null;
+  latitude?: number;
+  longitude?: number;
+}) {
+  const latitude = typeof address.latitude === 'number' && Number.isFinite(address.latitude) ? address.latitude.toString() : null;
+  const longitude = typeof address.longitude === 'number' && Number.isFinite(address.longitude) ? address.longitude.toString() : null;
+  const location = {
+    addressLine1: columnText(address.addressLine1, 255),
+    addressLine2: columnText(address.addressLine2, 255),
+    city: columnText(address.city, 120),
+    state: columnText(address.state, 100),
+    postalCode: columnText(address.postalCode, 20),
+    country: toCountryCode(address.country) ?? null,
+    latitude,
+    longitude,
+  };
+  return Object.values(location).some((value) => value != null && value !== '') ? location : null;
 }

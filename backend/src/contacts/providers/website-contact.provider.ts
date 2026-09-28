@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { WebsiteDiscoveryService } from '../../enrichment/website/website-discovery.service';
 import { WebsiteNormalizerService } from '../../enrichment/website/website-normalizer.service';
+import { isPersonProfileUrl } from '../discovery/public-decision-maker';
 import { ContactExtractorService } from '../extraction/contact-extractor.service';
 import { ContactCandidate, ContactDiscoveryContext, ContactDiscoveryResult } from '../types/contact.types';
 import { ContactDiscoveryProvider } from './contact-provider.interface';
@@ -77,8 +78,7 @@ export class WebsiteContactProvider implements ContactDiscoveryProvider {
       if (!excerpt.toLowerCase().includes(name.toLowerCase())) continue;
       try {
         const resolved = new URL(match[1], sourceUrl);
-        const host = resolved.hostname.toLowerCase();
-        if (!['linkedin.com', 'facebook.com', 'instagram.com', 'youtube.com', 'youtu.be', 'twitter.com', 'x.com'].some((domain) => host === domain || host.endsWith(`.${domain}`))) continue;
+        if (!isPersonProfileUrl(resolved.toString())) continue;
         const normalized = this.normalizer.normalizeUrl(resolved.toString());
         if (normalized) results.push({ url: normalized, excerpt });
       } catch { continue; }

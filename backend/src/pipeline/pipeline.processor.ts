@@ -5,7 +5,7 @@ import { LEAD_PIPELINE_QUEUE } from './pipeline.constants';
 import { PipelineService } from './pipeline.service';
 import type { LeadPipelineJobData } from './pipeline.types';
 
-@Processor(LEAD_PIPELINE_QUEUE)
+@Processor(LEAD_PIPELINE_QUEUE, { lockDuration: 120_000, lockRenewTime: 15_000, stalledInterval: 30_000, maxStalledCount: 2 })
 export class PipelineProcessor extends WorkerHost {
   constructor(
     private readonly pipelines: PipelineService,

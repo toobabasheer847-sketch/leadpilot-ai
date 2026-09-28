@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto';
 import { classifyOfficialWebsiteHost } from '../../../enrichment/website/official-website.validator';
+import { assessCategoryEvidence } from '../../../search/category-evidence';
 import { discoveryQueryBudget } from '../../../search/search-plan.limits';
 import { expansionCities, placeMentioned } from '../../../search/search-plan.places';
+import { toCountryCode } from '../../location/location-evidence';
 import type { SearchLocation, SearchPlan } from '../../../search/types/search-plan.types';
+import { discoveryIdentityKeys } from '../../services/discovery-fallback';
 import type { NormalizedSourceResult } from '../../types/source.types';
 import type { WebSearchResult } from '../../../enrichment/website/web-search.types';
 
@@ -64,7 +67,7 @@ export async function collectWebCompanyCandidates(
   plan: SearchPlan,
   target: number,
   search: (query: string) => Promise<WebSearchResult[]>,
-  options: { maxQueries?: number; delayMs?: number; sleep?: (ms: number) => Promise<void> } = {},
+  options: { maxQueries?: number; delayMs?: number; sleep?: (ms: number) => Promise<void>; exclude?: NormalizedSourceResult[] } = {},
 ): Promise<WebCompanyCollection> {
   const wanted = Math.max(0, Math.trunc(target));
   if (wanted === 0) return { results: [], rejected: 0, providerError: null, queriesRun: 0 };
@@ -73,6 +76,7 @@ export async function collectWebCompanyCandidates(
   const delayMs = options.delayMs ?? 0;
   const results: NormalizedSourceResult[] = [];
   const seen = new Set<string>();
+  for (const existing of options.exclude ?? []) discoveryIdentityKeys(existing).forEach((key) => seen.add(key));
   let rejected = 0;
   let queriesRun = 0;
   let consecutiveFailures = 0;
@@ -89,18 +93,19 @@ export async function collectWebCompanyCandidates(
           rejected += 1;
           continue;
         }
-        if (seen.has(decision.result.externalId)) {
-          rejected += 1;
-          continue;
-        }
-        seen.add(decision.result.externalId);
+        const keys = discoveryIdentityKeys(decision.result);
+        if (keys.some((key) => seen.has(key))) continue;
+        keys.forEach((key) => seen.add(key));
         results.push(decision.result);
         if (results.length >= wanted) break;
       }
     } catch (error) {
       consecutiveFailures += 1;
       const message = error instanceof Error ? error.message : 'Web company discovery failed.';
-      if (/rate limit|429|timed out|timeout/i.test(message) || consecutiveFailures >= 3) {
+      if (
+        /rate limit|429|timed out|timeout|plan limit|pay-as-you-go limit|quota|HTTP 432|HTTP 433/i.test(message)
+        || consecutiveFailures >= 3
+      ) {
         return { results, rejected, providerError: message, queriesRun };
       }
     }
@@ -130,7 +135,7 @@ export function assessWebCompanyCandidate(
   const requested = plan.locations.find((location) => location.city || location.state || location.region || location.country);
   const location = requested ? locationEvidence(text, name, requested) : null;
   if (requested && !location) return { accepted: false, reason: 'OUTSIDE_REQUESTED_LOCATION' };
-  const category = categoryDecision(text, plan);
+  const category = categoryDecision(text, plan, name);
   if (!category.matched) return { accepted: false, reason: category.reason };
   const website = canonicalWebsite(hit.url);
   const externalId = createHash('sha256').update(`${name.toLowerCase()}|${hostname}`).digest('hex').slice(0, 40);
@@ -184,18 +189,18 @@ function isInvestorPlan(plan: SearchPlan): boolean {
   return /real_estate_investor|house_flipper|fix_and_flip|buy_and_hold|brrrr|land_investor|commercial_real_estate_investor|cash_home_buyer/.test(joined);
 }
 
-function categoryDecision(text: string, plan: SearchPlan): { matched: true; label: string } | { matched: false; reason: string } {
+function categoryDecision(text: string, plan: SearchPlan, companyName: string): { matched: true; label: string } | { matched: false; reason: string } {
   if (isInvestorPlan(plan)) {
     if (CONTRADICTION.test(text) && !REAL_ESTATE_SIGNAL.test(text)) return { matched: false, reason: 'NOT_REAL_ESTATE_INVESTOR' };
     if (!INVESTOR_SIGNAL.test(text)) return { matched: false, reason: 'NOT_REAL_ESTATE_INVESTOR' };
     return { matched: true, label: plan.leadTypes.find((type) => /investor|flip|hold|brrrr|buyer/.test(type)) ?? 'real_estate_investor' };
   }
-  const terms = [...plan.industry, ...plan.leadTypes]
-    .map((term) => term.replace(/_/g, ' ').trim().toLowerCase())
-    .filter((term) => term.length > 2);
-  if (!terms.length) return { matched: true, label: 'company' };
-  const haystack = text.toLowerCase();
-  if (!terms.some((term) => haystack.includes(term))) return { matched: false, reason: 'CATEGORY_MISMATCH' };
+  const assessment = assessCategoryEvidence({
+    requested: [...plan.industry, ...plan.leadTypes],
+    text,
+    companyName,
+  });
+  if (assessment.verdict === 'NO_MATCH') return { matched: false, reason: assessment.reason };
   return { matched: true, label: plan.industry[0] ?? plan.leadTypes[0] ?? 'company' };
 }
 
@@ -217,10 +222,11 @@ function locationEvidence(text: string, companyName: string, requested: SearchLo
     .filter((city): city is string => Boolean(city?.trim()))
     .find((city) => new RegExp(`\\b${escapeRegExp(city)}\\b`, 'i').test(withoutName));
   if (!evidence && !cityName) return null;
+  const country = toCountryCode(requested.country);
   return {
     ...(cityName ? { city: cityName } : {}),
     ...(requested.state ? { state: requested.state } : {}),
-    ...(requested.country ? { country: requested.country } : {}),
+    ...(country ? { country } : {}),
     evidence: cityName ?? evidence ?? '',
   };
 }

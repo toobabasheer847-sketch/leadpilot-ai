@@ -4,7 +4,7 @@ import { StructuredLoggerService } from '../../common/observability/structured-l
 import { ContactQualityJobData } from './contact-quality.queue';
 import { ContactQualityService } from './contact-quality.service';
 
-@Processor('contact-quality-queue')
+@Processor('contact-quality-queue', { lockDuration: 180_000, lockRenewTime: 15_000, stalledInterval: 30_000, maxStalledCount: 2 })
 export class ContactQualityProcessor extends WorkerHost {
   constructor(
     private readonly quality: ContactQualityService,

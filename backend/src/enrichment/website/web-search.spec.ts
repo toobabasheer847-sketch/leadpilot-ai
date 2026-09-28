@@ -226,6 +226,8 @@ describe('web search website discovery', () => {
     const cases = [
       { fetch: jest.fn().mockRejectedValue(new OutboundRequestError('Outbound request timed out')), match: { errorCode: 'PROVIDER_TIMEOUT', retryable: true, message: 'Web search provider timed out.' } },
       { fetch: jest.fn().mockResolvedValue(httpResponse(429, {})), match: { errorCode: 'PROVIDER_RATE_LIMIT', retryable: true, message: 'Web search provider rate limit reached.' } },
+      { fetch: jest.fn().mockResolvedValue(httpResponse(432, {})), match: { errorCode: 'PROVIDER_HTTP_ERROR', retryable: false, message: 'Web search provider plan limit exceeded.' } },
+      { fetch: jest.fn().mockResolvedValue(httpResponse(433, {})), match: { errorCode: 'PROVIDER_HTTP_ERROR', retryable: false, message: 'Web search provider pay-as-you-go limit exceeded.' } },
       { fetch: jest.fn().mockResolvedValue(httpResponse(500, {})), match: { errorCode: 'PROVIDER_HTTP_ERROR', retryable: true, message: 'Web search provider returned HTTP 500.' } },
       { fetch: jest.fn().mockResolvedValue(httpResponse(400, { detail: { error: TEST_API_KEY } })), match: { errorCode: 'PROVIDER_HTTP_ERROR', retryable: false, message: 'Web search provider returned HTTP 400.' } },
       { fetch: jest.fn().mockResolvedValue(httpResponse(401, { detail: { error: TEST_API_KEY } })), match: { errorCode: 'CONFIGURATION_ERROR', retryable: false, message: 'Web search provider authentication failed.' } },
@@ -239,6 +241,7 @@ describe('web search website discovery', () => {
     expect(classifyPipelineError(new Error('Web search provider returned HTTP 500.'))).toMatchObject({ code: 'TRANSIENT_PROVIDER_ERROR', message: 'Web search provider returned HTTP 500.' });
     expect(classifyPipelineError(new Error('Web search provider authentication failed.'))).toMatchObject({ code: 'CONFIGURATION_ERROR', retryable: false });
     expect(classifyPipelineError(new Error('Web search provider rate limit reached.'))).toMatchObject({ code: 'TRANSIENT_PROVIDER_ERROR' });
+    expect(classifyPipelineError(new Error('Web search provider plan limit exceeded.'))).toMatchObject({ code: 'CONFIGURATION_ERROR', retryable: false });
     expect(classifyPipelineError(new WebSearchError('PROVIDER_HTTP_ERROR', 'tavily', 'search', true, 'Web search provider returned HTTP 500.')).code).not.toBe('INTERNAL_ERROR');
     expect(summarizeJobStates(['failed', 'failed'], 'Web search provider returned HTTP 500.')).toEqual({ state: 'FAILED', message: 'Web search provider returned HTTP 500.' });
   });

@@ -4,7 +4,7 @@ import { ClassificationService } from './classification.service';
 import type { ClassificationJobData } from './classification.queue';
 import { OpenRouterError } from './providers/openrouter.provider';
 
-@Processor('ai-classification-queue')
+@Processor('ai-classification-queue', { lockDuration: 180_000, lockRenewTime: 15_000, stalledInterval: 30_000, maxStalledCount: 2 })
 export class ClassificationProcessor extends WorkerHost {
   constructor(private readonly service: ClassificationService) { super(); }
 

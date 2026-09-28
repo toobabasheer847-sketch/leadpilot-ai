@@ -55,7 +55,7 @@ export class PersonDiscoveryService {
     const found: ContactCandidate[] = [];
     for (const query of decisionMakerQueries(companyName)) {
       try {
-        const hits = await this.webSearch.searchText(query);
+        const hits = await this.webSearch.searchText(query, { maxResults: 10 });
         for (const hit of hits) {
           const candidate = assessPublicDecisionMaker(companyName, hit);
           if (candidate) found.push(this.candidates.normalizeCandidate(candidate));

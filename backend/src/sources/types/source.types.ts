@@ -28,6 +28,8 @@ export interface SourceSearchResult {
   results: NormalizedSourceResult[];
   duplicatesRemoved?: number;
   rejectedCandidates?: number;
+  /** Set when a temporary provider error stopped the search after any results already collected. */
+  providerError?: string;
 }
 
 export interface SourceSearchContext {

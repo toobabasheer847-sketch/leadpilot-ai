@@ -3,7 +3,7 @@ import { Job } from 'bullmq';
 import { ExportsService } from './exports.service';
 import type { ExportJobData } from './types/export.types';
 
-@Processor('lead-export-queue')
+@Processor('lead-export-queue', { lockDuration: 180_000, lockRenewTime: 15_000, stalledInterval: 30_000, maxStalledCount: 2 })
 export class ExportsProcessor extends WorkerHost {
   constructor(private readonly service: ExportsService) { super(); }
   process(job: Job<ExportJobData>) { return this.service.process(job.data); }

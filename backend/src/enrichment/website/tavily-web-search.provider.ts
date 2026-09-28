@@ -28,7 +28,7 @@ export class TavilyWebSearchProvider implements WebSearchProvider {
     return this.searchText(text);
   }
 
-  async searchText(text: string): Promise<WebSearchResult[]> {
+  async searchText(text: string, options?: { maxResults?: number }): Promise<WebSearchResult[]> {
     const query = text.trim();
     if (!query) return [];
     const selected = (this.config.get<string>('webSearch.provider') || 'tavily').trim().toLowerCase();
@@ -44,7 +44,7 @@ export class TavilyWebSearchProvider implements WebSearchProvider {
     const timeoutMs = this.config.get<number>('webSearch.timeoutMs', 10000);
     const body = {
       query,
-      max_results: this.maxResults(),
+      max_results: this.maxResults(options?.maxResults),
       search_depth: 'basic',
       include_answer: false,
       include_raw_content: false,
@@ -69,6 +69,8 @@ export class TavilyWebSearchProvider implements WebSearchProvider {
     }
 
     if (response.status === 429) throw new WebSearchError('PROVIDER_RATE_LIMIT', this.name, 'search', true, 'Web search provider rate limit reached.');
+    if (response.status === 432) throw new WebSearchError('PROVIDER_HTTP_ERROR', this.name, 'search', false, 'Web search provider plan limit exceeded.');
+    if (response.status === 433) throw new WebSearchError('PROVIDER_HTTP_ERROR', this.name, 'search', false, 'Web search provider pay-as-you-go limit exceeded.');
     if (response.status === 401 || response.status === 403) throw new WebSearchError('CONFIGURATION_ERROR', this.name, 'search', false, 'Web search provider authentication failed.');
     if (response.status >= 500) throw new WebSearchError('PROVIDER_HTTP_ERROR', this.name, 'search', true, `Web search provider returned HTTP ${response.status}.`);
     if (response.status < 200 || response.status >= 300) throw new WebSearchError('PROVIDER_HTTP_ERROR', this.name, 'search', false, `Web search provider returned HTTP ${response.status}.`);
@@ -82,8 +84,8 @@ export class TavilyWebSearchProvider implements WebSearchProvider {
     return this.parseResults(payload);
   }
 
-  private maxResults() {
-    const configured = this.config.get<number>('webSearch.maxResults', 5);
+  private maxResults(override?: number) {
+    const configured = override ?? this.config.get<number>('webSearch.maxResults', 5);
     if (!Number.isFinite(configured)) return 5;
     return Math.min(10, Math.max(1, Math.trunc(configured)));
   }

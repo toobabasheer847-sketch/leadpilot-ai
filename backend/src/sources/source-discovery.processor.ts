@@ -10,8 +10,9 @@ import { isTerminalProviderError, SourceProviderError } from './providers/source
 import { SourceDiscoveryJobData } from './source-discovery.queue';
 import { SourceDiscoveryService } from './services/source-discovery.service';
 import { StructuredLoggerService } from '../common/observability/structured-logger.service';
+import { LONG_RUNNING_WORKER } from '../queue/bull-connection';
 
-@Processor('source-discovery-queue', { concurrency: 1, lockDuration: 3_600_000, lockRenewTime: 60_000 })
+@Processor('source-discovery-queue', { ...LONG_RUNNING_WORKER, concurrency: 1, lockDuration: 3_600_000 })
 export class SourceDiscoveryProcessor extends WorkerHost {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,

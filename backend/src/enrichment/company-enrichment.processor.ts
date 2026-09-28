@@ -11,7 +11,7 @@ import { StructuredLoggerService } from '../common/observability/structured-logg
 import { isWebsiteDiscoveryError, websiteFailureLog } from './website/website-discovery.error';
 import { isWebSearchError } from './website/web-search.error';
 
-@Processor('company-enrichment-queue')
+@Processor('company-enrichment-queue', { lockDuration: 300_000, lockRenewTime: 15_000, stalledInterval: 30_000, maxStalledCount: 2 })
 export class CompanyEnrichmentProcessor extends WorkerHost {
   constructor(
     @Inject(EnrichmentService) private readonly enrichmentService: EnrichmentService,

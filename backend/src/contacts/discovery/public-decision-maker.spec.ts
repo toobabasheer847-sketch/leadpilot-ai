@@ -53,6 +53,33 @@ describe('public decision maker discovery', () => {
     expect(candidate?.emailStatus).toBe('NOT_FOUND');
   });
 
+  it('does not attach a person from a different company with a similar page mention', () => {
+    expect(assessPublicDecisionMaker('Oak Stream Investors', {
+      title: 'Jane Doe, CEO of Northwind Capital',
+      url: 'https://www.linkedin.com/in/jane-doe',
+      snippet: 'Jane Doe is CEO of Northwind Capital. A directory also lists Oak Stream Investors.',
+    })).toBeNull();
+  });
+
+  it('rejects generic mailbox local parts', () => {
+    for (const local of ['info', 'contact', 'office', 'support', 'sales', 'hello', 'admin']) {
+      expect(publicPersonEmail(`${local}@oak.example`)).toBeNull();
+    }
+    expect(publicPersonEmail('Jane Doe can be reached at jane.doe@oak.example')).toBe('jane.doe@oak.example');
+  });
+
+  it('keeps a company social page off the person profile', () => {
+    const candidate = assessPublicDecisionMaker('Oak Stream Investors', {
+      title: 'Jane Doe, Founder of Oak Stream Investors',
+      url: 'https://www.linkedin.com/company/oak-stream-investors',
+      snippet: 'Jane Doe is Founder of Oak Stream Investors. jane.doe@oakstream.example',
+    });
+    expect(candidate?.linkedinUrl).toBeUndefined();
+    expect(candidate?.email).toBe('jane.doe@oakstream.example');
+    expect(candidate?.firstName).toBe('Jane');
+    expect(candidate?.lastName).toBe('Doe');
+  });
+
   it('does not treat a company LinkedIn page as the person profile', () => {
     const candidate = assessPublicDecisionMaker('Oak Stream Investors', {
       title: 'Jane Doe, Managing Partner at Oak Stream Investors',

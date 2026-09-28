@@ -4,7 +4,7 @@ import { VerificationService } from './verification.service';
 import type { VerificationJobData } from './types/verification.types';
 import { StructuredLoggerService } from '../common/observability/structured-logger.service';
 
-@Processor('lead-verification-queue')
+@Processor('lead-verification-queue', { lockDuration: 180_000, lockRenewTime: 15_000, stalledInterval: 30_000, maxStalledCount: 2 })
 export class VerificationProcessor extends WorkerHost {
   constructor(private readonly service: VerificationService, private readonly logger: StructuredLoggerService) { super(); }
 

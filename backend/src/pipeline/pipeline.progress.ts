@@ -107,6 +107,7 @@ export function classifyPipelineError(error: unknown): { code: PipelineErrorCode
   const raw = error instanceof Error ? error.message : 'Pipeline stage failed.';
   const message = publicErrorMessage(raw);
   if (/not configured|openrouter_model|google_places_api_key|authentication failed \(status 40[13]\)/i.test(raw)) return { code: 'CONFIGURATION_ERROR', message, retryable: false };
+  if (/plan limit|pay-as-you-go limit|quota exceeded/i.test(raw)) return { code: 'CONFIGURATION_ERROR', message, retryable: false };
   if (/rate limit|timed out|timeout|econnreset|temporarily unavailable/i.test(raw)) return { code: 'TRANSIENT_PROVIDER_ERROR', message, retryable: true };
   if (error instanceof NotFoundException || /\bnot found\b/i.test(raw)) return { code: 'NOT_FOUND', message, retryable: false };
   if (error instanceof ForbiddenException || /forbidden|permission/i.test(raw)) return { code: 'PERMISSION_ERROR', message, retryable: false };
@@ -121,6 +122,7 @@ export const ENRICHMENT_EMPTY_MESSAGE = 'No additional verified enrichment data 
 
 function classifyWebSearchMessage(raw: string): { code: PipelineErrorCode; retryable: boolean } | null {
   if (raw.startsWith('Web search provider is not configured') || raw.startsWith('Web search provider authentication failed')) return { code: 'CONFIGURATION_ERROR', retryable: false };
+  if (raw.includes('plan limit exceeded') || raw.includes('pay-as-you-go limit exceeded')) return { code: 'CONFIGURATION_ERROR', retryable: false };
   if (raw.startsWith('Web search provider timed out') || raw.startsWith('Web search provider rate limit') || raw.startsWith('Web search provider is unavailable')) return { code: 'TRANSIENT_PROVIDER_ERROR', retryable: true };
   if (/^Web search provider returned HTTP 5\d\d\.$/.test(raw)) return { code: 'TRANSIENT_PROVIDER_ERROR', retryable: true };
   if (/^Web search provider returned HTTP 4\d\d\.$/.test(raw)) return { code: 'VALIDATION_ERROR', retryable: false };

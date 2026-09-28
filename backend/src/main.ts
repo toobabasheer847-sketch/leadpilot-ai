@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
 
 import { AppModule } from './app.module';
+import { isAllowedCorsOrigin } from './config/configuration';
 import { GlobalExceptionFilter } from './common/global-exception.filter';
 import { RequestIdMiddleware } from './common/request-id.middleware';
 import { MetricsService } from './common/observability/metrics.service';
@@ -12,6 +13,7 @@ import { StructuredLoggerService } from './common/observability/structured-logge
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.enableShutdownHooks();
   const configService = app.get(ConfigService);
   const requestIdMiddleware = new RequestIdMiddleware(
     app.get(RequestContextService),
@@ -23,8 +25,14 @@ async function bootstrap() {
   app.use(requestIdMiddleware.use.bind(requestIdMiddleware));
 
   const corsOrigin = configService.get<string>('corsOrigin', 'http://localhost:3000,http://localhost:5173');
+  const nodeEnv = configService.get<string>('nodeEnv', 'development');
   app.enableCors({
-    origin: corsOrigin.split(',').map((origin) => origin.trim()),
+    origin: (
+      origin: string | undefined,
+      callback: (error: Error | null, allow?: boolean) => void,
+    ) => {
+      callback(null, isAllowedCorsOrigin(origin, corsOrigin, nodeEnv));
+    },
   });
 
   app.setGlobalPrefix(

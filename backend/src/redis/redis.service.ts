@@ -1,17 +1,19 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
-import { redisEndpoint } from './redis-endpoint';
+import { bullConnectionOptions, destroyRedisClient, enterRedisShutdown, isRedisShutdown, isShutdownConnectionError, leaveRedisShutdown, noteShutdownReset } from '../queue/bull-connection';
 
 @Injectable()
 export class RedisService implements OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
   private readonly client: Redis;
+  private closed = false;
 
   constructor(configService: ConfigService) {
     const redisUrl = configService.get<string>('redis.url') || 'redis://127.0.0.1:6379';
+    const options = bullConnectionOptions(redisUrl);
     this.client = new Redis({
-      ...redisEndpoint(redisUrl),
+      ...options,
       lazyConnect: true,
       maxRetriesPerRequest: 1,
       connectTimeout: 10_000,
@@ -49,7 +51,24 @@ export class RedisService implements OnModuleDestroy {
     }
   }
 
+  connectionClient() {
+    return this.client;
+  }
+
+  /** Closes the shared command client. Safe to call more than once. */
+  async closeClient() {
+    if (this.closed) return;
+    this.closed = true;
+    enterRedisShutdown();
+    try {
+      await destroyRedisClient(this.client);
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      leaveRedisShutdown();
+    }
+  }
+
   async onModuleDestroy() {
-    this.client.disconnect();
+    await this.closeClient();
   }
 }

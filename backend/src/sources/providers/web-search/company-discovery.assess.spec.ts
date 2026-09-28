@@ -118,6 +118,14 @@ describe('web company discovery', () => {
     expect(timeout).toHaveBeenCalledTimes(1);
   });
 
+  it('stops immediately when the web search plan limit is exceeded', async () => {
+    const search = jest.fn().mockRejectedValue(new Error('Web search provider plan limit exceeded.'));
+    const collected = await collectWebCompanyCandidates(plan, 10, search, { maxQueries: 8, delayMs: 0 });
+    expect(collected.results).toEqual([]);
+    expect(collected.providerError).toMatch(/plan limit/i);
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
   it('does not invent companies for an empty result set and stays idempotent', async () => {
     const search = jest.fn().mockResolvedValue([hit(), hit({ url: 'https://oakstream.example/team' })]);
     const first = await collectWebCompanyCandidates(plan, 500, search, { maxQueries: 2, delayMs: 0 });
@@ -151,6 +159,19 @@ describe('web company discovery', () => {
     }, 4);
     expect(restaurants[0]).toMatch(/restaurant/i);
     expect(restaurants[0]).toMatch(/Dubai/i);
+    const dubai = assessWebCompanyCandidate(hit({
+      title: 'Creek Restaurant | Dubai',
+      url: 'https://creek.example/',
+      snippet: 'Creek Restaurant is a restaurant in Dubai.',
+    }), {
+      ...plan,
+      industry: ['restaurant'],
+      leadTypes: [],
+      locations: [{ city: 'Dubai', country: 'United Arab Emirates' }],
+      companySize: undefined,
+    });
+    expect(dubai.accepted).toBe(true);
+    if (dubai.accepted) expect(dubai.result.address?.country).toBe('AE');
   });
 
   it('accepts a software company in California and rejects it for a real-estate investor search', () => {

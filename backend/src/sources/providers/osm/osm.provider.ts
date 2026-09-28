@@ -5,9 +5,11 @@ import { SearchPlan } from '../../../search/types/search-plan.types';
 import { phoneMatchKey } from '../../services/company-field-merge';
 import { SourceNormalizerService } from '../../services/source-normalizer.service';
 import { NormalizedSourceResult, SourceProvider, SourceSearchContext, SourceSearchResult } from '../../types/source.types';
-import { isRetryableProviderError, SourceProviderError } from '../source-provider.error';
+import { isRecoverableDiscoveryError, isRetryableProviderError, SourceProviderError } from '../source-provider.error';
 import { OverpassElement, OverpassResponse } from './osm.types';
+import { assessCategoryEvidence } from '../../../search/category-evidence';
 import { discoveryTarget } from '../../../search/search-plan.limits';
+import { applyGeocodedLocation, toCountryCode, type GeocodedPlace } from '../../location/location-evidence';
 import { buildOverpassQuery, coordinateWithinRequestedState, discoveryLocations, investorCandidateAllowed, isRealEstateInvestorDiscovery, locationLabel, matchesRequestedState, searchWindows } from './overpass.query-builder';
 import type { OverpassBBox } from './overpass.query-builder';
 
@@ -75,13 +77,26 @@ export class OsmSourceProvider implements SourceProvider {
       let rejectedCandidates = 0;
       let partitions = 0;
       let timedOutPartitions = 0;
+      let providerError: string | undefined;
+      let halt = false;
       for (const location of locations) {
-        if (dedupeResults(normalized).length >= resultLimit) break;
-        const bbox = await this.geocode(locationLabel(location));
-        const windows = searchWindows(bbox);
+        if (halt || dedupeResults(normalized).length >= resultLimit) break;
+        let place: GeocodedPlace;
+        try {
+          place = await this.geocode(locationLabel(location));
+        } catch (error) {
+          if (isRecoverableDiscoveryError(error)) {
+            providerError = error.message;
+            halt = error.code === 'PROVIDER_RATE_LIMITED' || error.code === 'PROVIDER_UNAVAILABLE';
+            if (error.code === 'PROVIDER_TIMEOUT') continue;
+            break;
+          }
+          throw error;
+        }
+        const windows = searchWindows(place.bbox);
         for (let index = 0; index < windows.length; index += 1) {
           const accepted = dedupeResults(normalized);
-          if (accepted.length >= resultLimit) break;
+          if (halt || accepted.length >= resultLimit) break;
           if (index > 0 && this.retryDelayMs > 0) await delay(this.retryDelayMs);
           const query = buildOverpassQuery(plan, {
             timeoutSeconds,
@@ -97,11 +112,20 @@ export class OsmSourceProvider implements SourceProvider {
               timedOutPartitions += 1;
               continue;
             }
+            if (isRecoverableDiscoveryError(error)) {
+              providerError = error.message;
+              halt = true;
+              break;
+            }
             throw error;
           }
           for (const element of payload.elements ?? []) {
             try {
-              const candidate = this.normalizeResult(element);
+              const candidate = applyGeocodedLocation(this.normalizeResult(element), place);
+              if (!investorSearch && categoryRejected(plan, candidate)) {
+                rejectedCandidates += 1;
+                continue;
+              }
               if (investorSearch && !investorCandidateAllowed(candidate.name, candidate.category)) {
                 rejectedCandidates += 1;
                 continue;
@@ -122,14 +146,15 @@ export class OsmSourceProvider implements SourceProvider {
         }
       }
       const unique = dedupeResults(normalized);
-      if (unique.length === 0 && timedOutPartitions > 0 && timedOutPartitions === partitions) {
-        throw new SourceProviderError('PROVIDER_TIMEOUT', 'OpenStreetMap provider request timed out.');
+      if (!providerError && unique.length === 0 && timedOutPartitions > 0 && timedOutPartitions === partitions) {
+        providerError = 'OpenStreetMap provider request timed out.';
       }
       return {
         provider: this.name,
         results: unique.slice(0, resultLimit),
         duplicatesRemoved: normalized.length - unique.length,
         rejectedCandidates,
+        ...(providerError ? { providerError } : {}),
       };
     });
   }
@@ -172,9 +197,10 @@ export class OsmSourceProvider implements SourceProvider {
     };
   }
 
-  private async geocode(label: string): Promise<OverpassBBox> {
+  private async geocode(label: string): Promise<GeocodedPlace> {
     const url = new URL(this.geocoderUrl as string);
     url.searchParams.set('format', 'jsonv2');
+    url.searchParams.set('addressdetails', '1');
     url.searchParams.set('limit', '1');
     url.searchParams.set('q', label);
     let response: Response;
@@ -204,7 +230,7 @@ export class OsmSourceProvider implements SourceProvider {
     }
     try {
       const payload: unknown = await response.json();
-      return bboxFromGeocoder(payload);
+      return placeFromGeocoder(label, payload);
     } catch (error) {
       if (error instanceof SourceProviderError) throw error;
       throw new SourceProviderError('PROVIDER_UNKNOWN_ERROR', 'OpenStreetMap provider returned an invalid response.');
@@ -289,6 +315,31 @@ export class OsmSourceProvider implements SourceProvider {
     this.tail = run.then(() => undefined, () => undefined);
     return run;
   }
+}
+
+function categoryRejected(plan: SearchPlan, candidate: NormalizedSourceResult): boolean {
+  const tags = candidate.rawData?.tags;
+  const tagText = tags && typeof tags === 'object' ? Object.values(tags as Record<string, string>).join(' ') : '';
+  const assessment = assessCategoryEvidence({
+    requested: [...plan.industry, ...plan.leadTypes],
+    text: [candidate.category, tagText].filter(Boolean).join(' '),
+    companyName: candidate.name,
+    taggedCategory: candidate.category,
+  });
+  return assessment.verdict === 'NO_MATCH';
+}
+
+function placeFromGeocoder(label: string, payload: unknown): GeocodedPlace {
+  const bbox = bboxFromGeocoder(payload);
+  const address = Array.isArray(payload) ? (payload[0] as { address?: Record<string, unknown> }).address : undefined;
+  const text = (key: string) => typeof address?.[key] === 'string' ? address[key] as string : undefined;
+  return {
+    label,
+    bbox,
+    city: text('city') ?? text('town') ?? text('village') ?? text('municipality') ?? text('state_district'),
+    state: text('state') ?? text('region') ?? text('province'),
+    countryCode: toCountryCode(text('country_code') ?? text('country')),
+  };
 }
 
 function bboxFromGeocoder(payload: unknown): OverpassBBox {

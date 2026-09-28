@@ -22,7 +22,9 @@ export class LeadsService {
     if (executionId || filters.searchExecutionId) {
       const id = executionId ?? filters.searchExecutionId!;
       const rows = await this.db.select({ companyId: sourceRecords.companyId }).from(sourceRecords).where(and(eq(sourceRecords.organizationId, organizationId), eq(sourceRecords.searchExecutionId, id)));
-      conditions.push(inArray(companies.id, this.uniqueIds(rows.map((row) => row.companyId).filter((id): id is string => Boolean(id)))));
+      const ids = this.uniqueIds(rows.map((row) => row.companyId).filter((companyId): companyId is string => Boolean(companyId)));
+      if (!ids.length) return { data: [], pagination: { page: filters.page, limit: filters.limit, total: 0, totalPages: 0 } };
+      conditions.push(inArray(companies.id, ids));
     }
     if (filters.companyName) conditions.push(ilike(companies.name, `%${filters.companyName}%`));
     if (filters.website) conditions.push(ilike(companies.website, `%${filters.website}%`));

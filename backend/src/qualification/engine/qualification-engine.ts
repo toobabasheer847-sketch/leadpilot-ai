@@ -1,4 +1,6 @@
+import { assessCategoryEvidence } from '../../search/category-evidence';
 import type { SearchPlan } from '../../search/types/search-plan.types';
+import { sameCountry } from '../../sources/location/location-evidence';
 import type { CriterionEvidence, CriterionResultCode, QualificationContext, QualificationCriteria, QualificationDecision } from '../types/qualification.types';
 
 const REAL_ESTATE_POSITIVE = [
@@ -246,21 +248,6 @@ function placeFit(
   return 'incomplete';
 }
 
-function sameCountry(left: string, right: string) {
-  const aliases: Record<string, string> = {
-    us: 'us',
-    usa: 'us',
-    'united states': 'us',
-    'united states of america': 'us',
-    uae: 'ae',
-    'united arab emirates': 'ae',
-    uk: 'gb',
-    'united kingdom': 'gb',
-  };
-  const normalize = (value: string) => aliases[value.trim().toLowerCase()] ?? value.trim().toLowerCase();
-  return normalize(left) === normalize(right);
-}
-
 function evaluateCompanySize(context: QualificationContext, criteria: QualificationCriteria): CriterionEvidence {
   const verification = fieldStatus(context, 'companySize');
   const fit = companySizeFit(context.company.employeeCount, context.company.employeeRange, criteria.companySize);
@@ -364,17 +351,38 @@ function evaluateCategory(context: QualificationContext, criteria: Qualification
   }
 
   if (wantsIndustry) {
-    const industryHit = relevantEvidence.find((item) => criteria.industry.some((industry) => item.evidenceText.toLowerCase().includes(industry.replace(/_/g, ' ')) || (context.company.category ?? '').toLowerCase().includes(industry.replace(/_/g, ' '))));
-    if (industryHit || (context.company.category && criteria.industry.some((industry) => context.company.category!.toLowerCase().includes(industry.replace(/_/g, ' '))))) {
+    const assessment = assessCategoryEvidence({
+      requested: criteria.industry,
+      text: relevantEvidence.map((item) => item.evidenceText).join('\n'),
+      companyName: context.company.name,
+      taggedCategory: context.company.category,
+    });
+    const linked = relevantEvidence.find((item) => assessment.excerpt && item.evidenceText.toLowerCase().includes(assessment.excerpt.slice(0, 24))) ?? relevantEvidence[0];
+    if (assessment.verdict === 'MATCH') {
       return evidence('category', 'MATCH', true, 'Industry/category evidence matched the requested search criteria.', {
-        source: industryHit?.provider ?? industryHit?.sourceType ?? 'company_record',
-        sourceUrl: industryHit?.sourceUrl ?? context.company.website,
-        excerpt: industryHit?.evidenceText ?? context.company.category,
-        evidenceId: industryHit?.id,
-        retrievedAt: industryHit?.retrievedAt ?? null,
+        source: linked?.provider ?? linked?.sourceType ?? 'company_record',
+        sourceUrl: linked?.sourceUrl ?? context.company.website,
+        excerpt: assessment.excerpt ?? linked?.evidenceText ?? context.company.category,
+        evidenceId: linked?.id,
+        retrievedAt: linked?.retrievedAt ?? null,
       }, null);
     }
-    return evidence('category', 'NOT_FOUND', true, 'No legitimate industry/category evidence was found for the requested criteria.', null, null);
+    if (assessment.verdict === 'NO_MATCH') {
+      return evidence('category', 'NO_MATCH', true, 'Evidence does not support the requested business category.', {
+        source: linked?.provider ?? linked?.sourceType ?? 'company_record',
+        sourceUrl: linked?.sourceUrl ?? null,
+        excerpt: assessment.excerpt ?? linked?.evidenceText ?? context.company.category,
+        evidenceId: linked?.id ?? null,
+        retrievedAt: linked?.retrievedAt ?? null,
+      }, null);
+    }
+    return evidence('category', 'NEEDS_REVIEW', true, 'Category evidence is ambiguous or only repeats the company name.', {
+      source: linked?.provider ?? 'company_record',
+      sourceUrl: linked?.sourceUrl ?? null,
+      excerpt: assessment.excerpt ?? context.company.name,
+      evidenceId: linked?.id ?? null,
+      retrievedAt: linked?.retrievedAt ?? null,
+    }, null);
   }
 
   return evidence('category', 'MATCH', false, 'No category criteria were requested.', null, null);

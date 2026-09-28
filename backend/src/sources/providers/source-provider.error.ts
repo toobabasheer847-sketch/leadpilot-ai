@@ -30,9 +30,12 @@ const TERMINAL_PROVIDER_ERRORS = new Set<string>([
 ]);
 
 export class SourceProviderError extends Error {
-  constructor(public readonly code: ProviderErrorCode, message: string) {
+  readonly terminal: boolean;
+
+  constructor(public readonly code: ProviderErrorCode, message: string, terminal = false) {
     super(message);
     this.name = SourceProviderError.name;
+    this.terminal = terminal;
   }
 }
 
@@ -41,5 +44,14 @@ export function isRetryableProviderError(error: unknown): boolean {
 }
 
 export function isTerminalProviderError(error: unknown): boolean {
-  return error instanceof SourceProviderError && TERMINAL_PROVIDER_ERRORS.has(error.code);
+  return error instanceof SourceProviderError && (error.terminal || TERMINAL_PROVIDER_ERRORS.has(error.code));
+}
+
+/** Rate limits, timeouts, and temporary outages can fall through to the next discovery provider. */
+export function isRecoverableDiscoveryError(error: unknown): error is SourceProviderError {
+  return error instanceof SourceProviderError && (
+    error.code === 'PROVIDER_RATE_LIMITED'
+    || error.code === 'PROVIDER_TIMEOUT'
+    || error.code === 'PROVIDER_UNAVAILABLE'
+  );
 }

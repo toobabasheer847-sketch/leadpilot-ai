@@ -17,7 +17,7 @@ import {
   WEBSITE_PARTIAL_MESSAGE,
 } from './pipeline.progress';
 import { PipelineService } from './pipeline.service';
-import { PipelineStageRunner } from './pipeline.runner';
+import { employeeSizeRequested, PipelineStageRunner } from './pipeline.runner';
 import type { PipelineExecutionRow } from './pipeline.repository';
 
 const user = { id: 'user-1', email: 'user@example.com', name: 'User', organizationId: 'org-1', organizationName: 'Org', role: 'OWNER' };
@@ -187,6 +187,9 @@ describe('pipeline orchestration', () => {
 
   it('runs deep website research after enrichment in the existing pipeline', () => {
     expect(nextWorkStage('ENRICHMENT')).toBe('DEEP_RESEARCH');
+    expect(employeeSizeRequested({ companySize: { min: 1, max: 50 } })).toBe(true);
+    expect(employeeSizeRequested({})).toBe(false);
+    expect(employeeSizeRequested({ companySize: {} })).toBe(false);
     expect(nextWorkStage('DEEP_RESEARCH')).toBe('EMPLOYEE_SIZE');
     expect(nextWorkStage('EMPLOYEE_SIZE')).toBe('DECISION_MAKER_DISCOVERY');
     expect(nextWorkStage('DECISION_MAKER_DISCOVERY')).toBe('CONTACT_QUALITY');

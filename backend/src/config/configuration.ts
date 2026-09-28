@@ -139,6 +139,16 @@ export default () => ({
   },
 });
 
+const LOCAL_DEV_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+
+/** Development Vite may move from 5173 to the next free port. Those local origins stay allowed. */
+export function isAllowedCorsOrigin(origin: string | undefined, configured: string, nodeEnv: string): boolean {
+  if (!origin) return true;
+  const allowed = configured.split(',').map((item) => item.trim()).filter(Boolean);
+  if (allowed.includes('*') || allowed.includes(origin)) return true;
+  return nodeEnv !== 'production' && LOCAL_DEV_ORIGIN.test(origin);
+}
+
 export function validateEnvironment(config: Record<string, unknown>) {
   const required = ['DATABASE_URL', 'REDIS_URL', 'JWT_SECRET'];
   const missing = required.filter((key) => !config[key]);

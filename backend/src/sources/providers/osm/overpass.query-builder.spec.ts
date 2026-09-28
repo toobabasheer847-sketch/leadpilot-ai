@@ -21,6 +21,8 @@ describe('buildOverpassQuery', () => {
 
     expect(query).toContain('[out:json][timeout:25];');
     expect(query).toContain('node["office"="lawyer"]["name"](25.700000,-80.300000,25.900000,-80.100000);');
+    expect(query).toContain('way["office"="lawyer"]["name"](25.700000,-80.300000,25.900000,-80.100000);');
+    expect(query).toContain('relation["office"="lawyer"]["name"](25.700000,-80.300000,25.900000,-80.100000);');
     expect(query).toContain('out center 10;');
     expect(query).not.toContain('Texas');
   });
@@ -31,7 +33,7 @@ describe('buildOverpassQuery', () => {
       locations: [{ country: 'US', state: 'California', city: 'San Jose' }],
     }), { timeoutSeconds: 20, maxResults: 5, bbox });
 
-    expect(query).toContain('["office"="it"]');
+    expect(query).toContain('["office"="it"]["name"~"software|saas",i]');
     expect(query).not.toContain('["office"="lawyer"]');
     expect(query).toContain('out center 5;');
   });

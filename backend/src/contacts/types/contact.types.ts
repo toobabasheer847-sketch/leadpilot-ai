@@ -12,6 +12,8 @@ export interface ContactEvidenceEntry {
 
 export interface ContactCandidate {
   fullName: string;
+  firstName?: string | null;
+  lastName?: string | null;
   title: string | null;
   originalTitle?: string | null;
   normalizedRole?: string | null;

@@ -4,7 +4,7 @@ import { QualificationService } from './qualification.service';
 import type { QualificationJobData } from './types/qualification.types';
 import { StructuredLoggerService } from '../common/observability/structured-logger.service';
 
-@Processor('lead-qualification-queue')
+@Processor('lead-qualification-queue', { lockDuration: 180_000, lockRenewTime: 15_000, stalledInterval: 30_000, maxStalledCount: 2 })
 export class QualificationProcessor extends WorkerHost {
   constructor(private readonly service: QualificationService, private readonly logger: StructuredLoggerService) { super(); }
 

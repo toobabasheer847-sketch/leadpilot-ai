@@ -41,7 +41,7 @@ const CATEGORY_SELECTORS: Record<string, readonly string[]> = {
   commercial_real_estate_investor: [INVESTOR_SELECTOR],
   land_investor: [INVESTOR_SELECTOR],
   construction: ['["office"="construction_company"]', '["craft"="builder"]'],
-  software: ['["office"="it"]'],
+  software: ['["office"="it"]["name"~"software|saas",i]', '["office"="company"]["name"~"software|saas",i]'],
   marketing: ['["office"="advertising_agency"]'],
   healthcare: ['["amenity"="clinic"]', '["amenity"="doctors"]', '["amenity"="hospital"]'],
   legal: ['["office"="lawyer"]'],
@@ -75,7 +75,11 @@ export function buildOverpassQuery(plan: SearchPlan, options: OverpassQueryOptio
   return [
     `[out:json][timeout:${timeoutSeconds}];`,
     '(',
-    ...selectors.map((selector) => `  node${selector}["name"]${box};`),
+    ...selectors.flatMap((selector) => [
+      `  node${selector}["name"]${box};`,
+      `  way${selector}["name"]${box};`,
+      `  relation${selector}["name"]${box};`,
+    ]),
     ');',
     `out center ${maxResults};`,
   ].join('\n');

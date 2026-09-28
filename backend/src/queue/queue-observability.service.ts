@@ -3,9 +3,9 @@ import { ConfigService } from '@nestjs/config';
 import { QueueEvents } from 'bullmq';
 import { MetricsService } from '../common/observability/metrics.service';
 import { StructuredLoggerService } from '../common/observability/structured-logger.service';
-import { redisEndpoint } from '../redis/redis-endpoint';
+import { bullConnectionOptions, closeBullResources, isRedisShutdown, isShutdownConnectionError, noteShutdownReset } from './bull-connection';
 
-const QUEUES = [
+export const QUEUE_NAMES = [
   'lead-research-queue',
   'ai-classification-queue',
   'contact-discovery-queue',
@@ -18,6 +18,7 @@ const QUEUES = [
   'lead-qualification-queue',
   'lead-pipeline-queue',
   'contact-quality-queue',
+  'employee-size-queue',
 ];
 
 @Injectable()
@@ -33,18 +34,9 @@ export class QueueObservabilityService implements OnModuleInit, OnModuleDestroy 
 
   onModuleInit() {
     const redisUrl = this.config.get<string>('redis.url') ?? 'redis://127.0.0.1:6379';
-    const endpoint = redisEndpoint(redisUrl);
-    for (const queue of QUEUES) {
-      const events = new QueueEvents(queue, {
-        connection: {
-          ...endpoint,
-          maxRetriesPerRequest: null,
-          connectTimeout: 10_000,
-          retryStrategy(times: number) {
-            return Math.min(times * 500, 5_000);
-          },
-        },
-      });
+    const connection = bullConnectionOptions(redisUrl);
+    for (const queue of QUEUE_NAMES) {
+      const events = new QueueEvents(queue, { connection });
       events.on('waiting', ({ jobId }) => {
         this.metrics.increment('jobs_total', { queue, status: 'queued' });
         this.logger.info('job.queued', { queue, jobId });
@@ -70,19 +62,30 @@ export class QueueObservabilityService implements OnModuleInit, OnModuleDestroy 
         this.metrics.increment('jobs_total', { queue, status: 'delayed' });
         this.logger.info('job.delayed', { queue, jobId });
       });
-      events.on('error', () => {
+      events.on('error', (error: Error) => {
+        if (isRedisShutdown() && isShutdownConnectionError(error)) {
+          noteShutdownReset();
+          return;
+        }
         const key = `error:${queue}`;
         const last = this.started.get(key) ?? 0;
         if (Date.now() - last < 60_000) return;
         this.started.set(key, Date.now());
-        this.logger.warn('queue.events.error', { queue });
+        this.logger.warn('queue.events.error', { queue, message: error.message });
       });
       this.events.push(events);
     }
   }
 
+  queueEvents() {
+    return this.events;
+  }
+
   async onModuleDestroy() {
-    await Promise.all(this.events.map((events) => events.close()));
+    const errors = await closeBullResources(this.events);
+    for (const error of errors) {
+      this.logger.error('queue.events.close_failed', { message: error.message });
+    }
   }
 
   private finish(queue: string, jobId: string, status: 'completed' | 'failed', previous?: string, metadata: Record<string, unknown> = {}) {

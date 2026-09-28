@@ -5,7 +5,7 @@ import { StructuredLoggerService } from '../common/observability/structured-logg
 import { DeepResearchJobData } from './research.queue';
 import { ResearchService } from './research.service';
 
-@Processor('lead-research-queue')
+@Processor('lead-research-queue', { lockDuration: 300_000, lockRenewTime: 15_000, stalledInterval: 30_000, maxStalledCount: 2 })
 export class ResearchProcessor extends WorkerHost {
   constructor(
     private readonly research: ResearchService,

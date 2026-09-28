@@ -82,8 +82,8 @@ export class ContactsService {
         : await this.db.insert(companyContacts).values({
             companyId,
             fullName: candidate.fullName,
-            firstName: candidate.fullName.split(' ')[0] ?? candidate.fullName,
-            lastName: candidate.fullName.split(' ').slice(1).join(' ') || null,
+            firstName: candidate.firstName ?? candidate.fullName.split(' ')[0] ?? candidate.fullName,
+            lastName: candidate.lastName ?? (candidate.fullName.split(' ').slice(1).join(' ') || null),
             title: candidate.title,
             normalizedRole: candidate.normalizedRole ?? null,
             companyRelationship: candidate.companyRelationship ?? null,

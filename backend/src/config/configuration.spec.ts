@@ -1,4 +1,4 @@
-import { validateEnvironment } from './configuration';
+import { isAllowedCorsOrigin, validateEnvironment } from './configuration';
 
 describe('environment validation', () => {
   const base = {
@@ -10,6 +10,13 @@ describe('environment validation', () => {
 
   it('accepts a development configuration without provider keys', () => {
     expect(validateEnvironment({ ...base })).toEqual(expect.objectContaining(base));
+  });
+
+  it('allows a local Vite port in development and keeps production on the configured list', () => {
+    expect(isAllowedCorsOrigin('http://localhost:5174', 'http://localhost:5173', 'development')).toBe(true);
+    expect(isAllowedCorsOrigin('http://127.0.0.1:5173', 'http://localhost:5173', 'development')).toBe(true);
+    expect(isAllowedCorsOrigin('http://localhost:5174', 'http://localhost:5173', 'production')).toBe(false);
+    expect(isAllowedCorsOrigin('https://app.example', 'https://app.example', 'production')).toBe(true);
   });
 
   it('allows production website research without Google Places and rejects the fake provider', () => {
