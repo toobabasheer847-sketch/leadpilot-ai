@@ -65,6 +65,7 @@ export class SourceDiscoveryService {
     const synthetic = this.provider.metadata().synthetic;
     let rejected = 0;
     let duplicates = 0;
+    let providerQueries = 0;
     let primaryResults: NormalizedSourceResult[] = [];
     let primaryError: string | null = null;
     try {
@@ -92,6 +93,7 @@ export class SourceDiscoveryService {
         webResults = extra.results;
         webError = extra.providerError;
         rejected += extra.rejected;
+        providerQueries += extra.queriesRun;
       } catch (error) {
         webError = error instanceof Error ? error.message : 'Web company discovery failed.';
       }
@@ -119,17 +121,44 @@ export class SourceDiscoveryService {
       throw new SourceProviderError(discoveryFailureCode(failure), failure, true);
     }
 
+    const shortfall = explicit === undefined ? 0 : Math.max(0, explicit - candidates);
+    const remaining = Math.max(0, target - candidates);
+    const unresolved = (plan.unresolvedRequirements ?? plan.unresolvedCriteria ?? [])
+      .map((item) => item.text)
+      .filter(Boolean)
+      .slice(0, 8)
+      .join(' | ');
     await this.usage.recordUsage({ organizationId, operation: 'DISCOVERY', provider: this.provider.providerName(), resourceType: 'search_execution', resourceId: executionId, units: 1, status: 'COMPLETED', requestId: context.requestId, metadata: { candidates } });
     await this.audit(organizationId, executionId, 'CANDIDATES_DISCOVERED', undefined, {
       count: String(candidates),
       requested: explicit === undefined ? '' : String(explicit),
-      shortfall: explicit === undefined ? '0' : String(Math.max(0, explicit - candidates)),
-      provider: this.provider.providerName(),
+      discovered: String(primaryResults.length + webResults.length),
+      accepted: String(candidates),
+      rejected: String(rejected),
       duplicatesRemoved: String(duplicates),
-      rejectedCandidates: String(rejected),
+      persisted: String(candidates),
+      shortfall: String(shortfall),
+      remainingTarget: String(remaining),
+      providerQueries: String(providerQueries),
+      provider: this.provider.providerName(),
+      primaryError: primaryError ?? '',
+      webError: webError ?? '',
+      unresolvedRequirements: unresolved,
+      status: shortfall > 0 ? 'SHORTFALL' : 'COMPLETE',
     });
     await this.audit(organizationId, executionId, 'SOURCE_SEARCH_COMPLETED', undefined, { count: String(candidates), provider: this.provider.providerName() });
-    return { candidates };
+    return {
+      candidates,
+      requested: explicit ?? null,
+      discovered: primaryResults.length + webResults.length,
+      accepted: candidates,
+      rejected,
+      duplicatesRemoved: duplicates,
+      shortfall,
+      providerQueries,
+      primaryError,
+      webError,
+    };
   }
 
   async listCandidates(executionId: string, organizationId: string, page: number, limit: number) {

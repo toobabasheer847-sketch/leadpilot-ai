@@ -98,6 +98,9 @@ export interface PipelineCounters {
   companiesProcessed: number | null;
   requestedCount: number | null;
   discoveryShortfall: number | null;
+  discoveryRejected: number | null;
+  discoveryDuplicatesRemoved: number | null;
+  discoveryProviderQueries: number | null;
   companySizeRequested: boolean | null;
   websitesFound: number | null;
   websitesNotFound: number | null;

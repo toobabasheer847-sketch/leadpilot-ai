@@ -47,11 +47,13 @@ export function isTerminalProviderError(error: unknown): boolean {
   return error instanceof SourceProviderError && (error.terminal || TERMINAL_PROVIDER_ERRORS.has(error.code));
 }
 
-/** Rate limits, timeouts, and temporary outages can fall through to the next discovery provider. */
+/** Rate limits, timeouts, outages, and unusable primary requests can fall through to the next discovery provider. */
 export function isRecoverableDiscoveryError(error: unknown): error is SourceProviderError {
   return error instanceof SourceProviderError && (
     error.code === 'PROVIDER_RATE_LIMITED'
     || error.code === 'PROVIDER_TIMEOUT'
     || error.code === 'PROVIDER_UNAVAILABLE'
+    || error.code === 'PROVIDER_NOT_CONFIGURED'
+    || error.code === 'PROVIDER_INVALID_REQUEST'
   );
 }

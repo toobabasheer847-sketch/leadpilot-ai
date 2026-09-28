@@ -148,7 +148,9 @@ describe('OsmSourceProvider', () => {
 
   it('rejects a malformed Overpass response', async () => {
     await expect(providerWith({ elements: { node: 1 } }).provider.searchBusinesses(plan, context)).rejects.toMatchObject({ code: 'PROVIDER_UNKNOWN_ERROR' });
-    await expect(providerWith({ remark: 'parse error: unexpected token' }).provider.searchBusinesses(plan, context)).rejects.toMatchObject({ code: 'PROVIDER_INVALID_REQUEST' });
+    const rejected = await providerWith({ remark: 'parse error: unexpected token' }).provider.searchBusinesses(plan, context);
+    expect(rejected.results).toEqual([]);
+    expect(rejected.providerError).toMatch(/rejected the search request/i);
     const { provider } = providerWith({ elements: [] });
     expect(() => provider.normalizeResult({ type: 'node', id: 1, tags: {} })).toThrow(/required provenance/);
   });
@@ -228,13 +230,15 @@ describe('OsmSourceProvider', () => {
 
   it('does not send an unsafe location to either service', async () => {
     const { provider, fetch } = providerWith({ elements: [] });
-    await expect(provider.searchBusinesses({
+    const result = await provider.searchBusinesses({
       industry: ['legal'],
       leadTypes: [],
       locations: [{ country: 'US', state: 'Florida"; out;' }],
       companyFields: [],
       unresolvedCriteria: [],
-    }, context)).rejects.toMatchObject({ code: 'PROVIDER_INVALID_REQUEST' });
+    }, context);
+    expect(result.results).toEqual([]);
+    expect(result.providerError).toMatch(/unsupported location value/i);
     expect(fetch).not.toHaveBeenCalled();
   });
 

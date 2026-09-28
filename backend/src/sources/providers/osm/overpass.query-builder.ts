@@ -94,10 +94,13 @@ export function discoveryLocations(plan: SearchPlan): SearchLocation[] {
 }
 
 export function locationLabel(location: SearchLocation): string {
-  return [location.city, location.state, location.region, location.country]
+  const structured = [location.city, location.state, location.region, location.country]
     .filter((part): part is string => Boolean(part?.trim()))
-    .map((part) => assertLocationText(part))
-    .join(', ');
+    .map((part) => assertLocationText(part));
+  if (structured.length) return structured.join(', ');
+  const original = location.originalText?.trim();
+  if (original) return assertLocationText(original);
+  throw new SourceProviderError('PROVIDER_INVALID_REQUEST', 'OpenStreetMap discovery requires a location.');
 }
 
 export function searchWindows(bbox: OverpassBBox): OverpassBBox[] {

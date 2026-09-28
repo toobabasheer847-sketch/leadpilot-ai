@@ -13,9 +13,7 @@ export class WebSearchCompanyDiscovery {
   ) {}
 
   collect(plan: SearchPlan, remaining: number, exclude: NormalizedSourceResult[] = []): Promise<WebCompanyCollection> {
-    const provider = (this.config.get<string>('webSearch.provider') || '').trim().toLowerCase();
-    const key = this.config.get<string>('webSearch.tavilyApiKey')?.trim();
-    if (provider !== 'tavily' || !key || typeof this.search.searchText !== 'function') {
+    if (typeof this.search.searchText !== 'function') {
       return Promise.resolve({
         results: [],
         rejected: 0,

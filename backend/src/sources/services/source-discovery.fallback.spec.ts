@@ -75,7 +75,7 @@ describe('SourceDiscoveryService OSM web fallback', () => {
       collect,
     });
 
-    await expect(service.discover('exec-1', 'org-1', plan)).resolves.toEqual({ candidates: 1 });
+    await expect(service.discover('exec-1', 'org-1', plan)).resolves.toMatchObject({ candidates: 1 });
     expect(webDiscovery.collect).toHaveBeenCalledWith(plan, 10, []);
   });
 
@@ -89,7 +89,7 @@ describe('SourceDiscoveryService OSM web fallback', () => {
       collect,
     });
 
-    await expect(service.discover('exec-2', 'org-1', plan)).resolves.toEqual({ candidates: 1 });
+    await expect(service.discover('exec-2', 'org-1', plan)).resolves.toMatchObject({ candidates: 1 });
     expect(webDiscovery.collect).toHaveBeenCalledWith(plan, 10, []);
   });
 
@@ -106,7 +106,7 @@ describe('SourceDiscoveryService OSM web fallback', () => {
       collect,
     });
 
-    await expect(service.discover('exec-3', 'org-1', plan)).resolves.toEqual({ candidates: 2 });
+    await expect(service.discover('exec-3', 'org-1', plan)).resolves.toMatchObject({ candidates: 2 });
     expect(webDiscovery.collect).toHaveBeenCalledWith(plan, 9, [osmCompany]);
   });
 

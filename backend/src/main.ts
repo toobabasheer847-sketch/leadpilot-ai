@@ -66,7 +66,8 @@ async function bootstrap() {
     10,
   );
 
-  await app.listen(port);
+ // await app.listen(port);
+ await app.listen(port, '0.0.0.0');
 
   app.get(StructuredLoggerService).info('application.started', { port });
 }

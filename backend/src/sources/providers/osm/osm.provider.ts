@@ -85,11 +85,14 @@ export class OsmSourceProvider implements SourceProvider {
         try {
           place = await this.geocode(locationLabel(location));
         } catch (error) {
-          if (isRecoverableDiscoveryError(error)) {
+          if (isRecoverableDiscoveryError(error) || (error instanceof SourceProviderError && error.code === 'PROVIDER_INVALID_REQUEST')) {
             providerError = error.message;
-            halt = error.code === 'PROVIDER_RATE_LIMITED' || error.code === 'PROVIDER_UNAVAILABLE';
-            if (error.code === 'PROVIDER_TIMEOUT') continue;
-            break;
+            // Do not invent another location. Skip this unresolved place and keep any other SearchPlan locations.
+            if (error.code === 'PROVIDER_RATE_LIMITED' || error.code === 'PROVIDER_UNAVAILABLE') {
+              halt = true;
+              break;
+            }
+            continue;
           }
           throw error;
         }

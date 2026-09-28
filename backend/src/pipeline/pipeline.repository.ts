@@ -101,6 +101,7 @@ export class PipelineRepository {
     const websitesFound = facts.filter((row) => Boolean(row.website?.trim())).length;
     const companySizeFound = facts.filter((row) => row.employeeCount != null || Boolean(row.employeeRange?.trim())).length;
     const execution = await this.executionPlan(organizationId, searchExecutionId);
+    const discovery = await this.discoveryDiagnostics(organizationId, searchExecutionId);
     const requestedCount = explicitResultCount(execution.plan);
     const discovered = execution.totalCandidates > 0 ? execution.totalCandidates : companyIds.length;
     return {
@@ -109,6 +110,9 @@ export class PipelineRepository {
       companiesProcessed: companyIds.length,
       requestedCount: requestedCount ?? null,
       discoveryShortfall: requestedCount === undefined ? null : Math.max(0, requestedCount - companyIds.length),
+      discoveryRejected: discovery.rejected,
+      discoveryDuplicatesRemoved: discovery.duplicatesRemoved,
+      discoveryProviderQueries: discovery.providerQueries,
       companySizeRequested: Boolean(execution.plan?.companySize),
       websitesFound,
       websitesNotFound: facts.length - websitesFound,
@@ -230,6 +234,29 @@ export class PipelineRepository {
     )).limit(1);
     const plan = row?.plan && typeof row.plan === 'object' ? row.plan as SearchPlan : null;
     return { plan, totalCandidates: row?.totalCandidates ?? 0 };
+  }
+
+  private async discoveryDiagnostics(organizationId: string, searchExecutionId: string): Promise<{
+    rejected: number | null;
+    duplicatesRemoved: number | null;
+    providerQueries: number | null;
+  }> {
+    const [row] = await this.db.select({ metadata: auditLogs.metadata }).from(auditLogs).where(and(
+      eq(auditLogs.organizationId, organizationId),
+      eq(auditLogs.entityId, searchExecutionId),
+      eq(auditLogs.action, 'CANDIDATES_DISCOVERED'),
+    )).orderBy(desc(auditLogs.createdAt)).limit(1);
+    const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : null;
+    const numberOrNull = (key: string) => {
+      const raw = metadata?.[key] ?? metadata?.[key === 'rejected' ? 'rejectedCandidates' : key];
+      const value = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+      return Number.isFinite(value) ? value : null;
+    };
+    return {
+      rejected: numberOrNull('rejected'),
+      duplicatesRemoved: numberOrNull('duplicatesRemoved'),
+      providerQueries: numberOrNull('providerQueries'),
+    };
   }
 
   async audit(organizationId: string, userId: string | null, action: string, pipelineExecutionId: string, metadata: Record<string, string | null>) {

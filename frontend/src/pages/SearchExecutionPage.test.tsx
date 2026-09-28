@@ -27,7 +27,7 @@ const running: PipelineView = {
   },
   stageList: [{ name: 'SEARCH', status: 'COMPLETED' }, { name: 'DISCOVERY', status: 'FAILED' }],
   counters: {
-    companiesDiscovered: null, companiesPersisted: null, companiesProcessed: null, requestedCount: null, discoveryShortfall: null, companySizeRequested: null, websitesFound: null, websitesNotFound: null,
+    companiesDiscovered: null, companiesPersisted: null, companiesProcessed: null, requestedCount: null, discoveryShortfall: null, discoveryRejected: null, discoveryDuplicatesRemoved: null, discoveryProviderQueries: null, companySizeRequested: null, websitesFound: null, websitesNotFound: null,
     websitesResearched: null, companySizeFound: null, companySizeUnknown: null, decisionMakersFound: null, decisionMakerEmailsFound: null,
     companyEmailsFound: null, socialProfilesFound: null, contactsFound: null, evidenceCollected: null, verifiedFields: null,
     conflictsFound: null, duplicatesFound: null, qualifiedLeads: null, needsReview: null, rejected: null,

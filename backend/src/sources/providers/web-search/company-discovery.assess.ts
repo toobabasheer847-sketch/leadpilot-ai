@@ -132,7 +132,7 @@ export function assessWebCompanyCandidate(
   if (LISTING.test(text)) return { accepted: false, reason: 'GENERIC_LIST' };
   const name = companyNameFromTitle(hit.title);
   if (!name) return { accepted: false, reason: 'UNUSABLE_NAME' };
-  const requested = plan.locations.find((location) => location.city || location.state || location.region || location.country);
+  const requested = plan.locations.find((location) => location.city || location.state || location.region || location.country || location.originalText);
   const location = requested ? locationEvidence(text, name, requested) : null;
   if (requested && !location) return { accepted: false, reason: 'OUTSIDE_REQUESTED_LOCATION' };
   const category = categoryDecision(text, plan, name);
@@ -172,7 +172,7 @@ function searchPhrases(plan: SearchPlan): string[] {
 }
 
 function searchPlaces(plan: SearchPlan): string[] {
-  const location = plan.locations.find((item) => item.city || item.state || item.region || item.country);
+  const location = plan.locations.find((item) => item.city || item.state || item.region || item.country || item.originalText);
   if (!location) return [''];
   if (location.city?.trim()) return [placeLabel(location)];
   const cities = expansionCities(location);
@@ -181,7 +181,9 @@ function searchPlaces(plan: SearchPlan): string[] {
 }
 
 function placeLabel(location: SearchLocation): string {
-  return [location.city, location.state, location.region, location.country].filter((part) => Boolean(part?.trim())).join(' ');
+  const structured = [location.city, location.state, location.region, location.country].filter((part) => Boolean(part?.trim()));
+  if (structured.length) return structured.join(' ');
+  return location.originalText?.trim() ?? '';
 }
 
 function isInvestorPlan(plan: SearchPlan): boolean {
@@ -221,13 +223,15 @@ function locationEvidence(text: string, companyName: string, requested: SearchLo
   const cityName = [requested.city, ...expansionCities(requested)]
     .filter((city): city is string => Boolean(city?.trim()))
     .find((city) => new RegExp(`\\b${escapeRegExp(city)}\\b`, 'i').test(withoutName));
-  if (!evidence && !cityName) return null;
+  const original = requested.originalText?.trim();
+  const originalHit = original && new RegExp(`\\b${escapeRegExp(original)}\\b`, 'i').test(withoutName) ? original : null;
+  if (!evidence && !cityName && !originalHit) return null;
   const country = toCountryCode(requested.country);
   return {
     ...(cityName ? { city: cityName } : {}),
     ...(requested.state ? { state: requested.state } : {}),
     ...(country ? { country } : {}),
-    evidence: cityName ?? evidence ?? '',
+    evidence: cityName ?? evidence ?? originalHit ?? '',
   };
 }
 
