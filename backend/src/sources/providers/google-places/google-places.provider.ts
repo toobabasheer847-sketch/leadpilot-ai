@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OutboundRequestError, OutboundRequestService } from '../../../common/outbound-request.service';
+import { discoveryTarget, RESULT_SAFETY_CAP } from '../../../search/search-plan.limits';
 import { SearchPlan } from '../../../search/types/search-plan.types';
 import { GooglePlacesTextSearchResponse } from './google-places.types';
 import { NormalizedSourceResult, SourceProvider, SourceSearchContext, SourceSearchResult } from '../../types/source.types';
@@ -26,7 +27,8 @@ export class GooglePlacesProvider implements SourceProvider {
     configService: ConfigService,
   ) {
     this.apiKey = configService.get<string>('sourceProvider.googlePlacesApiKey');
-    this.maxResults = positiveInt(configService.get<number>('sourceProvider.maxResults'), 60);
+    // Cost ceiling only. Plan discoveryTarget drives how many results are fetched within this cap.
+    this.maxResults = Math.min(RESULT_SAFETY_CAP, positiveInt(configService.get<number>('sourceProvider.maxResults'), RESULT_SAFETY_CAP));
     this.pageSize = Math.min(GOOGLE_MAX_PAGE_SIZE, positiveInt(configService.get<number>('sourceProvider.pageSize'), 20));
     this.retainRawData = configService.get<boolean>('sourceProvider.retainRawData', true);
     this.timeoutMs = positiveInt(configService.get<number>('sourceProvider.timeoutMs'), 10000);
@@ -60,12 +62,13 @@ export class GooglePlacesProvider implements SourceProvider {
     }
 
     const results: NormalizedSourceResult[] = [];
-    const maxPages = Math.ceil(this.maxResults / this.pageSize);
+    const resultLimit = Math.min(this.maxResults, discoveryTarget(plan));
+    const maxPages = Math.ceil(resultLimit / this.pageSize);
     let pageToken: string | undefined;
-    for (let page = 0; page < maxPages && results.length < this.maxResults; page += 1) {
+    for (let page = 0; page < maxPages && results.length < resultLimit; page += 1) {
       const response = await this.requestWithRetry(buildGooglePlacesQuery(plan), pageToken);
       for (const place of response.places ?? []) {
-        if (results.length >= this.maxResults) break;
+        if (results.length >= resultLimit) break;
         results.push(this.normalizeResult(place));
       }
       pageToken = response.nextPageToken;

@@ -72,12 +72,38 @@ export function publicCompanyProfiles(companyName: string, hits: Array<{ url: st
   for (const hit of hits) {
     const text = `${hit.title ?? ''} ${hit.snippet ?? ''}`;
     if (!text.toLowerCase().includes(name.toLowerCase())) continue;
+    if (profileBelongsToOtherCompany(name, hit.title ?? '', hit.snippet ?? '')) continue;
     const url = canonicalProfileUrl(hit.url);
     if (!url || seen.has(url) || !isPublicCompanyProfile(url)) continue;
     seen.add(url);
     found.push(url);
   }
   return found;
+}
+
+function profileBelongsToOtherCompany(companyName: string, title: string, snippet: string): boolean {
+  const subject = title.split(/\s+[|–—]\s+|\s+-\s+/)[0]?.trim() ?? '';
+  if (!subject) return false;
+  const target = normalizeName(companyName);
+  const candidate = normalizeName(subject);
+  if (!candidate || candidate.includes(target) || target.includes(candidate)) return false;
+  const targetTokens = distinctiveTokens(target);
+  const candidateTokens = distinctiveTokens(candidate);
+  if (!targetTokens.length || !candidateTokens.length) return false;
+  const shared = targetTokens.filter((token) => candidateTokens.includes(token));
+  if (shared.length === 0) return false;
+  if (candidateTokens.some((token) => !targetTokens.includes(token))) return true;
+  const text = normalizeName(`${title} ${snippet}`);
+  return !text.includes(target);
+}
+
+function normalizeName(value: string): string {
+  return value.toLowerCase().replace(/&amp;/g, ' and ').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function distinctiveTokens(value: string): string[] {
+  const legal = new Set(['llc', 'inc', 'incorporated', 'corp', 'corporation', 'co', 'ltd', 'limited', 'company', 'lp', 'llp', 'pllc', 'plc', 'and', 'the', 'for']);
+  return value.split(' ').filter((token) => token.length >= 3 && !legal.has(token));
 }
 
 function isPublicCompanyProfile(url: string): boolean {

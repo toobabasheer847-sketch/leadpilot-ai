@@ -317,9 +317,9 @@ export class WebsiteDiscoveryService {
   }
 }
 
-const COMPANY_PAGE = /\/(about(?:-us)?|team|our-team|leadership|management|contact|company|who-we-are)(?:\/|$)/i;
+const COMPANY_PAGE = /\/(about(?:-us)?|team|our-team|leadership|management|contact|company|who-we-are|services|products|industries|markets|investments?|portfolio)(?:\/|$)/i;
 
-/** About, team, and contact pages are fetched before generic links so public people and emails are not crowded out. */
+/** About, team, contact, and commercial pages are fetched before generic links so public people and emails are not crowded out. */
 export function prioritizeCompanyPages(urls: string[]): string[] {
   return urls
     .map((url, index) => ({ url, index, rank: companyPageRank(url) }))
@@ -329,7 +329,11 @@ export function prioritizeCompanyPages(urls: string[]): string[] {
 
 function companyPageRank(url: string): number {
   try {
-    return COMPANY_PAGE.test(new URL(url).pathname) ? 2 : 0;
+    const path = new URL(url).pathname.toLowerCase();
+    if (/\/(about(?:-us)?|who-we-are|company)(?:\/|$)/i.test(path)) return 4;
+    if (/\/(team|our-team|leadership|management|contact)(?:\/|$)/i.test(path)) return 3;
+    if (/\/(services|products|industries|markets|investments?|portfolio)(?:\/|$)/i.test(path)) return 2;
+    return COMPANY_PAGE.test(path) ? 1 : 0;
   } catch {
     return 0;
   }

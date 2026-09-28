@@ -2,7 +2,8 @@ import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { DRIZZLE } from '../database/database.constants';
 import type { Database } from '../database/database.types';
-import { auditLogs, companies, pipelineJobs, sourceRecords } from '../database/schema/schema';
+import { auditLogs, companies, pipelineJobs, searchExecutions, sourceRecords } from '../database/schema/schema';
+import type { SearchPlan } from '../search/types/search-plan.types';
 import { CompanyEnrichmentRepository } from './repositories/company-enrichment.repository';
 import { EvidenceRepository } from './repositories/evidence.repository';
 import { CompanySocialDiscoveryService } from './social/company-social-discovery.service';
@@ -89,7 +90,8 @@ export class EnrichmentService {
 
     await this.usage.checkRequestRate(organizationId, undefined, 'WEBSITE_FETCH');
     try {
-      const result = await this.providerObservability.track('website', 'ENRICHMENT', async () => ({ value: await this.enrichPages(company) }));
+      const plan = await this.loadPlan(data.searchExecutionId, organizationId);
+      const result = await this.providerObservability.track('website', 'ENRICHMENT', async () => ({ value: await this.enrichPages(company, plan) }));
       await this.usage.recordUsage({ organizationId, operation: 'WEBSITE_FETCH', provider: 'website', resourceType: 'company', resourceId: company.id, units: Math.max(1, result.pagesFetched), status: 'COMPLETED', metadata: { pagesFetched: result.pagesFetched, fieldsExtracted: result.fieldsExtracted, websiteStatus: result.websiteStatus, ...(result.message ? { message: result.message } : {}) } });
       await this.db.insert(auditLogs).values({ organizationId, entityId: company.id, action: 'COMPANY_ENRICHMENT_COMPLETED', entityType: 'company', metadata: { companyId: company.id, pagesFetched: result.pagesFetched, fieldsExtracted: result.fieldsExtracted, websiteStatus: result.websiteStatus, ...(result.message ? { message: result.message } : {}) } });
       return { companyId, organizationId, website: result.website, websiteStatus: result.websiteStatus, message: result.message, socialProfiles: result.socialProfiles, fieldsExtracted: result.fieldsExtracted };
@@ -99,7 +101,7 @@ export class EnrichmentService {
     }
   }
 
-  private async enrichPages(company: typeof companies.$inferSelect) {
+  private async enrichPages(company: typeof companies.$inferSelect, plan: SearchPlan | null) {
     const located = await this.companyRepository.findCompanyWithLocation(company.id, company.organizationId);
     const location = located?.location ?? null;
     const sources = await this.db.select({
@@ -108,6 +110,7 @@ export class EnrichmentService {
       rawData: sourceRecords.rawData,
     }).from(sourceRecords).where(and(eq(sourceRecords.companyId, company.id), eq(sourceRecords.organizationId, company.organizationId)));
     const attempt = sources.find((row) => Boolean(row.sourceUrl)) ?? null;
+    const category = company.category ?? plan?.category ?? plan?.industry?.[0] ?? plan?.leadTypes?.[0] ?? null;
     const websiteResult = await this.discovery.discover({
       existingWebsite: company.website ?? null,
       companyName: company.name,
@@ -117,7 +120,7 @@ export class EnrichmentService {
       sourceWebsites: sources.flatMap((row) => websitesFromSourceRaw(row.rawData)),
       attemptSourceUrl: attempt?.sourceUrl ?? null,
       attemptSourceType: attempt?.sourceType ?? null,
-      category: company.category ?? null,
+      category,
     });
     const updates: Partial<typeof companies.$inferInsert> = {};
     const replacingRejectedWebsite = Boolean(websiteResult.clearStoredWebsite && company.website && company.verificationStatus !== 'VERIFIED');
@@ -126,17 +129,23 @@ export class EnrichmentService {
     const pages = websiteResult.pages ?? (websiteResult.page ? [websiteResult.page] : []);
     const discoveredSocial = new Set<string>();
     let fieldsExtracted = 0;
+    const wantsEmail = fieldRequested(plan, 'email') || Boolean(plan?.emailRequirement?.requested);
+    const wantsPhone = fieldRequested(plan, 'phone');
+    const wantsWebsite = fieldRequested(plan, 'website') || Boolean(plan?.websiteRequirement?.requested);
     for (const page of pages) {
       const parsed = this.parser.parsePage(page.finalUrl, page.content);
       fieldsExtracted += parsed.evidence.length;
       if (!company.description && parsed.description && !updates.description) updates.description = parsed.description;
-      if (!company.phone && parsed.phone && !updates.phone) updates.phone = parsed.phone;
-      if (!company.email && parsed.publicEmail && !updates.email) updates.email = parsed.publicEmail;
+      if ((!company.phone || wantsPhone) && parsed.phone && !updates.phone && !company.phone) updates.phone = parsed.phone;
+      if ((!company.email || wantsEmail) && parsed.publicEmail && !updates.email && !company.email) updates.email = parsed.publicEmail;
       if (!company.investmentStrategy && parsed.investmentStrategy && !updates.investmentStrategy) updates.investmentStrategy = parsed.investmentStrategy;
       if (!company.marketsServed && parsed.marketsServed?.length) updates.marketsServed = parsed.marketsServed;
       if (!company.propertyTypes && parsed.propertyTypes?.length) updates.propertyTypes = parsed.propertyTypes;
       await this.evidenceRepository.persistEvidence(company.id, page.finalUrl, parsed.evidence, page.canonicalUrl ?? websiteResult.website ?? undefined);
       for (const socialUrl of this.socialDiscovery.discover(page.content, page.finalUrl)) discoveredSocial.add(socialUrl);
+    }
+    if (wantsWebsite && websiteResult.status !== 'FOUND' && !company.website && !replacingRejectedWebsite) {
+      // Attempt already made via discovery; leave website unset rather than inventing one.
     }
     const evidenceWebsite = replacingRejectedWebsite ? websiteResult.website : (company.website || websiteResult.website);
     if (websiteResult.status === 'FOUND' && websiteResult.website && websiteResult.searchHit) {
@@ -185,7 +194,7 @@ export class EnrichmentService {
     const profileHits = (websiteResult.rejectedSearchHits ?? []).map((item) => item.hit);
     const profiles = this.socialDiscovery.fromSearchHits?.(company.name, profileHits) ?? [];
     for (const socialUrl of profiles) {
-      if (discoveredSocial.has(socialUrl)) continue;
+      if (!socialPlatformAllowed(plan, socialUrl) || discoveredSocial.has(socialUrl)) continue;
       discoveredSocial.add(socialUrl);
       await this.evidenceRepository.persistEvidence(company.id, socialUrl, [{
         field: 'socialProfile',
@@ -213,6 +222,15 @@ export class EnrichmentService {
       pagesFetched: pages.length,
       fieldsExtracted,
     };
+  }
+
+  private async loadPlan(searchExecutionId: string | null | undefined, organizationId: string): Promise<SearchPlan | null> {
+    if (!searchExecutionId) return null;
+    const [row] = await this.db.select({ plan: searchExecutions.structuredPlan }).from(searchExecutions).where(and(
+      eq(searchExecutions.id, searchExecutionId),
+      eq(searchExecutions.organizationId, organizationId),
+    )).limit(1);
+    return row?.plan && typeof row.plan === 'object' ? row.plan as SearchPlan : null;
   }
 
   private jobKey(companyId: string, organizationId: string, searchExecutionId: string | null) {
@@ -285,5 +303,27 @@ export class EnrichmentService {
       }
     }
     return map;
+  }
+}
+
+function fieldRequested(plan: SearchPlan | null, field: string): boolean {
+  if (!plan) return false;
+  const bags = [plan.requiredFields, plan.preferredFields, plan.optionalFields, plan.companyFields, plan.personFields];
+  return bags.some((list) => list?.some((item) => item.toLowerCase().includes(field.toLowerCase())));
+}
+
+function socialPlatformAllowed(plan: SearchPlan | null, socialUrl: string): boolean {
+  const requested = plan?.socialPlatforms?.map((item) => item.toLowerCase()).filter(Boolean) ?? [];
+  if (!requested.length) return true;
+  try {
+    const host = new URL(socialUrl).hostname.toLowerCase();
+    if (requested.includes('linkedin') && host.includes('linkedin')) return true;
+    if (requested.includes('facebook') && host.includes('facebook')) return true;
+    if (requested.includes('instagram') && host.includes('instagram')) return true;
+    if (requested.includes('youtube') && (host.includes('youtube') || host.includes('youtu.be'))) return true;
+    if ((requested.includes('x') || requested.includes('twitter')) && (host.includes('x.com') || host.includes('twitter'))) return true;
+    return false;
+  } catch {
+    return false;
   }
 }

@@ -188,6 +188,8 @@ describe('pipeline orchestration', () => {
   it('runs deep website research after enrichment in the existing pipeline', () => {
     expect(nextWorkStage('ENRICHMENT')).toBe('DEEP_RESEARCH');
     expect(employeeSizeRequested({ companySize: { min: 1, max: 50 } })).toBe(true);
+    expect(employeeSizeRequested({ employeeSize: { min: 10, max: 100 } })).toBe(true);
+    expect(employeeSizeRequested({ employeeSize: { qualitative: 'small' } })).toBe(false);
     expect(employeeSizeRequested({})).toBe(false);
     expect(employeeSizeRequested({ companySize: {} })).toBe(false);
     expect(nextWorkStage('DEEP_RESEARCH')).toBe('EMPLOYEE_SIZE');

@@ -28,7 +28,7 @@ export default () => ({
     timeoutMs: parseInt(process.env.SOURCE_PROVIDER_TIMEOUT_MS ?? '10000', 10),
     concurrency: parseInt(process.env.SOURCE_PROVIDER_CONCURRENCY ?? '2', 10),
     maxPages: parseInt(process.env.SOURCE_PROVIDER_MAX_PAGES ?? '3', 10),
-    maxResults: parseInt(process.env.DISCOVERY_MAX_RESULTS ?? '60', 10),
+    maxResults: parseInt(process.env.DISCOVERY_MAX_RESULTS ?? '1000', 10),
     pageSize: parseInt(process.env.DISCOVERY_PAGE_SIZE ?? '20', 10),
     retries: parseInt(process.env.SOURCE_PROVIDER_RETRIES ?? '2', 10),
     retryDelayMs: parseInt(process.env.SOURCE_PROVIDER_RETRY_DELAY_MS ?? '250', 10),
@@ -225,9 +225,9 @@ export function validateEnvironment(config: Record<string, unknown>) {
     }
   }
 
-  const discoveryMaxResults = Number(config.DISCOVERY_MAX_RESULTS ?? 60);
-  if (!Number.isInteger(discoveryMaxResults) || discoveryMaxResults < 1 || discoveryMaxResults > 500) {
-    throw new Error('DISCOVERY_MAX_RESULTS must be an integer between 1 and 500');
+  const discoveryMaxResults = Number(config.DISCOVERY_MAX_RESULTS ?? 1000);
+  if (!Number.isInteger(discoveryMaxResults) || discoveryMaxResults < 1 || discoveryMaxResults > 1000) {
+    throw new Error('DISCOVERY_MAX_RESULTS must be an integer between 1 and 1000');
   }
   const discoveryPageSize = Number(config.DISCOVERY_PAGE_SIZE ?? 20);
   if (!Number.isInteger(discoveryPageSize) || discoveryPageSize < 1 || discoveryPageSize > 20) {

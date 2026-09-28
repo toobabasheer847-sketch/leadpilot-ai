@@ -8,6 +8,8 @@ const plan = {
   locations: [{ country: 'US', state: 'California' }],
   companyFields: [],
   unresolvedCriteria: [],
+  requestedCount: 20,
+  maxResults: 20,
 };
 
 const context = { organizationId: 'org-1', searchExecutionId: 'execution-1' };
@@ -72,6 +74,38 @@ describe('GooglePlacesProvider', () => {
 
     expect(result.results.map((item) => item.externalId)).toEqual(['place-1', 'place-2']);
     expect((outbound as unknown as { fetch: jest.Mock }).fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('honors SearchPlan discoveryTarget and does not over-fetch past the plan count', async () => {
+    const outbound = {
+      fetch: jest.fn()
+        .mockResolvedValueOnce(httpResponse({
+          places: [
+            { id: 'place-1', displayName: { text: 'One' }, googleMapsUri: 'https://maps.google.com/?place=place-1' },
+            { id: 'place-2', displayName: { text: 'Two' }, googleMapsUri: 'https://maps.google.com/?place=place-2' },
+          ],
+          nextPageToken: 'next',
+        }))
+        .mockResolvedValueOnce(httpResponse({
+          places: [{ id: 'place-3', displayName: { text: 'Three' }, googleMapsUri: 'https://maps.google.com/?place=place-3' }],
+        })),
+    } as unknown as OutboundRequestService;
+    const config = { get: (key: string) => ({
+      'sourceProvider.googlePlacesApiKey': 'configured-key',
+      'sourceProvider.googlePlacesBaseUrl': 'https://provider.test/search',
+      'sourceProvider.maxResults': 100,
+      'sourceProvider.pageSize': 20,
+      'sourceProvider.timeoutMs': 1000,
+      'sourceProvider.retries': 0,
+      'sourceProvider.retryDelayMs': 0,
+    }[key]) } as ConfigService;
+    const provider = new GooglePlacesProvider(outbound, config);
+    const smallPlan = { ...plan, requestedCount: 2, maxResults: 2 };
+
+    const result = await provider.searchBusinesses(smallPlan, context);
+
+    expect(result.results.map((item) => item.externalId)).toEqual(['place-1', 'place-2']);
+    expect((outbound as unknown as { fetch: jest.Mock }).fetch).toHaveBeenCalledTimes(1);
   });
 
   it('does not call the provider or invent companies when the API key is missing', async () => {

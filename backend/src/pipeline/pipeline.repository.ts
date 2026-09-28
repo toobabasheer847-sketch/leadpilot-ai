@@ -4,7 +4,7 @@ import { DRIZZLE } from '../database/database.constants';
 import type { Database } from '../database/database.types';
 import { auditLogs, companies, companyContacts, companySocialProfiles, leadDuplicates, leadEvidence, leadQualifications, leadVerifications, pipelineExecutions, researchExecutions, searchExecutions, sourceRecords, verificationConflicts } from '../database/schema/schema';
 import type { PipelineCounters } from './pipeline.types';
-import { explicitResultCount } from '../search/search-plan.limits';
+import { employeeSizeRequested, explicitResultCount } from '../search/search-plan.limits';
 import type { SearchPlan } from '../search/types/search-plan.types';
 
 export type PipelineExecutionRow = typeof pipelineExecutions.$inferSelect;
@@ -113,7 +113,7 @@ export class PipelineRepository {
       discoveryRejected: discovery.rejected,
       discoveryDuplicatesRemoved: discovery.duplicatesRemoved,
       discoveryProviderQueries: discovery.providerQueries,
-      companySizeRequested: Boolean(execution.plan?.companySize),
+      companySizeRequested: employeeSizeRequested(execution.plan),
       websitesFound,
       websitesNotFound: facts.length - websitesFound,
       websitesResearched,

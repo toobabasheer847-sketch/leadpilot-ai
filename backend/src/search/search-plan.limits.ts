@@ -19,3 +19,18 @@ export function discoveryQueryBudget(requestedCount: number): number {
   const count = Math.max(1, Math.trunc(requestedCount));
   return Math.min(240, Math.max(4, Math.ceil(count / 2)));
 }
+
+/** True only when the SearchPlan asked for a numeric employee-size bound. Qualitative "small" alone does not qualify. */
+export function employeeSizeRequested(plan: unknown): boolean {
+  if (!plan || typeof plan !== 'object') return false;
+  const record = plan as {
+    companySize?: { min?: unknown; max?: unknown; exact?: unknown };
+    employeeSize?: { min?: unknown; max?: unknown; exact?: unknown };
+    employeeRange?: { min?: unknown; max?: unknown; exact?: unknown };
+  };
+  return hasNumericSize(record.companySize) || hasNumericSize(record.employeeSize) || hasNumericSize(record.employeeRange);
+}
+
+function hasNumericSize(size?: { min?: unknown; max?: unknown; exact?: unknown }): boolean {
+  return Boolean(size && (typeof size.min === 'number' || typeof size.max === 'number' || typeof size.exact === 'number'));
+}

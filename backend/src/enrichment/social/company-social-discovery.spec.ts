@@ -29,4 +29,12 @@ describe('public company profiles', () => {
       'https://oak.example/blog/post',
     ]);
   });
+
+  it('fetches services and portfolio pages ahead of generic links', () => {
+    expect(prioritizeCompanyPages([
+      'https://oak.example/privacy',
+      'https://oak.example/portfolio',
+      'https://oak.example/services',
+    ])[0]).toMatch(/services|portfolio/);
+  });
 });

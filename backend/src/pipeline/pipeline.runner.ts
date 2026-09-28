@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { SearchPlan } from '../search/types/search-plan.types';
+import { employeeSizeRequested } from '../search/search-plan.limits';
 import type { ClassificationCriteria } from '../ai/classification/types/classification.types';
 import { EnrichmentService } from '../enrichment/enrichment.service';
 import { ContactsService } from '../contacts/contacts.service';
@@ -246,10 +247,10 @@ export class PipelineStageRunner {
   }
 }
 
-export function employeeSizeRequested(plan: unknown): boolean {
-  if (!plan || typeof plan !== 'object' || !('companySize' in plan)) return false;
-  const size = (plan as { companySize?: { min?: unknown; max?: unknown } }).companySize;
-  return Boolean(size && (typeof size.min === 'number' || typeof size.max === 'number'));
+export { employeeSizeRequested } from '../search/search-plan.limits';
+
+function hasNumericSize(size?: { min?: unknown; max?: unknown; exact?: unknown }): boolean {
+  return Boolean(size && (typeof size.min === 'number' || typeof size.max === 'number' || typeof size.exact === 'number'));
 }
 
 function criteriaFromPlan(plan: unknown): ClassificationCriteria {
@@ -257,11 +258,12 @@ function criteriaFromPlan(plan: unknown): ClassificationCriteria {
   const leadType = record.leadTypes?.[0];
   const industry = record.industry?.[0];
   const location = record.locations?.[0];
+  const companySize = record.companySize ?? record.employeeSize ?? record.employeeRange;
   return {
     category: leadType ?? industry ?? 'UNSPECIFIED',
     ...(leadType ? { targetType: leadType } : {}),
     ...(location ? { location: { country: location.country, ...(location.state ? { states: [location.state] } : {}) } } : {}),
-    ...(record.companySize ? { companySize: record.companySize } : {}),
+    ...(companySize && hasNumericSize(companySize) ? { companySize } : {}),
     requiredSignals: record.requiredFields ?? [],
     excludedSignals: [],
   };
