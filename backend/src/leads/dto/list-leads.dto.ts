@@ -35,6 +35,7 @@ export class ListLeadsDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) companySizeMax?: number;
   @IsOptional() @IsString() contactTitle?: string;
   @IsOptional() @Transform(toBoolean) hasDecisionMaker?: boolean;
+  @IsOptional() @Transform(toBoolean) hasVerifiedContact?: boolean;
   @IsOptional() @Transform(toBoolean) hasEmail?: boolean;
   @IsOptional() @Transform(toBoolean) hasPhone?: boolean;
   @IsOptional() @Transform(toBoolean) hasLinkedIn?: boolean;

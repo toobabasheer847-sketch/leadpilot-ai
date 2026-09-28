@@ -358,10 +358,14 @@ export interface ExportRecord {
   status: string;
   rowCount: number | null;
   fileName: string | null;
+  searchExecutionId?: string | null;
   createdAt: string;
   completedAt: string | null;
   errorMessage: string | null;
 }
+
+export type ExportMode = 'ALL' | 'QUALIFIED' | 'VERIFIED_CONTACTS';
+export type MissingValueMode = 'NOT_FOUND' | 'EMPTY';
 
 export type LeadSortBy = 'score' | 'companyName' | 'createdAt' | 'updatedAt' | 'lastVerifiedAt';
 
@@ -385,6 +389,7 @@ export interface LeadFilters {
   searchExecutionId?: string;
   companyName?: string;
   hasDecisionMaker?: boolean;
+  hasVerifiedContact?: boolean;
   hasEmail?: boolean;
   hasPhone?: boolean;
   companySizeStatus?: 'MATCHED' | 'UNKNOWN' | 'OUTSIDE_RANGE' | 'CONFLICT' | 'NOT_REQUESTED';

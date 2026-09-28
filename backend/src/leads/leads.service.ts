@@ -131,8 +131,20 @@ export class LeadsService {
       const rows = await this.db.select({ companyId: leadVerifications.companyId }).from(leadVerifications).where(and(eq(leadVerifications.organizationId, organizationId), filters.verificationStatus ? eq(leadVerifications.status, filters.verificationStatus) : undefined, filters.lastVerifiedFrom ? gte(leadVerifications.checkedAt, new Date(filters.lastVerifiedFrom)) : undefined, filters.lastVerifiedTo ? lte(leadVerifications.checkedAt, new Date(filters.lastVerifiedTo)) : undefined));
       sets.push(this.uniqueIds(rows.map((row) => row.companyId)));
     }
-    if (filters.hasDecisionMaker !== undefined || filters.contactTitle || filters.hasLinkedIn !== undefined || filters.hasFacebook !== undefined || filters.hasInstagram !== undefined) {
-      const rows = await this.db.select({ contact: companyContacts }).from(companyContacts).innerJoin(companies, eq(companies.id, companyContacts.companyId)).where(and(eq(companies.organizationId, organizationId), filters.contactTitle ? ilike(companyContacts.title, `%${filters.contactTitle}%`) : undefined, filters.hasDecisionMaker === true ? sql`${companyContacts.fullName} is not null` : filters.hasDecisionMaker === false ? sql`${companyContacts.fullName} is null` : undefined, filters.hasLinkedIn === true ? sql`${companyContacts.linkedinUrl} is not null` : filters.hasLinkedIn === false ? sql`${companyContacts.linkedinUrl} is null` : undefined, filters.hasFacebook === true ? sql`${companyContacts.facebookUrl} is not null` : filters.hasFacebook === false ? sql`${companyContacts.facebookUrl} is null` : undefined, filters.hasInstagram === true ? sql`${companyContacts.instagramUrl} is not null` : filters.hasInstagram === false ? sql`${companyContacts.instagramUrl} is null` : undefined));
+    if (filters.hasDecisionMaker !== undefined || filters.hasVerifiedContact !== undefined || filters.contactTitle || filters.hasLinkedIn !== undefined || filters.hasFacebook !== undefined || filters.hasInstagram !== undefined) {
+      const rows = await this.db.select({ contact: companyContacts }).from(companyContacts).innerJoin(companies, eq(companies.id, companyContacts.companyId)).where(and(
+        eq(companies.organizationId, organizationId),
+        filters.contactTitle ? ilike(companyContacts.title, `%${filters.contactTitle}%`) : undefined,
+        filters.hasDecisionMaker === true ? sql`${companyContacts.fullName} is not null` : filters.hasDecisionMaker === false ? sql`${companyContacts.fullName} is null` : undefined,
+        filters.hasVerifiedContact === true
+          ? sql`(${companyContacts.verificationStatus} = 'VERIFIED' or ${companyContacts.emailStatus} = 'VERIFIED')`
+          : filters.hasVerifiedContact === false
+            ? sql`(${companyContacts.verificationStatus} is distinct from 'VERIFIED' and ${companyContacts.emailStatus} is distinct from 'VERIFIED')`
+            : undefined,
+        filters.hasLinkedIn === true ? sql`${companyContacts.linkedinUrl} is not null` : filters.hasLinkedIn === false ? sql`${companyContacts.linkedinUrl} is null` : undefined,
+        filters.hasFacebook === true ? sql`${companyContacts.facebookUrl} is not null` : filters.hasFacebook === false ? sql`${companyContacts.facebookUrl} is null` : undefined,
+        filters.hasInstagram === true ? sql`${companyContacts.instagramUrl} is not null` : filters.hasInstagram === false ? sql`${companyContacts.instagramUrl} is null` : undefined,
+      ));
       sets.push(this.uniqueIds(rows.map((row) => row.contact.companyId)));
     }
     if (filters.propertyType || filters.marketServed) {

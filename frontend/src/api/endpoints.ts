@@ -1,5 +1,5 @@
 import { apiBlob, apiRequest } from './client';
-import type { AuthSession, AuthUser, ClassificationRecord, CompanyProfile, DecisionMaker, EvidenceItem, ExportRecord, LeadFilters, LeadRecord, PageResult, PipelineView, ResearchExecution, SearchExecutionSummary, SearchPreview, SearchRecord, VerificationSummary } from '../types/api';
+import type { AuthSession, AuthUser, ClassificationRecord, CompanyProfile, DecisionMaker, EvidenceItem, ExportMode, ExportRecord, LeadFilters, LeadRecord, MissingValueMode, PageResult, PipelineView, ResearchExecution, SearchExecutionSummary, SearchPreview, SearchRecord, VerificationSummary } from '../types/api';
 
 export const sessionKey = 'leadpilot.accessToken';
 
@@ -69,7 +69,20 @@ export const researchApi = {
 export const exportApi = {
   list: (page = 1) => authed<PageResult<ExportRecord>>('/exports', { query: { page, limit: 20 } }),
   get: (id: string) => authed<ExportRecord>(`/exports/${id}`),
-  create: (format: 'csv' | 'xlsx', filters?: LeadFilters) => authed<{ exportId: string; status: string }>('/exports', { method: 'POST', body: filters ? { format, filters } : { format } }),
+  create: (
+    format: 'csv' | 'xlsx',
+    filters?: LeadFilters,
+    options?: { exportMode?: ExportMode; missingValueMode?: MissingValueMode; fields?: string[] },
+  ) => authed<{ exportId: string; status: string }>('/exports', {
+    method: 'POST',
+    body: {
+      format,
+      ...(filters ? { filters } : {}),
+      ...(options?.exportMode ? { exportMode: options.exportMode } : {}),
+      ...(options?.missingValueMode ? { missingValueMode: options.missingValueMode } : {}),
+      ...(options?.fields?.length ? { fields: options.fields } : {}),
+    },
+  }),
   download: (id: string) => {
     const token = readToken();
     if (!token) throw new Error('Please sign in to continue.');
