@@ -39,9 +39,12 @@ export const QUALIFICATION_VERSION = 'qualification-v1';
 export function normalizeCriteria(plan: SearchPlan | null | undefined): QualificationCriteria {
   const requiredRoles = plan?.requiredRoles?.length
     ? plan.requiredRoles
-    : plan?.contactRequirements?.titles ?? [];
+    : plan?.decisionMakerRoles?.length
+      ? plan.decisionMakerRoles
+      : plan?.contactRequirements?.titles ?? [];
+  const explicitRequiredFields = plan?.requiredFields ?? [];
   const requiredFields = [...new Set([
-    ...(plan?.requiredFields ?? []),
+    ...explicitRequiredFields,
     'companyName',
     ...(plan?.locations?.length ? ['location'] as const : []),
     ...(plan?.companySize ? ['companySize'] as const : []),
@@ -49,6 +52,8 @@ export function normalizeCriteria(plan: SearchPlan | null | undefined): Qualific
     ...((plan?.industry?.length || plan?.leadTypes?.length) ? ['category'] as const : []),
   ])];
   const optionalFields = [...new Set((plan?.optionalFields ?? plan?.companyFields ?? []).concat(plan?.contactRequirements?.fields ?? []).filter((field) => !requiredFields.includes(field) && field !== 'name'))];
+  const companyRequiredFields = explicitRequiredFields.filter((field) => ['companyWebsite', 'companyEmail', 'companyPhone', 'companyEmployeeCount', 'companyLocation'].includes(field));
+  const personRequiredFields = explicitRequiredFields.filter((field) => ['personName', 'personTitle', 'personEmail', 'personPhone', 'personLinkedin', 'personFacebook', 'personInstagram', 'personYoutube', 'personX'].includes(field));
   return {
     industry: plan?.industry ?? [],
     leadTypes: plan?.leadTypes ?? [],
@@ -57,6 +62,10 @@ export function normalizeCriteria(plan: SearchPlan | null | undefined): Qualific
     requiredRoles,
     requiredFields,
     optionalFields,
+    companyRequiredFields,
+    personRequiredFields,
+    preferredFields: plan?.preferredFields ?? [],
+    verificationRequiredFields: plan?.verificationRequirement?.fields ?? [],
     minimumScore: plan?.minimumScore,
   };
 }
@@ -65,13 +74,21 @@ export function evaluateQualification(context: QualificationContext, criteria: Q
   const results: CriterionEvidence[] = [];
 
   results.push(evaluateIdentity(context));
-  if (criteria.requiredFields.includes('website') || criteria.optionalFields.includes('website')) {
+  if (criteria.requiredFields.includes('website') || criteria.optionalFields.includes('website')
+    || criteria.companyRequiredFields.includes('companyWebsite') || criteria.preferredFields.includes('companyWebsite')) {
     results.push(evaluateFieldPresence(context, 'website', context.company.website, criteria.requiredFields.includes('website')));
   }
   if (criteria.locations.length) results.push(evaluateLocation(context, criteria));
   if (criteria.companySize) results.push(evaluateCompanySize(context, criteria));
   if (criteria.industry.length || criteria.leadTypes.length) results.push(evaluateCategory(context, criteria));
   if (criteria.requiredRoles.length) results.push(evaluateDecisionMaker(context, criteria));
+
+  for (const field of new Set([...criteria.companyRequiredFields, ...criteria.personRequiredFields, ...criteria.preferredFields])) {
+    if (['companyWebsite', 'website'].includes(field)) continue;
+    const key = field.replace(/^(company|person)/, '').toLowerCase();
+    const verificationRequired = criteria.verificationRequiredFields.some((item) => item.toLowerCase() === key || item.toLowerCase() === field.toLowerCase());
+    results.push(evaluateSpecificField(context, field, criteria.companyRequiredFields.includes(field) || criteria.personRequiredFields.includes(field), verificationRequired));
+  }
 
   for (const field of ['email', 'phone', 'linkedin', 'facebook', 'instagram', 'youtube'] as const) {
     if (criteria.requiredFields.includes(field) || criteria.optionalFields.includes(field)) {
@@ -152,6 +169,38 @@ export function evaluateQualification(context: QualificationContext, criteria: Q
     scoreBand: context.score?.band ?? null,
     scoreBreakdown: context.score?.breakdown ?? null,
   };
+}
+
+function evaluateSpecificField(context: QualificationContext, field: string, required: boolean, verificationRequired: boolean): CriterionEvidence {
+  const person = field.startsWith('person');
+  const key = field.replace(/^(company|person)/, '').toLowerCase();
+  const contact = context.contacts[0];
+  const value = person
+    ? key === 'name' ? contact?.fullName ?? null
+      : key === 'title' ? contact?.title ?? null
+        : key === 'email' ? contact?.email ?? null
+          : key === 'phone' ? contact?.phone ?? null
+            : key === 'linkedin' ? contact?.linkedinUrl ?? null
+              : key === 'facebook' ? contact?.facebookUrl ?? null
+                : key === 'instagram' ? contact?.instagramUrl ?? null
+                  : key === 'youtube' ? contact?.youtubeUrl ?? null
+                    : null
+    : key === 'website' ? context.company.website
+      : key === 'email' ? context.company.email
+        : key === 'phone' ? context.company.phone
+          : key === 'employeecount' ? context.company.employeeCount?.toString() ?? context.company.employeeRange
+            : key === 'location' ? [context.location?.city, context.location?.state, context.location?.country].filter(Boolean).join(', ') || null
+              : null;
+  const verificationField = key === 'employeecount' ? 'companySize' : key === 'name' ? 'fullName' : key;
+  const verification = fieldStatus(context, verificationField);
+  if (!value) return evidence(field, 'NOT_FOUND', required, `${field} was not found.`, null, verification);
+  if (verification === 'CONFLICT' || verification === 'NEEDS_REVIEW') {
+    return evidence(field, 'NEEDS_REVIEW', required, `${field} has conflicting verification evidence.`, { source: 'verification', sourceUrl: null, excerpt: value }, verification);
+  }
+  if (required && verificationRequired && /email|phone/i.test(key) && verification !== 'VERIFIED' && verification !== 'SUPPORTED') {
+    return evidence(field, 'NEEDS_REVIEW', true, `${field} exists but is not verified/supported.`, { source: person ? 'contact_record' : 'company_record', sourceUrl: null, excerpt: value }, verification ?? 'UNVERIFIED');
+  }
+  return evidence(field, 'MATCH', required, `${field} is available.`, { source: person ? 'contact_record' : 'company_record', sourceUrl: null, excerpt: value }, verification);
 }
 
 function evaluateIdentity(context: QualificationContext): CriterionEvidence {

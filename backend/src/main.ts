@@ -1,6 +1,7 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
+import type { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
 
 import { AppModule } from './app.module';
@@ -31,8 +32,16 @@ async function bootstrap() {
       origin: string | undefined,
       callback: (error: Error | null, allow?: boolean) => void,
     ) => {
-      callback(null, isAllowedCorsOrigin(origin, corsOrigin, nodeEnv));
+      callback(null, isAllowedCorsOrigin(origin, corsOrigin, nodeEnv) || isNgrokTunnelOrigin(origin));
     },
+  });
+
+  app.use('/', (request: Request, response: Response, next: NextFunction) => {
+    if (request.method === 'GET' && request.path === '/') {
+      response.status(200).json({ status: 'ok', message: 'Server is running' });
+      return;
+    }
+    next();
   });
 
   app.setGlobalPrefix(
@@ -60,6 +69,19 @@ async function bootstrap() {
   await app.listen(port);
 
   app.get(StructuredLoggerService).info('application.started', { port });
+}
+
+function isNgrokTunnelOrigin(origin: string | undefined): boolean {
+  if (!origin) return false;
+  try {
+    const url = new URL(origin);
+    const hostname = url.hostname.toLowerCase();
+    return url.protocol === 'https:'
+      && (hostname === 'ngrok-free.dev' || hostname.endsWith('.ngrok-free.dev')
+        || hostname === 'ngrok.io' || hostname.endsWith('.ngrok.io'));
+  } catch {
+    return false;
+  }
 }
 
 void bootstrap();

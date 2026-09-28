@@ -4,7 +4,8 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5173,
+    host: true, // Local network (IP access) ko allow karne ke liye
+    port: 5174,
   },
   test: {
     environment: 'jsdom',

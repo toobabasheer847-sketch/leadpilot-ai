@@ -122,6 +122,32 @@ describe('qualification engine', () => {
     expect(decision.needsReviewReasons.join(' ')).toMatch(/email/i);
   });
 
+  it('keeps company email and person email requirements distinct', () => {
+    const context = baseContext({
+      company: { ...baseContext().company, email: 'office@acme.test' },
+      contacts: [{ ...baseContext().contacts[0], email: null }],
+    });
+    const personRequired = evaluateQualification(context, criteria({
+      requiredFields: ['companyName', 'website', 'personEmail'],
+      optionalFields: [],
+    }));
+    expect(personRequired.status).toBe('NEEDS_REVIEW');
+    expect(personRequired.criterionResults.find((item) => item.criterion === 'personEmail')?.result).toBe('NOT_FOUND');
+
+    const companyRequired = evaluateQualification(context, criteria({
+      requiredFields: ['companyName', 'website', 'companyEmail'],
+      optionalFields: [],
+    }));
+    expect(companyRequired.criterionResults.find((item) => item.criterion === 'companyEmail')?.result).toBe('MATCH');
+
+    const verifiedCompanyEmail = evaluateQualification(context, criteria({
+      requiredFields: ['companyName', 'website', 'companyEmail'],
+      verificationRequirement: { requested: true, required: true, fields: ['email'] },
+      optionalFields: [],
+    }));
+    expect(verifiedCompanyEmail.criterionResults.find((item) => item.criterion === 'companyEmail')?.result).toBe('NEEDS_REVIEW');
+  });
+
   it('disqualifies when strong negative investor evidence exists without acquisition evidence', () => {
     const decision = evaluateQualification(baseContext({
       evidence: [{

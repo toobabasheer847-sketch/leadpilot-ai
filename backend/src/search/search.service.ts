@@ -7,7 +7,7 @@ import { AuthenticatedUser } from '../auth/auth.types';
 import { CreateSearchDto } from './dto/create-search.dto';
 import { UpdateSearchDto } from './dto/update-search.dto';
 import { ListSearchesDto } from './dto/list-searches.dto';
-import { SearchPlanParser } from './parsers/search-plan.parser';
+import { SearchPlanPlanner } from './parsers/search-plan-planner';
 import { SearchConfigurationRepository } from './repositories/search-configuration.repository';
 import { SearchExecutionRepository } from './repositories/search-execution.repository';
 import { SourceDiscoveryQueue } from '../sources/source-discovery.queue';
@@ -18,7 +18,7 @@ import { UsageService } from '../usage/usage.service';
 export class SearchService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
-    private readonly parser: SearchPlanParser,
+    private readonly planner: SearchPlanPlanner,
     private readonly configurations: SearchConfigurationRepository,
     private readonly executions: SearchExecutionRepository,
     private readonly sourceQueue: SourceDiscoveryQueue,
@@ -26,13 +26,12 @@ export class SearchService {
     private readonly usage: UsageService,
   ) {}
 
-  preview(prompt: string) {
-    const structuredPlan = this.parser.parse(prompt);
-    return { originalPrompt: prompt, structuredPlan };
+  preview(prompt: string, user: AuthenticatedUser) {
+    return this.planner.plan(prompt, { organizationId: user.organizationId, userId: user.id }).then((structuredPlan) => ({ originalPrompt: prompt, structuredPlan }));
   }
 
   async create(user: AuthenticatedUser, dto: CreateSearchDto) {
-    const structuredPlan = this.parser.parse(dto.prompt);
+    const structuredPlan = await this.planner.plan(dto.prompt, { organizationId: user.organizationId, userId: user.id });
     const search = await this.configurations.create({
       organizationId: user.organizationId,
       createdByUserId: user.id,
@@ -63,7 +62,7 @@ export class SearchService {
       ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
       ...(dto.prompt !== undefined ? {
         originalPrompt: dto.prompt.trim(),
-        criteria: this.parser.parse(dto.prompt),
+        criteria: await this.planner.plan(dto.prompt, { organizationId: user.organizationId, userId: user.id }),
       } : {}),
     };
     const search = await this.configurations.updateForOrganization(searchId, user.organizationId, data);

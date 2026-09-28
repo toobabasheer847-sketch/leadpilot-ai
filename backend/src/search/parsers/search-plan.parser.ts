@@ -24,11 +24,12 @@ const CONTACT_TITLES: Array<[string, string]> = [
   ['owner', 'Owner'],
   ['managing director', 'Managing Director'],
   ['manager', 'Manager'],
+  ['partner', 'Partner'],
 ];
 
 const COMPANY_FIELDS = ['website', 'linkedin', 'facebook', 'instagram'];
 const CONTACT_FIELDS = ['email', 'phone', 'linkedin', 'facebook', 'instagram'];
-const VAGUE = new Set(['excellent', 'strong', 'good', 'best', 'top', 'great', 'reputable', 'reputation', 'reputations', 'quality', 'leading', 'premier', 'successful']);
+const VAGUE = new Set(['excellent', 'strong', 'good', 'best', 'top', 'great', 'reputable', 'reputation', 'reputations', 'quality', 'leading', 'premier', 'successful', 'small', 'medium', 'large', 'preferably', 'qualified']);
 
 @Injectable()
 export class SearchPlanParser {
@@ -36,6 +37,7 @@ export class SearchPlanParser {
     const normalizedPrompt = prompt.trim().replace(/\s+/g, ' ');
     const criteriaPrompt = normalizedPrompt.replace(/\breal-estate\b/gi, 'real estate');
     const companySize = this.parseCompanySize(criteriaPrompt);
+    const qualitativeSize = this.parseQualitativeSize(criteriaPrompt);
     let working = this.withoutSizeClause(criteriaPrompt);
     const exclusions = this.parseExclusions(working);
     working = this.withoutExclusions(working);
@@ -52,6 +54,19 @@ export class SearchPlanParser {
     const optionalFields = this.parseOptionalFields(criteriaPrompt, companyFields, contactFields, requiredFields);
     const minimumScore = this.parseMinimumScore(criteriaPrompt);
     const unresolvedCriteria = this.parseUnresolved(normalizedPrompt, industry, leadTypes, locations, companySize, count?.count);
+    if (qualitativeSize?.qualitative) {
+      unresolvedCriteria.push({ text: qualitativeSize.qualitative, reason: 'qualitative employee size was requested without a numeric range' });
+    }
+    for (const location of locations) {
+      if (!location.country) unresolvedCriteria.push({
+        text: location.originalText ?? location.city ?? location.region ?? '',
+        reason: 'location could not be confidently resolved to a country or administrative area',
+      });
+    }
+    const relativeLocation = normalizedPrompt.match(/\b(?:near|within|around(?!\s+\d))\s+([^,.;]+)/i);
+    if (relativeLocation && !/\b\d+\s*(?:mi|miles?|km|kilometers?)\b/i.test(relativeLocation[0])) {
+      unresolvedCriteria.push({ text: relativeLocation[0].trim(), reason: 'no search radius was specified' });
+    }
     if (count?.capped) {
       unresolvedCriteria.push({
         text: String(count.requested),
@@ -60,12 +75,26 @@ export class SearchPlanParser {
     }
 
     const searchIntent = this.describeIntent(count?.count, industry, leadTypes, locations, companySize);
+    const personFields = this.parsePersonFields(criteriaPrompt);
+    const socialPlatforms = this.parseSocialPlatforms(criteriaPrompt);
+    const preferredFields = this.parsePreferredFields(criteriaPrompt, companyFields, contactFields, requiredFields);
+    const emailRequested = /\be-?mail\b/i.test(criteriaPrompt);
+    const emailVerified = /\bverified\s+e-?mail\b|\be-?mail\s+(?:must be\s+)?verified\b/i.test(criteriaPrompt);
+    const emailRequired = emailVerified || /\b(?:must|required|need)\b[^.]{0,40}\be-?mail\b/i.test(criteriaPrompt);
+    const websiteRequested = /\bwebsite\b/i.test(criteriaPrompt);
+    const websiteRequired = /\b(?:must|required|need)\b[^.]{0,40}\bwebsite\b/i.test(criteriaPrompt);
+    const verificationRequested = /\bverified\b|\bverification\b/i.test(criteriaPrompt);
     return {
+      targetType: /\bqualified\s+leads?\b/i.test(criteriaPrompt) ? 'QUALIFIED_LEADS' : 'COMPANIES',
       industry,
       leadTypes,
+      ...(industry[0] ? { category: industry[0] } : {}),
       locations,
-      ...(companySize ? { companySize, employeeRange: companySize } : {}),
+      ...(companySize ? { companySize, employeeRange: companySize, employeeSize: companySize } : {}),
+      ...(qualitativeSize ? { employeeSize: qualitativeSize } : {}),
       companyFields,
+      personFields,
+      socialPlatforms,
       ...(titles.length || contactFields.length ? {
         contactRequirements: {
           titles,
@@ -74,25 +103,33 @@ export class SearchPlanParser {
       } : {}),
       ...(requiredFields.length ? { requiredFields } : {}),
       ...(optionalFields.length ? { optionalFields } : {}),
+      ...(preferredFields.length ? { preferredFields } : {}),
       ...(titles.length ? { requiredRoles: titles } : {}),
+      decisionMakerRoles: titles,
+      emailRequirement: { requested: emailRequested, required: emailRequired, verified: emailVerified },
+      websiteRequirement: { requested: websiteRequested, required: websiteRequired },
+      verificationRequirement: { requested: verificationRequested, required: verificationRequested, fields: emailVerified ? ['email'] : [] },
       ...(minimumScore !== undefined ? { minimumScore } : {}),
-      ...(count ? { requestedCount: count.count, maxResults: count.count, countIntent: count.intent } : {}),
+      ...(count ? { requestedCount: count.requested, maxResults: count.count, countIntent: count.intent } : {}),
       ...(exclusions.length ? { exclusions } : {}),
       searchIntent,
       unresolvedCriteria,
+      unresolvedRequirements: unresolvedCriteria,
+      originalPrompt: normalizedPrompt,
     };
   }
 
-  private parseRequestedCount(prompt: string): { count: number; requested: number; intent: 'exact' | 'maximum' | 'minimum'; capped: boolean } | undefined {
-    const qualified = [...prompt.matchAll(/\b(up to|at least|maximum of|maximum|max|limit of|limit|minimum of|minimum|min)\s+(\d{1,5})\b/gi)];
+  private parseRequestedCount(prompt: string): { count: number; requested: number; intent: 'exact' | 'maximum' | 'minimum' | 'approximate'; capped: boolean } | undefined {
+    const qualified = [...prompt.matchAll(/\b(up to|at least|maximum of|maximum|max|limit of|limit|minimum of|minimum|min|around|about|approximately|approx)\s+(\d{1,5})\b/gi)];
     const bare = [...prompt.matchAll(/\b(?:find|get|show|need|want|search(?:\s+for)?|looking\s+for)\s+(\d{1,5})\b/gi)];
     const noun = [...prompt.matchAll(/\b(\d{1,5})\s+(?:companies|company|leads|lead|agencies|agency|firms|firm|businesses|business|restaurants|restaurant)\b/gi)];
-    type Hit = { index: number; count: number; intent: 'exact' | 'maximum' | 'minimum' };
+    type Hit = { index: number; count: number; intent: 'exact' | 'maximum' | 'minimum' | 'approximate' };
     const hits: Hit[] = [
       ...qualified.map((match) => ({
         index: match.index ?? 0,
         count: Number(match[2]),
-        intent: /at least|minimum|\bmin\b/i.test(match[1]) ? 'minimum' as const : 'maximum' as const,
+        intent: /around|about|approximately|\bapprox\b/i.test(match[1]) ? 'approximate' as const
+          : /at least|minimum|\bmin\b/i.test(match[1]) ? 'minimum' as const : 'maximum' as const,
       })),
       ...bare.map((match) => ({ index: match.index ?? 0, count: Number(match[1]), intent: 'exact' as const })),
       ...noun.map((match) => ({ index: match.index ?? 0, count: Number(match[1]), intent: 'exact' as const })),
@@ -111,23 +148,26 @@ export class SearchPlanParser {
   private withoutCountClause(prompt: string, count: number | undefined): string {
     if (count === undefined) return prompt;
     return prompt
-      .replace(/\b(?:up to|at least|maximum of|maximum|max|limit of|limit|minimum of|minimum|min)\s+\d{1,5}\b/gi, ' ')
+      .replace(/\b(?:up to|at least|maximum of|maximum|max|limit of|limit|minimum of|minimum|min|around|about|approximately|approx)\s+\d{1,5}\b/gi, ' ')
       .replace(new RegExp(`\\b${count}\\b`), ' ')
       .replace(/\s+/g, ' ')
       .trim();
   }
 
   private takeLocations(prompt: string): { index: number; locations: SearchLocation[] } | null {
-    const pattern = /\bin\s+(.+?)(?=\s+(?:that|who|which|with|without)\b|$)/gi;
+    const pattern = /\b(in|near|within)\s+(.+?)(?=\s+(?:that|who|which|with|without|preferably)\b|$)/gi;
     let match: RegExpExecArray | null;
     let found: { index: number; text: string } | null = null;
     while ((match = pattern.exec(prompt))) {
-      found = { index: match.index, text: match[1].trim() };
+      found = { index: match.index, text: match[2].trim() };
     }
     if (!found?.text) return null;
     const locations = found.text
       .split(/\s+and\s+/i)
-      .map((part) => interpretPlace(part))
+      .map((part) => {
+        const place = interpretPlace(part);
+        return { ...place, ...(!place.country ? { originalText: part } : {}) };
+      })
       .filter((location) => Boolean(location.country || location.state || location.city || location.region))
       .slice(0, 3);
     if (!locations.length) return null;
@@ -156,6 +196,8 @@ export class SearchPlanParser {
       .trim()
       .replace(/[?.!]+$/g, '');
     for (const [pattern] of LEAD_PHRASES) subject = subject.replace(pattern, ' ');
+    for (const [title] of CONTACT_TITLES) subject = subject.replace(new RegExp(`\\b${this.escape(title)}s?\\b`, 'gi'), ' ');
+    subject = subject.replace(/\b(website|websites|email|e-mails?|phone|linkedin|facebook|instagram|youtube|twitter|socials?|contact|details|public|information|profile|profiles)\b/gi, ' ');
     subject = subject.replace(/\s+/g, ' ').trim();
     if (/\breal estate\b/i.test(subject) && !industry.includes('real_estate')) industry.push('real_estate');
     const words = subject.toLowerCase().split(/\s+/).filter((word) => word && !VAGUE.has(word) && word !== 'and');
@@ -180,12 +222,52 @@ export class SearchPlanParser {
       const max = Number(range[2]);
       if (Number.isInteger(min) && Number.isInteger(max) && min >= 0 && max >= min) return { min, max };
     }
+    const exact = prompt.match(/\b(?:with\s+)?(\d+)\s+employees?\b/i);
+    if (exact) {
+      const value = Number(exact[1]);
+      if (Number.isInteger(value) && value >= 0) return { min: value, max: value, exact: value };
+    }
     const lowerBound = prompt.match(/\b(\d+)\s*\+\s*employees?\b/i);
     if (lowerBound) {
       const min = Number(lowerBound[1]);
       if (Number.isInteger(min) && min >= 0) return { min };
     }
     return undefined;
+  }
+
+  private parseQualitativeSize(prompt: string): CompanySize | undefined {
+    const match = prompt.match(/\b(?:(?:preferably|ideally)\s+)?(small|medium-sized|mid-sized|midmarket|large)\s+(?:companies|businesses|firms)\b/i);
+    return match ? { qualitative: match[1].toLowerCase() } : undefined;
+  }
+
+  private parsePersonFields(prompt: string): string[] {
+    const fields: Array<[RegExp, string]> = [
+      [/\b(?:person|decision[- ]maker|contact)(?:'s)?\s+(?:full\s+)?name\b|\b(?:find|identify)\s+(?:the\s+)?(?:ceo|founder|owner|president|manager)\b/i, 'name'],
+      [/\b(?:person|decision[- ]maker|contact)(?:'s)?\s+(?:business\s+)?e-?mail\b|\bpublic contact information\b|\bcontact details\b/i, 'email'],
+      [/\b(?:person|decision[- ]maker|contact)(?:'s)?\s+phone\b|\bpublic contact information\b|\bcontact details\b/i, 'phone'],
+      [/\blinkedin\b/i, 'linkedin'],
+      [/\bfacebook\b/i, 'facebook'],
+      [/\binstagram\b/i, 'instagram'],
+      [/\b(?:x\/twitter|twitter|x account)\b/i, 'x'],
+      [/\byoutube\b/i, 'youtube'],
+    ];
+    return [...new Set(fields.filter(([pattern]) => pattern.test(prompt)).map(([, field]) => field))];
+  }
+
+  private parseSocialPlatforms(prompt: string): string[] {
+    const platforms: Array<[RegExp, string]> = [
+      [/\blinkedin\b/i, 'linkedin'],
+      [/\bfacebook\b/i, 'facebook'],
+      [/\binstagram\b/i, 'instagram'],
+      [/\b(?:x\/twitter|twitter|x account)\b/i, 'x'],
+      [/\byoutube\b/i, 'youtube'],
+    ];
+    return platforms.filter(([pattern]) => pattern.test(prompt)).map(([, platform]) => platform);
+  }
+
+  private parsePreferredFields(prompt: string, companyFields: string[], contactFields: string[], requiredFields: string[]) {
+    if (!/\b(?:preferably|prefer|ideally)\b/i.test(prompt)) return [];
+    return [...new Set([...companyFields, ...contactFields].filter((field) => !requiredFields.includes(field)))];
   }
 
   private withoutSizeClause(prompt: string): string {

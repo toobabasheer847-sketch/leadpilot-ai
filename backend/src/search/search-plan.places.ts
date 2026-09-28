@@ -101,10 +101,11 @@ export function placeMentioned(text: string, location: SearchLocation): string |
     const code = stateCode(location.state);
     if (code) candidates.push(code);
   }
-  if (/germany/i.test(location.country)) candidates.push('Deutschland');
-  if (/united arab emirates/i.test(location.country)) candidates.push('UAE');
-  if (/united kingdom/i.test(location.country)) candidates.push('UK');
-  if (/^us$/i.test(location.country) && !location.state && !location.city) candidates.push('United States', 'USA');
+  const country = location.country ?? '';
+  if (/germany/i.test(country)) candidates.push('Deutschland');
+  if (/united arab emirates/i.test(country)) candidates.push('UAE');
+  if (/united kingdom/i.test(country)) candidates.push('UK');
+  if (/^us$/i.test(country) && !location.state && !location.city) candidates.push('United States', 'USA');
   for (const candidate of candidates) {
     if (candidate.length <= 3) {
       if (new RegExp(`\\b${escapeRegExp(candidate)}\\b`).test(haystack)) return candidate;

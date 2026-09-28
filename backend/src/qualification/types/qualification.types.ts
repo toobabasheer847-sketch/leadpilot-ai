@@ -12,6 +12,10 @@ export interface QualificationCriteria {
   requiredRoles: string[];
   requiredFields: string[];
   optionalFields: string[];
+  companyRequiredFields: string[];
+  personRequiredFields: string[];
+  preferredFields: string[];
+  verificationRequiredFields: string[];
   minimumScore?: number;
 }
 

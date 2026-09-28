@@ -143,6 +143,56 @@ describe('SearchPlanParser', () => {
     expect(open.locations).toEqual([]);
   });
 
+  it('preserves qualified-lead target and approximate count intent', () => {
+    const qualified = parser.parse('Find 200 qualified leads without specifying employee size');
+    expect(qualified).toMatchObject({ requestedCount: 200, targetType: 'QUALIFIED_LEADS' });
+    expect(qualified.employeeSize).toBeUndefined();
+    const approximate = parser.parse('Find around 200 logistics companies in Toronto');
+    expect(approximate).toMatchObject({ requestedCount: 200, countIntent: 'approximate' });
+    expect(approximate.locations[0]?.originalText).toBeUndefined();
+  });
+
+  it('keeps qualitative size unresolved instead of inventing numeric bounds', () => {
+    const plan = parser.parse('Find small companies');
+    expect(plan.companySize).toBeUndefined();
+    expect(plan.employeeSize).toEqual({ qualitative: 'small' });
+    expect(plan.unresolvedRequirements).toContainEqual(expect.objectContaining({
+      text: 'small',
+      reason: 'qualitative employee size was requested without a numeric range',
+    }));
+  });
+
+  it('does not invent a radius for relative locations', () => {
+    const plan = parser.parse('Find companies near London');
+    expect(plan.locations).toEqual([{ city: 'London', country: 'United Kingdom' }]);
+    expect(plan.unresolvedRequirements).toContainEqual({ text: 'near London', reason: 'no search radius was specified' });
+  });
+
+  it('distinguishes verified email from plain email and preserves multiple social requests', () => {
+    const verified = parser.parse('Find companies with verified email');
+    const plain = parser.parse('Find companies with email');
+    expect(verified.emailRequirement).toEqual({ requested: true, required: true, verified: true });
+    expect(plain.emailRequirement).toEqual({ requested: true, required: false, verified: false });
+
+    const socials = parser.parse('Find companies with LinkedIn and Facebook');
+    expect(socials.socialPlatforms).toEqual(['linkedin', 'facebook']);
+    expect(socials.personFields).toEqual(expect.arrayContaining(['linkedin', 'facebook']));
+  });
+
+  it('extracts partner alongside other decision-maker roles', () => {
+    const plan = parser.parse('Find consulting firms and identify the partner or managing director');
+    expect(plan.decisionMakerRoles).toEqual(expect.arrayContaining(['Partner', 'Managing Director']));
+  });
+
+  it('keeps unknown location text in the plan and marks its missing context', () => {
+    const plan = parser.parse('Find 50 companies in Bavaria');
+    expect(plan.locations[0]).toMatchObject({ city: 'Bavaria', originalText: 'Bavaria' });
+    expect(plan.unresolvedRequirements).toContainEqual(expect.objectContaining({
+      text: 'Bavaria',
+      reason: 'location could not be confidently resolved to a country or administrative area',
+    }));
+  });
+
   it('accepts a place outside the old state list', () => {
     const plan = parser.parse('Find 20 bakeries in Bavaria');
     expect(plan.requestedCount).toBe(20);

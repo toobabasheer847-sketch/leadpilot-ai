@@ -15,8 +15,8 @@ export class SearchController {
   constructor(private readonly searchService: SearchService) {}
 
   @Post('preview')
-  preview(@Body() body: PreviewSearchDto) {
-    return this.searchService.preview(body.prompt);
+  preview(@CurrentUser() user: AuthenticatedUser, @Body() body: PreviewSearchDto) {
+    return this.searchService.preview(body.prompt, user);
   }
 
   @Post()

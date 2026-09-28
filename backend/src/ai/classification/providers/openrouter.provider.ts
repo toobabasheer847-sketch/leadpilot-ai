@@ -90,11 +90,14 @@ export class OpenRouterProvider implements LlmProvider {
     }
   }
 
-  async completeJson(system: string, user: string): Promise<unknown> {
+  async completeJson(system: string, user: string, schema?: Record<string, unknown>): Promise<unknown> {
     const completion = await this.chat([
       { role: 'system', content: system },
       { role: 'user', content: user },
-    ]);
+    ], schema ? {
+      type: 'json_schema',
+      json_schema: { name: 'structured_output', strict: true, schema },
+    } : undefined);
     try {
       return parseModelJson(completion.content);
     } catch (error) {

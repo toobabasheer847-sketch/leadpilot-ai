@@ -41,10 +41,28 @@ export interface SearchRecord {
 export interface SearchPreview {
   originalPrompt: string;
   structuredPlan: {
+    targetType?: 'COMPANIES' | 'QUALIFIED_LEADS';
     industry?: string[];
     leadTypes?: string[];
-    locations?: Array<{ country?: string; state?: string; city?: string }>;
-    companySize?: { min?: number; max?: number };
+    category?: string;
+    locations?: Array<{ country?: string; state?: string; city?: string; region?: string; postalCode?: string; originalText?: string }>;
+    companySize?: { min?: number; max?: number; exact?: number; qualitative?: string };
+    employeeSize?: { min?: number; max?: number; exact?: number; qualitative?: string };
+    requestedCount?: number;
+    countIntent?: 'exact' | 'maximum' | 'minimum' | 'approximate';
+    decisionMakerRoles?: string[];
+    requiredFields?: string[];
+    preferredFields?: string[];
+    companyFields?: string[];
+    personFields?: string[];
+    socialPlatforms?: string[];
+    emailRequirement?: { requested: boolean; required: boolean; verified: boolean };
+    websiteRequirement?: { requested: boolean; required: boolean };
+    verificationRequirement?: { requested: boolean; required: boolean; fields: string[] };
+    minimumScore?: number;
+    unresolvedRequirements?: Array<{ text: string; reason: string }>;
+    originalPrompt?: string;
+    planning?: { method: 'ai' | 'deterministic_fallback'; model?: string; error?: string };
     maxResults?: number;
   };
 }
