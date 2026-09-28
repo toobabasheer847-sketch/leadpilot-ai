@@ -166,6 +166,7 @@ export class PipelineStageRunner {
       return enqueued.flatMap((item) => item.jobId ? [String(item.jobId)] : []);
     }
     if (key === 'contactQuality') return this.dispatchContactQuality(row);
+    if (key === 'verification') return this.dispatchVerification(row);
     if (!row.searchExecutionId) return [];
     const companyIds = await this.repository.listCompanyIds(row.organizationId, row.searchExecutionId);
     const jobIds: string[] = [];
@@ -201,8 +202,8 @@ export class PipelineStageRunner {
       return result.status === 'QUEUED' && result.jobId ? String(result.jobId) : null;
     }
     if (key === 'verification') {
-      const result = await this.verification.enqueueCompany(companyId, row.organizationId, false, row.searchExecutionId);
-      return result.status === 'QUEUED' && 'jobId' in result && result.jobId ? String(result.jobId) : null;
+      // Handled by dispatchVerification (company + contacts).
+      return null;
     }
     if (key === 'deduplication') {
       const result = await this.deduplication.enqueueCompany(companyId, row.organizationId);
@@ -213,6 +214,22 @@ export class PipelineStageRunner {
       return result.status === 'QUEUED' && result.jobId ? String(result.jobId) : null;
     }
     return null;
+  }
+
+  private async dispatchVerification(row: PipelineExecutionRow): Promise<string[]> {
+    if (!row.searchExecutionId) return [];
+    const companyIds = await this.repository.listCompanyIds(row.organizationId, row.searchExecutionId);
+    const jobIds: string[] = [];
+    for (const companyId of companyIds) {
+      const companyResult = await this.verification.enqueueCompany(companyId, row.organizationId, false, row.searchExecutionId);
+      if (companyResult.status === 'QUEUED' && 'jobId' in companyResult && companyResult.jobId) jobIds.push(String(companyResult.jobId));
+      const contacts = await this.repository.listContactIds(row.organizationId, [companyId]);
+      for (const contact of contacts) {
+        const contactResult = await this.verification.enqueueContact(contact.id, row.organizationId, false, row.searchExecutionId);
+        if (contactResult.status === 'QUEUED' && 'jobId' in contactResult && contactResult.jobId) jobIds.push(String(contactResult.jobId));
+      }
+    }
+    return jobIds;
   }
 
   private async dispatchContactQuality(row: PipelineExecutionRow): Promise<string[]> {

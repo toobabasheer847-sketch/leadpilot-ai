@@ -41,6 +41,8 @@ describe('deterministic lead scoring', () => {
     expect(result.total).toBeGreaterThan(0);
     expect(result.total).toBeLessThanOrEqual(100);
     expect(result.version).toBe('v1');
+    expect(result.verifiedEvidence.length).toBeGreaterThan(0);
+    expect(result.conflicts).toEqual([]);
     expect(result.signals.some((signal) => signal.name === 'acquisition_evidence' && signal.points > 0)).toBe(true);
   });
 

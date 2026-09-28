@@ -1,4 +1,4 @@
-export type VerificationStatus = 'VERIFIED' | 'SUPPORTED' | 'UNVERIFIED' | 'NOT_FOUND' | 'CONFLICT' | 'NEEDS_REVIEW' | 'INVALID';
+export type VerificationStatus = 'FOUND' | 'VERIFIED' | 'SUPPORTED' | 'UNVERIFIED' | 'NOT_FOUND' | 'CONFLICT' | 'NEEDS_REVIEW' | 'INVALID';
 export type VerificationType = 'SOURCE_EVIDENCE' | 'SYNTAX_CHECK' | 'DOMAIN_CHECK' | 'PROVIDER_CHECK' | 'CROSS_SOURCE_MATCH' | 'MANUAL_REVIEW';
 
 export interface VerificationEvidence {

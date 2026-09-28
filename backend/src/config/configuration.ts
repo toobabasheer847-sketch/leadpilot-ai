@@ -79,6 +79,9 @@ export default () => ({
       }
     })(),
     reVerifyAfterDays: parseInt(process.env.VERIFICATION_REVERIFY_AFTER_DAYS ?? '30', 10),
+    zeroBounceApiKey: process.env.ZEROBOUNCE_API_KEY?.trim() || undefined,
+    zeroBounceBaseUrl: process.env.ZEROBOUNCE_API_URL?.trim() || 'https://api.zerobounce.net/v2',
+    zeroBounceTimeoutMs: parseInt(process.env.ZEROBOUNCE_TIMEOUT_MS ?? '10000', 10),
   },
 
   webSearch: {

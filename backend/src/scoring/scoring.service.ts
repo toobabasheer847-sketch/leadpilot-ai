@@ -116,13 +116,37 @@ export function calculateDeterministicScore(company: ScoreCompany, contact: Scor
   const conflicts = verifications.filter((item) => item.status === 'CONFLICT' || item.status === 'NEEDS_REVIEW' || item.status === 'INVALID').length;
   add('conflicting_evidence', conflicts, conflicts > 0 ? -CONFLICT_PENALTY : 0, conflicts > 0 ? `${conflicts} field(s) contain conflicting or invalid evidence.` : 'No conflicting verification evidence was found.');
 
+  const verifiedEvidence = verifications
+    .filter((item) => item.status === 'VERIFIED' || item.status === 'SUPPORTED')
+    .map((item) => ({ field: item.field, status: item.status, evidenceId: item.evidenceId }));
+  const conflictEntries = verifications
+    .filter((item) => item.status === 'CONFLICT' || item.status === 'NEEDS_REVIEW' || item.status === 'INVALID')
+    .map((item) => ({ field: item.field, status: item.status, evidenceId: item.evidenceId }));
+  if (verifiedEvidence.length) {
+    add('verified_evidence_list', verifiedEvidence.map((item) => `${item.field}:${item.status}`).join(','), 0, `Verified/supported fields: ${verifiedEvidence.map((item) => item.field).join(', ')}.`);
+  }
+  if (conflictEntries.length) {
+    add('conflict_flags', conflictEntries.map((item) => `${item.field}:${item.status}`).join(','), 0, `Conflict/needs-review fields: ${conflictEntries.map((item) => item.field).join(', ')}.`);
+  }
+
   const expectedFields = 11;
   const availableFields = [company.name, company.website, company.description, company.phone, company.employeeCount ?? company.employeeRange, company.investmentStrategy, contact?.fullName, contact?.title, contact?.email, contact?.phone, contact?.linkedinUrl].filter(Boolean).length;
   const completenessPercentage = Math.round((availableFields / expectedFields) * 100);
   add('data_completeness', completenessPercentage, 0, `${availableFields} of ${expectedFields} important fields are available; completeness is reported separately from verification.`);
 
   const total = Math.max(0, Math.min(100, signals.reduce((sum, signal) => sum + signal.points, 0)));
-  return { total, band: scoreBand(total), version: SCORING_VERSION, signals, availableFields, expectedFields, completenessPercentage, sourceTypes };
+  return {
+    total,
+    band: scoreBand(total),
+    version: SCORING_VERSION,
+    signals,
+    availableFields,
+    expectedFields,
+    completenessPercentage,
+    sourceTypes,
+    verifiedEvidence,
+    conflicts: conflictEntries,
+  };
 }
 
 @Injectable()

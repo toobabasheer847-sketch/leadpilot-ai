@@ -4,7 +4,7 @@ import { and, desc, eq, isNull, like, max } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { DRIZZLE } from '../database/database.constants';
 import type { Database } from '../database/database.types';
-import { auditLogs, companies, companyContacts, companyLocations, companySocialProfiles, leadEvidence, leadVerifications, sourceRecords, verificationConflicts } from '../database/schema/schema';
+import { auditLogs, companies, companyContacts, companyLocations, companySocialProfiles, leadEvidence, leadVerifications, searchExecutions, sourceRecords, verificationConflicts } from '../database/schema/schema';
 import { VerificationQueue } from './verification.queue';
 import {
   EMAIL_VERIFICATION_PROVIDER,
@@ -18,6 +18,9 @@ import { normalizeState } from './utils/location-normalizer';
 import { UsageService } from '../usage/usage.service';
 import { ConflictEngineService } from './conflict/conflict-engine.service';
 import { CrossSourceEntityMatcherService } from './matching/cross-source-entity-matcher.service';
+import type { SearchPlan } from '../search/types/search-plan.types';
+import { companyFieldsForVerification, fieldIsRequiredByPlan, personFieldsForVerification } from './plan-verification-fields';
+import { isGenericBusinessEmail } from './utils/generic-email';
 
 @Injectable()
 export class VerificationService {
@@ -120,11 +123,12 @@ export class VerificationService {
   private async runVerification(data: VerificationJobData) {
     const company = await this.findCompany(data.companyId, data.organizationId);
     const contact = data.contactId ? await this.findContact(data.contactId, data.organizationId) : null;
+    const plan = await this.loadPlan(data.searchExecutionId, data.organizationId);
     const evidence = await this.loadEvidence(company.id, contact?.id ?? null);
     const entityMatch = data.contactId ? null : await this.matchCrossSourceEntities(company.id, data.organizationId);
     const rows = data.contactId
-      ? await this.verifyContactFields(company, contact!, evidence, data)
-      : await this.verifyCompanyFields(company, evidence, data, entityMatch?.conflicts ?? []);
+      ? await this.verifyContactFields(company, contact!, evidence, data, plan)
+      : await this.verifyCompanyFields(company, evidence, data, entityMatch?.conflicts ?? [], plan);
     const conflictCount = rows.filter((row) => row.status === 'CONFLICT' || row.status === 'NEEDS_REVIEW').length + (entityMatch?.conflicts.length ?? 0);
     await this.usage.recordUsage({ organizationId: data.organizationId, operation: 'VERIFICATION', provider: 'stored-evidence', resourceType: data.contactId ? 'contact' : 'company', resourceId: data.contactId ?? data.companyId, units: Math.max(1, rows.length), status: 'COMPLETED', metadata: { conflicts: conflictCount } });
     if (contact) await this.updateContactQuality(contact.id, rows.map((row) => ({ field: row.field, value: row.fieldValue, status: row.status })));
@@ -133,9 +137,11 @@ export class VerificationService {
     return rows;
   }
 
-  private async verifyCompanyFields(company: typeof companies.$inferSelect, evidence: VerificationEvidence[], data: VerificationJobData, entityConflicts: VerificationConflictLog[]) {
+  private async verifyCompanyFields(company: typeof companies.$inferSelect, evidence: VerificationEvidence[], data: VerificationJobData, entityConflicts: VerificationConflictLog[], plan: SearchPlan | null) {
     const [location] = await this.db.select().from(companyLocations).where(eq(companyLocations.companyId, company.id)).limit(1);
-    const fields: Array<{ field: string; value: string | null; provider?: VerificationProvider }> = [
+    const socialProfiles = await this.db.select().from(companySocialProfiles).where(eq(companySocialProfiles.companyId, company.id));
+    const allowed = new Set(companyFieldsForVerification(plan, socialProfiles.map((profile) => profile.platform)));
+    const allFields: Array<{ field: string; value: string | null; provider?: VerificationProvider }> = [
       { field: 'companyName', value: company.name },
       { field: 'website', value: company.website, provider: this.websiteProvider },
       { field: 'description', value: company.description },
@@ -150,9 +156,9 @@ export class VerificationService {
       { field: 'zip', value: location?.postalCode ?? null },
       { field: 'country', value: location?.country ?? null },
     ];
-    const socialProfiles = await this.db.select().from(companySocialProfiles).where(eq(companySocialProfiles.companyId, company.id));
-    for (const profile of socialProfiles) fields.push({ field: profile.platform, value: profile.profileUrl, provider: this.socialProvider });
-    const results = await this.evaluateFields(fields, evidence);
+    for (const profile of socialProfiles) allFields.push({ field: profile.platform, value: profile.profileUrl, provider: this.socialProvider });
+    const fields = allFields.filter((field) => allowed.has(field.field));
+    const results = await this.evaluateFields(fields, evidence, plan);
     for (const conflict of entityConflicts) {
       await this.persistConflict(data, conflict);
       const existing = results.find((row) => row.field === conflict.fieldName);
@@ -177,12 +183,15 @@ export class VerificationService {
     return this.persistResults(data, results);
   }
 
-  private async verifyContactFields(company: typeof companies.$inferSelect, contact: typeof companyContacts.$inferSelect, evidence: VerificationEvidence[], data: VerificationJobData) {
-    const fields: Array<{ field: string; value: string | null; provider?: VerificationProvider }> = [
+  private async verifyContactFields(company: typeof companies.$inferSelect, contact: typeof companyContacts.$inferSelect, evidence: VerificationEvidence[], data: VerificationJobData, plan: SearchPlan | null) {
+    const allowed = new Set(personFieldsForVerification(plan));
+    const genericPersonEmail = Boolean(contact.email && isGenericBusinessEmail(contact.email));
+    const personEmail = genericPersonEmail ? null : contact.email;
+    const allFields: Array<{ field: string; value: string | null; provider?: VerificationProvider }> = [
       { field: 'fullName', value: contact.fullName },
       { field: 'title', value: contact.title },
       { field: 'companyRelationship', value: contact.companyRelationship ?? company.name },
-      { field: 'email', value: contact.email, provider: this.emailProvider },
+      { field: 'email', value: personEmail, provider: this.emailProvider },
       { field: 'phone', value: contact.phone, provider: this.phoneProvider },
       { field: 'linkedin', value: contact.linkedinUrl, provider: this.socialProvider },
       { field: 'facebook', value: contact.facebookUrl, provider: this.socialProvider },
@@ -190,21 +199,69 @@ export class VerificationService {
       { field: 'youtube', value: contact.youtubeUrl, provider: this.socialProvider },
       { field: 'normalizedRole', value: contact.normalizedRole },
     ];
-    return this.persistResults(data, await this.evaluateFields(fields, evidence));
+    const fields = allFields.filter((field) => allowed.has(field.field));
+    const results = await this.evaluateFields(fields, evidence, plan);
+    if (genericPersonEmail && allowed.has('email')) {
+      const emailResult = results.find((row) => row.field === 'email');
+      if (emailResult) {
+        emailResult.value = null;
+        emailResult.status = 'NOT_FOUND';
+        emailResult.metadata = { ...emailResult.metadata, companyLevelOnly: true, rejectedGenericMailbox: contact.email };
+      }
+    }
+    return this.persistResults(data, results);
   }
 
-  private async evaluateFields(fields: Array<{ field: string; value: string | null; provider?: VerificationProvider }>, evidence: VerificationEvidence[]) {
+  private async evaluateFields(fields: Array<{ field: string; value: string | null; provider?: VerificationProvider }>, evidence: VerificationEvidence[], plan: SearchPlan | null) {
     const results: VerificationResult[] = [];
+    const seen = new Set<string>();
     for (const field of fields) {
+      if (seen.has(field.field)) continue;
+      seen.add(field.field);
       const input: VerificationInput = { field: field.field, value: field.value, evidence };
       const evidenceSignal = this.conflictEngine.evaluateField(input, (item) => this.sourcePriority(item));
       const providerSignal = field.provider ? await field.provider.verify(input) : evidenceSignal;
-      const signal: VerificationSignal = evidenceSignal.status === 'NEEDS_REVIEW' || evidenceSignal.status === 'CONFLICT' || evidenceSignal.status === 'VERIFIED' || (evidenceSignal.status === 'SUPPORTED' && providerSignal.status === 'UNVERIFIED')
-        ? { ...evidenceSignal, provider: providerSignal.provider }
-        : providerSignal;
+      let signal = this.mergeSignals(evidenceSignal, providerSignal);
+
+      // Required-by-plan missing fields stay NOT_FOUND (qualification handles review); never invent values.
+      if (!field.value && fieldIsRequiredByPlan(plan, field.field)) {
+        signal = { ...signal, status: 'NOT_FOUND', metadata: { ...signal.metadata, requiredByPlan: true } };
+      }
+
+      if (providerSignal.metadata?.genericMailbox && field.field === 'email') {
+        signal = {
+          ...signal,
+          status: signal.status === 'NOT_FOUND' ? 'NOT_FOUND' : 'UNVERIFIED',
+          metadata: { ...signal.metadata, ...providerSignal.metadata, companyLevelOnly: true },
+        };
+      }
+
       results.push({ field: field.field, value: field.value, ...signal, checkedAt: new Date().toISOString() });
     }
     return results;
+  }
+
+  /** Evidence/conflict engine wins on conflicts and multi-source confirmation; providers can upgrade deliverability. */
+  private mergeSignals(evidenceSignal: VerificationSignal, providerSignal: VerificationSignal): VerificationSignal {
+    if (evidenceSignal.status === 'NEEDS_REVIEW' || evidenceSignal.status === 'CONFLICT') {
+      return { ...evidenceSignal, provider: providerSignal.provider || evidenceSignal.provider };
+    }
+    if (evidenceSignal.status === 'VERIFIED') {
+      return { ...evidenceSignal, provider: providerSignal.provider || evidenceSignal.provider, metadata: { ...evidenceSignal.metadata, ...providerSignal.metadata } };
+    }
+    if (providerSignal.status === 'INVALID') return { ...providerSignal, conflict: evidenceSignal.conflict };
+    if (providerSignal.status === 'VERIFIED' && (evidenceSignal.status === 'SUPPORTED' || evidenceSignal.status === 'UNVERIFIED' || evidenceSignal.status === 'FOUND')) {
+      return {
+        ...providerSignal,
+        evidenceId: evidenceSignal.evidenceId ?? providerSignal.evidenceId,
+        provenance: evidenceSignal.provenance ?? providerSignal.provenance,
+        metadata: { ...evidenceSignal.metadata, ...providerSignal.metadata, evidenceStatus: evidenceSignal.status },
+      };
+    }
+    if (evidenceSignal.status === 'SUPPORTED') {
+      return { ...evidenceSignal, provider: providerSignal.provider || evidenceSignal.provider, metadata: { ...evidenceSignal.metadata, ...providerSignal.metadata } };
+    }
+    return { ...providerSignal, evidenceId: evidenceSignal.evidenceId ?? providerSignal.evidenceId, provenance: evidenceSignal.provenance ?? providerSignal.provenance };
   }
 
   private async persistResults(data: VerificationJobData, results: VerificationResult[]) {
@@ -369,10 +426,29 @@ export class VerificationService {
     await this.db.update(companyContacts).set({
       verificationStatus: conflict ? 'NEEDS_REVIEW' : coreVerified ? 'VERIFIED' : 'PARTIALLY_VERIFIED',
       status: conflict ? 'NOT_VERIFIED' : coreVerified ? 'VERIFIED' : 'PARTIALLY_VERIFIED',
-      emailStatus: email?.status === 'VERIFIED' ? 'VERIFIED' : email?.status === 'NOT_FOUND' ? 'NOT_FOUND' : email?.value ? 'UNVERIFIED' : 'NOT_FOUND',
-      phoneStatus: phone?.status === 'VERIFIED' ? 'VERIFIED' : phone?.status === 'NOT_FOUND' ? 'NOT_FOUND' : phone?.value ? 'UNVERIFIED' : 'NOT_FOUND',
+      emailStatus: this.contactChannelStatus(email),
+      phoneStatus: this.contactChannelStatus(phone),
       lastVerifiedAt: new Date(),
       updatedAt: new Date(),
     }).where(eq(companyContacts.id, contactId));
+  }
+
+  private contactChannelStatus(row?: { field: string; value: string | null; status: string }) {
+    if (!row || row.status === 'NOT_FOUND' || !row.value) return 'NOT_FOUND';
+    if (row.status === 'VERIFIED') return 'VERIFIED';
+    if (row.status === 'SUPPORTED') return 'SUPPORTED';
+    if (row.status === 'CONFLICT' || row.status === 'NEEDS_REVIEW') return 'UNVERIFIED';
+    if (row.status === 'INVALID') return 'NOT_FOUND';
+    if (row.status === 'FOUND') return 'FOUND';
+    return 'UNVERIFIED';
+  }
+
+  private async loadPlan(searchExecutionId: string | null | undefined, organizationId: string): Promise<SearchPlan | null> {
+    if (!searchExecutionId) return null;
+    const [row] = await this.db.select({ plan: searchExecutions.structuredPlan }).from(searchExecutions).where(and(
+      eq(searchExecutions.id, searchExecutionId),
+      eq(searchExecutions.organizationId, organizationId),
+    )).limit(1);
+    return row?.plan && typeof row.plan === 'object' ? row.plan as SearchPlan : null;
   }
 }

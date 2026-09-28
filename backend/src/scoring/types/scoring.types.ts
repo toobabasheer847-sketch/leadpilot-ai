@@ -19,6 +19,10 @@ export interface ScoreBreakdown {
   expectedFields: number;
   completenessPercentage: number;
   sourceTypes: string[];
+  /** Explicit list of fields with SUPPORTED/VERIFIED evidence for explainability. */
+  verifiedEvidence: Array<{ field: string; status: string; evidenceId?: string | null }>;
+  /** Explicit list of open field conflicts / needs-review items. */
+  conflicts: Array<{ field: string; status: string; evidenceId?: string | null }>;
 }
 
 export interface ScoringJobData {
