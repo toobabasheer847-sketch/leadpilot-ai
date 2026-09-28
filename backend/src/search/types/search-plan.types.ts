@@ -2,6 +2,8 @@ export interface SearchLocation {
   country: string;
   state?: string;
   city?: string;
+  /** Province, metro, or other place that is not a city or a known state. */
+  region?: string;
 }
 
 export interface CompanySize {
@@ -32,7 +34,17 @@ export interface SearchPlan {
   requiredRoles?: string[];
   /** Soft score floor; never overrides required criteria failures. */
   minimumScore?: number;
-  /** Upper bound requested by the prompt, such as "up to 50". */
+  /** Upper bound requested by the prompt. Same value as requestedCount when the prompt states a number. */
   maxResults?: number;
+  /** Count taken from the prompt. Absent only when the prompt does not state a number. */
+  requestedCount?: number;
+  /** How the prompt qualified the count. "at least" is a minimum goal, not a silent default. */
+  countIntent?: 'exact' | 'maximum' | 'minimum';
+  /** Same bounds as companySize when the prompt requested an employee range. */
+  employeeRange?: CompanySize;
+  /** Businesses or categories the prompt told the search to leave out. */
+  exclusions?: string[];
+  /** Short description of what the prompt asked the search to find. */
+  searchIntent?: string;
   unresolvedCriteria: UnresolvedCriterion[];
 }

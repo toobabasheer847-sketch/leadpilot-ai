@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigService } from '@nestjs/config';
+import { redisEndpoint } from '../redis/redis-endpoint';
 import { LeadResearchQueue } from './lead-research.queue';
 import { QueueObservabilityService } from './queue-observability.service';
 
@@ -9,14 +10,15 @@ import { QueueObservabilityService } from './queue-observability.service';
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
-        const redisUrl = configService.get<string>('redis.url') || 'redis://localhost:6379';
-        const url = new URL(redisUrl);
-
+        const redisUrl = configService.get<string>('redis.url') || 'redis://127.0.0.1:6379';
         return {
           connection: {
-            host: url.hostname || 'localhost',
-            port: parseInt(url.port || '6379', 10),
-            password: url.password || undefined,
+            ...redisEndpoint(redisUrl),
+            maxRetriesPerRequest: null,
+            connectTimeout: 10_000,
+            retryStrategy(times: number) {
+              return Math.min(times * 500, 5_000);
+            },
           },
         };
       },

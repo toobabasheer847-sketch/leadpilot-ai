@@ -21,6 +21,7 @@ export function emptyStageMap(): StageMap {
     websiteDiscovery: 'PENDING',
     enrichment: 'PENDING',
     deepResearch: 'PENDING',
+    employeeSize: 'PENDING',
     decisionMakerDiscovery: 'PENDING',
     contactQuality: 'PENDING',
     evidence: 'PENDING',
@@ -183,6 +184,7 @@ export function stageList(stages: StageMap) {
     ['WEBSITE_DISCOVERY', 'websiteDiscovery'],
     ['ENRICHMENT', 'enrichment'],
     ['DEEP_RESEARCH', 'deepResearch'],
+    ['EMPLOYEE_SIZE', 'employeeSize'],
     ['DECISION_MAKER_DISCOVERY', 'decisionMakerDiscovery'],
     ['CONTACT_QUALITY', 'contactQuality'],
     ['EVIDENCE', 'evidence'],
@@ -198,15 +200,28 @@ export function stageList(stages: StageMap) {
 export function emptyCounters(): PipelineCounters {
   return {
     companiesDiscovered: null,
+    companiesPersisted: null,
     companiesProcessed: null,
+    requestedCount: null,
+    discoveryShortfall: null,
+    companySizeRequested: null,
+    websitesFound: null,
+    websitesNotFound: null,
     websitesResearched: null,
+    companySizeFound: null,
+    companySizeUnknown: null,
     decisionMakersFound: null,
+    decisionMakerEmailsFound: null,
+    companyEmailsFound: null,
+    socialProfilesFound: null,
     contactsFound: null,
     evidenceCollected: null,
     verifiedFields: null,
     conflictsFound: null,
     duplicatesFound: null,
     qualifiedLeads: null,
+    needsReview: null,
+    rejected: null,
   };
 }
 
@@ -214,15 +229,28 @@ export function maskCounters(stages: StageMap, counts: PipelineCounters): Pipeli
   const ready = (key: StageProgressKey) => stages[key] !== 'PENDING';
   return {
     companiesDiscovered: ready('sourceDiscovery') ? counts.companiesDiscovered : null,
+    companiesPersisted: ready('companyPersistence') ? counts.companiesPersisted : null,
     companiesProcessed: ready('companyPersistence') ? counts.companiesProcessed : null,
+    requestedCount: counts.requestedCount,
+    discoveryShortfall: ready('sourceDiscovery') ? counts.discoveryShortfall : null,
+    companySizeRequested: counts.companySizeRequested,
+    websitesFound: ready('websiteDiscovery') ? counts.websitesFound : null,
+    websitesNotFound: ready('websiteDiscovery') ? counts.websitesNotFound : null,
     websitesResearched: ready('deepResearch') ? counts.websitesResearched : null,
+    companySizeFound: counts.companySizeRequested && ready('employeeSize') ? counts.companySizeFound : null,
+    companySizeUnknown: counts.companySizeRequested && ready('employeeSize') ? counts.companySizeUnknown : null,
     decisionMakersFound: ready('decisionMakerDiscovery') ? counts.decisionMakersFound : null,
+    decisionMakerEmailsFound: ready('decisionMakerDiscovery') ? counts.decisionMakerEmailsFound : null,
+    companyEmailsFound: ready('enrichment') ? counts.companyEmailsFound : null,
+    socialProfilesFound: ready('enrichment') ? counts.socialProfilesFound : null,
     contactsFound: ready('decisionMakerDiscovery') ? counts.contactsFound : null,
     evidenceCollected: ready('evidence') ? counts.evidenceCollected : null,
     verifiedFields: ready('verification') ? counts.verifiedFields : null,
     conflictsFound: ready('verification') ? counts.conflictsFound : null,
     duplicatesFound: ready('deduplication') ? counts.duplicatesFound : null,
     qualifiedLeads: ready('qualification') ? counts.qualifiedLeads : null,
+    needsReview: ready('qualification') ? counts.needsReview : null,
+    rejected: ready('qualification') ? counts.rejected : null,
   };
 }
 

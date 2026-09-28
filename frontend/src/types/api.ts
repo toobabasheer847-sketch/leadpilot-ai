@@ -56,6 +56,7 @@ export interface PipelineStageMap {
   websiteDiscovery: StageState;
   enrichment: StageState;
   deepResearch: StageState;
+  employeeSize: StageState;
   decisionMakerDiscovery: StageState;
   contactQuality: StageState;
   evidence: StageState;
@@ -75,15 +76,28 @@ export interface PipelineStageStatus {
 
 export interface PipelineCounters {
   companiesDiscovered: number | null;
+  companiesPersisted: number | null;
   companiesProcessed: number | null;
+  requestedCount: number | null;
+  discoveryShortfall: number | null;
+  companySizeRequested: boolean | null;
+  websitesFound: number | null;
+  websitesNotFound: number | null;
   websitesResearched: number | null;
+  companySizeFound: number | null;
+  companySizeUnknown: number | null;
   decisionMakersFound: number | null;
+  decisionMakerEmailsFound: number | null;
+  companyEmailsFound: number | null;
+  socialProfilesFound: number | null;
   contactsFound: number | null;
   evidenceCollected: number | null;
   verifiedFields: number | null;
   conflictsFound: number | null;
   duplicatesFound: number | null;
   qualifiedLeads: number | null;
+  needsReview: number | null;
+  rejected: number | null;
 }
 
 export interface PipelineFailure {
@@ -174,7 +188,7 @@ export interface LeadRecord {
     propertyTypes?: unknown;
     marketsServed?: unknown;
     companySize?: string | number | null;
-    companySizeStatus?: 'MATCHED' | 'UNKNOWN' | 'OUTSIDE_RANGE' | null;
+    companySizeStatus?: 'MATCHED' | 'UNKNOWN' | 'OUTSIDE_RANGE' | 'CONFLICT' | 'NOT_REQUESTED' | null;
     location: LeadLocation | null;
   };
   contact: {
@@ -187,6 +201,7 @@ export interface LeadRecord {
     facebook?: string | null;
     instagram?: string | null;
     youtube?: string | null;
+    twitter?: string | null;
   } | null;
   socialProfiles?: SocialProfileRow[];
   classification: { decision: string | null; confidence: number | string | null } | null;
@@ -351,7 +366,7 @@ export interface LeadFilters {
   hasDecisionMaker?: boolean;
   hasEmail?: boolean;
   hasPhone?: boolean;
-  companySizeStatus?: 'MATCHED' | 'UNKNOWN' | 'OUTSIDE_RANGE';
+  companySizeStatus?: 'MATCHED' | 'UNKNOWN' | 'OUTSIDE_RANGE' | 'CONFLICT' | 'NOT_REQUESTED';
   companySizeMin?: number;
   companySizeMax?: number;
 }

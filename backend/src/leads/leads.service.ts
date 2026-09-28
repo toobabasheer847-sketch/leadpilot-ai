@@ -3,7 +3,7 @@ import { and, asc, count, desc, eq, gte, ilike, inArray, lte, or, sql } from 'dr
 import type { Database } from '../database/database.types';
 import { Inject } from '@nestjs/common';
 import { DRIZZLE } from '../database/database.constants';
-import { companies, companyContacts, companyLocations, companySocialProfiles, leadClassifications, leadDuplicates, leadEvidence, leadQualifications, leadScores, leadVerifications, searchConfigurations, searchExecutions, sourceRecords } from '../database/schema/schema';
+import { companies, companyContacts, companyLocations, companySocialProfiles, leadClassifications, leadDuplicates, leadEvidence, leadQualifications, leadScores, leadVerifications, searchConfigurations, searchExecutions, sourceRecords, verificationConflicts } from '../database/schema/schema';
 import { normalizeDomain } from '../deduplication/normalization/normalization';
 import { companySizeFit } from '../qualification/engine/qualification-engine';
 import type { AuthenticatedUser } from '../auth/auth.types';
@@ -30,20 +30,31 @@ export class LeadsService {
     if (filters.investorType) conditions.push(eq(companies.investorType, filters.investorType));
     if (filters.investmentStrategy) conditions.push(ilike(companies.investmentStrategy, `%${filters.investmentStrategy}%`));
     if (filters.companySize) conditions.push(or(eq(companies.employeeRange, filters.companySize), eq(companies.employeeCount, Number(filters.companySize) || -1))!);
+    if (filters.companySizeStatus === 'NOT_REQUESTED') conditions.push(sql`not ${sizeWasRequested(organizationId)}`);
     if (filters.companySizeStatus === 'UNKNOWN') {
-      const min = filters.companySizeMin ?? 1;
-      const max = filters.companySizeMax ?? 50;
-      conditions.push(sql`${companies.employeeCount} is null and not ${containedSizeRange(min, max)} and not ${outsideSizeRange(min, max)}`);
+      const bounds = explicitSizeBounds(filters);
+      if (bounds) {
+        conditions.push(sql`${companies.employeeCount} is null and not ${containedSizeRange(bounds.min, bounds.max)} and not ${outsideSizeRange(bounds.min, bounds.max)} and not ${openCompanySizeConflict(organizationId)}`);
+      } else {
+        conditions.push(sql`${planSizeComparison(organizationId, 'unknown')} and not ${openCompanySizeConflict(organizationId)}`);
+      }
     }
+    if (filters.companySizeStatus === 'CONFLICT') conditions.push(openCompanySizeConflict(organizationId));
     if (filters.companySizeStatus === 'MATCHED') {
-      const min = filters.companySizeMin ?? 1;
-      const max = filters.companySizeMax ?? 50;
-      conditions.push(sql`(${companies.employeeCount} is not null and ${companies.employeeCount} >= ${min} and ${companies.employeeCount} <= ${max}) or (${companies.employeeCount} is null and ${containedSizeRange(min, max)})`);
+      const bounds = explicitSizeBounds(filters);
+      if (bounds) {
+        conditions.push(sql`(${companies.employeeCount} is not null and ${companies.employeeCount} >= ${bounds.min} and ${companies.employeeCount} <= ${bounds.max}) or (${companies.employeeCount} is null and ${containedSizeRange(bounds.min, bounds.max)})`);
+      } else {
+        conditions.push(planSizeComparison(organizationId, 'matched'));
+      }
     }
     if (filters.companySizeStatus === 'OUTSIDE_RANGE') {
-      const min = filters.companySizeMin ?? 1;
-      const max = filters.companySizeMax ?? 50;
-      conditions.push(sql`(${companies.employeeCount} is not null and (${companies.employeeCount} < ${min} or ${companies.employeeCount} > ${max})) or (${companies.employeeCount} is null and ${outsideSizeRange(min, max)})`);
+      const bounds = explicitSizeBounds(filters);
+      if (bounds) {
+        conditions.push(sql`(${companies.employeeCount} is not null and (${companies.employeeCount} < ${bounds.min} or ${companies.employeeCount} > ${bounds.max})) or (${companies.employeeCount} is null and ${outsideSizeRange(bounds.min, bounds.max)})`);
+      } else {
+        conditions.push(planSizeComparison(organizationId, 'outside'));
+      }
     }
     if (filters.search) {
       const query = `%${filters.search}%`;
@@ -151,7 +162,7 @@ export class LeadsService {
   private async hydrate(rows: CompanyRow[], organizationId: string) {
     const ids = rows.map((row) => row.id);
     if (!ids.length) return [];
-    const [locations, contacts, socials, classifications, scores, verifications, duplicates, evidenceRows, sourceRows, qualifications] = await Promise.all([
+    const [locations, contacts, socials, classifications, scores, verifications, duplicates, evidenceRows, sourceRows, qualifications, conflicts] = await Promise.all([
       this.db.select().from(companyLocations).where(inArray(companyLocations.companyId, ids)),
       this.db.select().from(companyContacts).where(inArray(companyContacts.companyId, ids)),
       this.db.select().from(companySocialProfiles).where(inArray(companySocialProfiles.companyId, ids)),
@@ -162,7 +173,16 @@ export class LeadsService {
       this.db.select().from(leadEvidence).where(inArray(leadEvidence.companyId, ids)),
       this.db.select().from(sourceRecords).where(and(eq(sourceRecords.organizationId, organizationId), inArray(sourceRecords.companyId, ids))),
       this.db.select().from(leadQualifications).where(and(eq(leadQualifications.organizationId, organizationId), inArray(leadQualifications.companyId, ids))).orderBy(desc(leadQualifications.evaluatedAt)),
+      this.db.select().from(verificationConflicts).where(and(eq(verificationConflicts.organizationId, organizationId), inArray(verificationConflicts.companyId, ids), eq(verificationConflicts.fieldName, 'companySize'), eq(verificationConflicts.resolutionStatus, 'OPEN'))),
     ]);
+    const executionIds = [...new Set(sourceRows.map((row) => row.searchExecutionId))];
+    const executionPlans = executionIds.length
+      ? await this.db.select({
+        id: searchExecutions.id,
+        structuredPlan: searchExecutions.structuredPlan,
+        createdAt: searchExecutions.createdAt,
+      }).from(searchExecutions).where(and(eq(searchExecutions.organizationId, organizationId), inArray(searchExecutions.id, executionIds)))
+      : [];
     return rows.map((company) => {
       const location = locations.find((item) => item.companyId === company.id && item.isPrimary) ?? locations.find((item) => item.companyId === company.id) ?? null;
       const contact = contacts.find((item) => item.companyId === company.id) ?? null;
@@ -171,8 +191,12 @@ export class LeadsService {
       const verification = verifications.find((item) => item.companyId === company.id && item.contactId === null) ?? null;
       const duplicate = duplicates.find((item) => item.entityAId === company.id || item.entityBId === company.id) ?? null;
       const qualification = qualifications.find((item) => item.companyId === company.id) ?? null;
-      const sizeStatus = companySizeFit(company.employeeCount, company.employeeRange, { min: 1, max: 50 });
-      return { id: company.id, company: { id: company.id, name: company.name, website: company.website, domain: normalizeDomain(company.website), phone: company.phone, email: company.email, description: company.description, category: company.category, investorType: company.investorType, investmentStrategy: company.investmentStrategy, propertyTypes: company.propertyTypes, marketsServed: company.marketsServed, companySize: company.employeeCount ?? company.employeeRange ?? null, companySizeStatus: sizeStatus, location: location ? { city: location.city, state: location.state, zipCode: location.postalCode, country: location.country, address: location.addressLine1 } : null }, contact: contact ? { id: contact.id, name: contact.fullName, title: contact.title, email: contact.email, phone: contact.phone, linkedin: contact.linkedinUrl, facebook: contact.facebookUrl, instagram: contact.instagramUrl, youtube: contact.youtubeUrl } : null, socialProfiles: socials.filter((item) => item.companyId === company.id), classification: classification ? { decision: classification.decision, confidence: classification.confidence ? Number(classification.confidence) : null } : null, score: score ? { value: score.score, band: score.band, breakdown: score.breakdown } : null, verification: verification ? { status: verification.status, field: verification.field } : null, qualification: qualification ? { status: qualification.status, score: qualification.score, scoreBand: qualification.scoreBand, qualifiedReasons: qualification.qualifiedReasons, disqualifiedReasons: qualification.disqualifiedReasons, needsReviewReasons: qualification.needsReviewReasons, missingOptional: qualification.missingOptional, criterionResults: qualification.criterionResults, evaluatedAt: qualification.evaluatedAt } : null, duplicate: duplicate ? { status: duplicate.status, matchType: duplicate.matchType, confidence: duplicate.confidence ? Number(duplicate.confidence) : null } : { status: 'NO_DUPLICATE' }, evidence: evidenceRows.filter((item) => item.companyId === company.id), sourceUrls: sourceRows.filter((item) => item.companyId === company.id).map((item) => item.sourceUrl), createdAt: company.createdAt, updatedAt: company.updatedAt, lastVerifiedAt: company.lastVerifiedAt };
+      const sizeConflict = conflicts.some((item) => item.companyId === company.id);
+      const bounds = sizeBoundsForCompany(company.id, sourceRows, executionPlans);
+      const sizeStatus = sizeConflict ? 'CONFLICT' : bounds ? companySizeFit(company.employeeCount, company.employeeRange, bounds) : 'NOT_REQUESTED';
+      const companySize = sizeConflict ? 'CONFLICT' : company.employeeCount ?? company.employeeRange ?? null;
+      const companyEvidence = evidenceRows.filter((item) => item.companyId === company.id);
+      return { id: company.id, company: { id: company.id, name: company.name, website: company.website, domain: normalizeDomain(company.website), phone: company.phone, email: company.email, description: company.description, category: company.category, investorType: company.investorType, investmentStrategy: company.investmentStrategy, propertyTypes: company.propertyTypes, marketsServed: company.marketsServed, employeeCount: company.employeeCount, employeeRange: company.employeeRange, companySize, companySizeStatus: sizeStatus, location: location ? { city: location.city, state: location.state, zipCode: location.postalCode, country: location.country, address: location.addressLine1 } : null }, contact: contact ? { id: contact.id, name: contact.fullName, title: contact.title, email: contact.email, phone: contact.phone, linkedin: contact.linkedinUrl, facebook: contact.facebookUrl, instagram: contact.instagramUrl, youtube: contact.youtubeUrl, twitter: evidenceField(companyEvidence, contact.id, 'twitterUrl') } : null, socialProfiles: socials.filter((item) => item.companyId === company.id), classification: classification ? { decision: classification.decision, confidence: classification.confidence ? Number(classification.confidence) : null } : null, score: score ? { value: score.score, band: score.band, breakdown: score.breakdown } : null, verification: verification ? { status: verification.status, field: verification.field } : null, qualification: qualification ? { status: qualification.status, score: qualification.score, scoreBand: qualification.scoreBand, qualifiedReasons: qualification.qualifiedReasons, disqualifiedReasons: qualification.disqualifiedReasons, needsReviewReasons: qualification.needsReviewReasons, missingOptional: qualification.missingOptional, criterionResults: qualification.criterionResults, evaluatedAt: qualification.evaluatedAt } : null, duplicate: duplicate ? { status: duplicate.status, matchType: duplicate.matchType, confidence: duplicate.confidence ? Number(duplicate.confidence) : null } : { status: 'NO_DUPLICATE' }, evidence: companyEvidence, sourceUrls: sourceRows.filter((item) => item.companyId === company.id).map((item) => item.sourceUrl), createdAt: company.createdAt, updatedAt: company.updatedAt, lastVerifiedAt: company.lastVerifiedAt };
     });
   }
 
@@ -189,6 +213,79 @@ export class LeadsService {
   }
 
   private uniqueIds(ids: string[]) { return [...new Set(ids)]; }
+}
+
+function evidenceField(rows: Array<{ contactId: string | null; metadata: unknown }>, contactId: string, field: string): string | null {
+  for (const row of rows) {
+    if (row.contactId !== contactId || !row.metadata || typeof row.metadata !== 'object') continue;
+    const metadata = row.metadata as { field?: unknown; value?: unknown };
+    if (metadata.field === field && typeof metadata.value === 'string' && metadata.value.trim()) return metadata.value;
+  }
+  return null;
+}
+
+function explicitSizeBounds(filters: { companySizeMin?: number; companySizeMax?: number }): { min: number; max: number } | null {
+  if (filters.companySizeMin == null && filters.companySizeMax == null) return null;
+  return { min: filters.companySizeMin ?? -2147483648, max: filters.companySizeMax ?? 2147483647 };
+}
+
+function sizeWasRequested(organizationId: string) {
+  return sql`exists (
+    select 1 from ${sourceRecords} sr
+    inner join ${searchExecutions} se on se.id = sr.search_execution_id
+    where sr.company_id = ${companies.id}
+      and sr.organization_id = ${organizationId}
+      and se.organization_id = ${organizationId}
+      and jsonb_exists(se.structured_plan, 'companySize')
+  )`;
+}
+
+function planSizeComparison(organizationId: string, mode: 'matched' | 'outside' | 'unknown') {
+  const min = sql`coalesce((se.structured_plan->'companySize'->>'min')::int, -2147483648)`;
+  const max = sql`coalesce((se.structured_plan->'companySize'->>'max')::int, 2147483647)`;
+  const span = sql`regexp_match(replace(${companies.employeeRange}, '–', '-'), '^([0-9]+)-([0-9]+)$')`;
+  const contained = sql`${span} is not null and (${span})[1]::int >= ${min} and (${span})[2]::int <= ${max}`;
+  const outside = sql`${span} is not null and ((${span})[2]::int < ${min} or (${span})[1]::int > ${max})`;
+  const predicate = mode === 'matched'
+    ? sql`((${companies.employeeCount} is not null and ${companies.employeeCount} >= ${min} and ${companies.employeeCount} <= ${max}) or (${companies.employeeCount} is null and ${contained}))`
+    : mode === 'outside'
+      ? sql`((${companies.employeeCount} is not null and (${companies.employeeCount} < ${min} or ${companies.employeeCount} > ${max})) or (${companies.employeeCount} is null and ${outside}))`
+      : sql`${companies.employeeCount} is null and not ${contained} and not ${outside}`;
+  return sql`exists (
+    select 1 from ${sourceRecords} sr
+    inner join ${searchExecutions} se on se.id = sr.search_execution_id
+    where sr.company_id = ${companies.id}
+      and sr.organization_id = ${organizationId}
+      and se.organization_id = ${organizationId}
+      and jsonb_exists(se.structured_plan, 'companySize')
+      and ${predicate}
+  )`;
+}
+
+function sizeBoundsForCompany(
+  companyId: string,
+  sources: Array<{ companyId: string | null; searchExecutionId: string }>,
+  executions: Array<{ id: string; structuredPlan: unknown; createdAt: Date }>,
+): { min?: number; max?: number } | null {
+  const ids = new Set(sources.filter((row) => row.companyId === companyId).map((row) => row.searchExecutionId));
+  const newest = executions
+    .filter((row) => ids.has(row.id))
+    .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0];
+  return newest ? readCompanySize(newest.structuredPlan) : null;
+}
+
+function readCompanySize(plan: unknown): { min?: number; max?: number } | null {
+  if (!plan || typeof plan !== 'object' || !('companySize' in plan)) return null;
+  const size = (plan as { companySize?: { min?: unknown; max?: unknown } }).companySize;
+  if (!size || typeof size !== 'object') return null;
+  const min = typeof size.min === 'number' && Number.isFinite(size.min) ? size.min : undefined;
+  const max = typeof size.max === 'number' && Number.isFinite(size.max) ? size.max : undefined;
+  if (min == null && max == null) return null;
+  return { ...(min != null ? { min } : {}), ...(max != null ? { max } : {}) };
+}
+
+function openCompanySizeConflict(organizationId: string) {
+  return sql`exists (select 1 from ${verificationConflicts} where ${verificationConflicts.companyId} = ${companies.id} and ${verificationConflicts.organizationId} = ${organizationId} and ${verificationConflicts.fieldName} = 'companySize' and ${verificationConflicts.resolutionStatus} = 'OPEN')`;
 }
 
 function stateTerms(value: string): string[] {

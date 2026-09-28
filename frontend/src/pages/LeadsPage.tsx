@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { createExport, exportApi, getLeads, pageItems, searchApi } from '../api/endpoints';
+import { createExport, exportApi, getLeads, pageItems, pipelineApi, searchApi } from '../api/endpoints';
 import { ApiError } from '../api/client';
 import { ErrorState } from '../components/feedback/States';
 import { TableSkeleton } from '../components/feedback/Skeletons';
 import { ExportButton } from '../components/leads/ExportButton';
 import { LeadFilters, type LeadFilterValues } from '../components/leads/LeadFilters';
 import { LeadTable } from '../components/leads/LeadTable';
+import { PipelineProgress } from '../components/search/PipelineProgress';
 import { useToasts } from '../feedback/toasts';
-import type { ExportRecord, LeadFilters as LeadQuery, LeadRecord, LeadSortBy, SearchExecutionSummary } from '../types/api';
+import type { ExportRecord, LeadFilters as LeadQuery, LeadRecord, LeadSortBy, PipelineView, SearchExecutionSummary } from '../types/api';
 
 const sortFields: LeadSortBy[] = ['score', 'companyName', 'createdAt', 'updatedAt', 'lastVerifiedAt'];
 
@@ -27,7 +28,7 @@ function flag(value: string | null): boolean | undefined {
 }
 
 function readSizeStatus(value: string | null): LeadQuery['companySizeStatus'] {
-  if (value === 'MATCHED' || value === 'UNKNOWN' || value === 'OUTSIDE_RANGE') return value;
+  if (value === 'MATCHED' || value === 'UNKNOWN' || value === 'OUTSIDE_RANGE' || value === 'CONFLICT' || value === 'NOT_REQUESTED') return value;
   return undefined;
 }
 
@@ -82,8 +83,6 @@ function queryFrom(params: URLSearchParams): LeadQuery {
     hasEmail: flag(params.get('hasEmail')),
     hasPhone: flag(params.get('hasPhone')),
     companySizeStatus: readSizeStatus(params.get('companySizeStatus')),
-    companySizeMin: params.get('companySizeStatus') === 'MATCHED' || params.get('companySizeStatus') === 'OUTSIDE_RANGE' ? 1 : undefined,
-    companySizeMax: params.get('companySizeStatus') === 'MATCHED' || params.get('companySizeStatus') === 'OUTSIDE_RANGE' ? 50 : undefined,
   };
 }
 
@@ -96,6 +95,7 @@ export function LeadsPage() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [executions, setExecutions] = useState<SearchExecutionSummary[]>([]);
+  const [searchSummary, setSearchSummary] = useState<PipelineView | null>(null);
   const [exportPhase, setExportPhase] = useState<'idle' | 'creating' | 'ready' | 'failed'>('idle');
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [exportRecord, setExportRecord] = useState<ExportRecord | null>(null);
@@ -149,6 +149,21 @@ export function LeadsPage() {
     });
     return () => { active = false; };
   }, [params]);
+
+  const executionId = params.get('searchExecutionId') ?? '';
+  useEffect(() => {
+    if (!executionId) {
+      setSearchSummary(null);
+      return undefined;
+    }
+    let active = true;
+    pipelineApi.execution(executionId).then((view) => {
+      if (active) setSearchSummary(view);
+    }).catch(() => {
+      if (active) setSearchSummary(null);
+    });
+    return () => { active = false; };
+  }, [executionId]);
 
   useEffect(() => {
     if (exportPhase !== 'creating' || !exportRecord) return undefined;
@@ -248,6 +263,7 @@ export function LeadsPage() {
   return (
     <section className="stack">
       <LeadFilters values={valuesFrom(params, searchInput)} executions={executions} onSearchChange={setSearchInput} onChange={update} />
+      {searchSummary ? <PipelineProgress pipeline={searchSummary} /> : null}
       <ExportButton phase={exportPhase} message={exportMessage} onCreate={(format) => void create(format)} onDownload={() => void download()} />
       {selected.size ? <p className="muted">Selected on this page: {selected.size}</p> : null}
       {error ? <ErrorState message={error} /> : null}

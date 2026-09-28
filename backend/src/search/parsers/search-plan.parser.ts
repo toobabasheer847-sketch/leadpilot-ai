@@ -1,33 +1,19 @@
 import { Injectable } from '@nestjs/common';
-import { SearchPlan } from '../types/search-plan.types';
+import { RESULT_SAFETY_CAP } from '../search-plan.limits';
+import { interpretPlace } from '../search-plan.places';
+import { CompanySize, SearchLocation, SearchPlan } from '../types/search-plan.types';
 
-const STATE_NAMES: Record<string, string> = {
-  tx: 'Texas', texas: 'Texas',
-  ca: 'California', california: 'California',
-  fl: 'Florida', florida: 'Florida',
-  ny: 'New York', 'new york': 'New York',
-};
-
-const INDUSTRIES: Array<[string, string]> = [
-  ['real estate', 'real_estate'],
-  ['construction', 'construction'],
-  ['software', 'software'],
-  ['marketing', 'marketing'],
-  ['healthcare', 'healthcare'],
-  ['legal', 'legal'],
-  ['finance', 'finance'],
-];
-
-const LEAD_TYPES: Array<[string, string]> = [
-  ['cash home buyer', 'cash_home_buyer'],
-  ['real estate investment', 'real_estate_investor'],
-  ['real estate investor', 'real_estate_investor'],
-  ['house flipper', 'house_flipper'],
-  ['fix and flip', 'fix_and_flip'],
-  ['buy and hold', 'buy_and_hold'],
-  ['brrr', 'brrrr'],
-  ['commercial real estate investor', 'commercial_real_estate_investor'],
-  ['land investor', 'land_investor'],
+const LEAD_PHRASES: Array<[RegExp, string, string?]> = [
+  [/\bcommercial real estate investors?\b/i, 'commercial_real_estate_investor', 'real_estate'],
+  [/\bland investors?\b/i, 'land_investor', 'real_estate'],
+  [/\bcash home buyers?\b/i, 'cash_home_buyer', 'real_estate'],
+  [/\bhouse flippers?\b/i, 'house_flipper', 'real_estate'],
+  [/\bfix(?:\s|-)?and(?:\s|-)?flip\b/i, 'fix_and_flip', 'real_estate'],
+  [/\bbuy(?:\s|-)?and(?:\s|-)?hold\b/i, 'buy_and_hold', 'real_estate'],
+  [/\bbrrrr?\b/i, 'brrrr', 'real_estate'],
+  [/\bproperty investors?\b/i, 'real_estate_investor', 'real_estate'],
+  [/\breal estate investors?\b/i, 'real_estate_investor', 'real_estate'],
+  [/\breal estate investment(?:\s+compan(?:y|ies)|\s+firms?)?\b/i, 'real_estate_investor', 'real_estate'],
 ];
 
 const CONTACT_TITLES: Array<[string, string]> = [
@@ -42,30 +28,43 @@ const CONTACT_TITLES: Array<[string, string]> = [
 
 const COMPANY_FIELDS = ['website', 'linkedin', 'facebook', 'instagram'];
 const CONTACT_FIELDS = ['email', 'phone', 'linkedin', 'facebook', 'instagram'];
+const VAGUE = new Set(['excellent', 'strong', 'good', 'best', 'top', 'great', 'reputable', 'reputation', 'reputations', 'quality', 'leading', 'premier', 'successful']);
 
 @Injectable()
 export class SearchPlanParser {
   parse(prompt: string): SearchPlan {
     const normalizedPrompt = prompt.trim().replace(/\s+/g, ' ');
-    const lowerPrompt = normalizedPrompt.toLowerCase();
-    const industry = this.collectMatches(lowerPrompt, INDUSTRIES);
-    const leadTypes = this.collectMatches(lowerPrompt, LEAD_TYPES);
-    const locations = this.parseLocations(lowerPrompt);
-    const companySize = this.parseCompanySize(lowerPrompt);
-    const companyFields = COMPANY_FIELDS.filter((field) => lowerPrompt.includes(field));
-    const contactFields = CONTACT_FIELDS.filter((field) => lowerPrompt.includes(field));
-    const titles = this.collectMatches(lowerPrompt, CONTACT_TITLES);
-    const requiredFields = this.parseRequiredFields(lowerPrompt, companyFields, contactFields);
-    const optionalFields = this.parseOptionalFields(lowerPrompt, companyFields, contactFields, requiredFields);
-    const minimumScore = this.parseMinimumScore(lowerPrompt);
-    const maxResults = this.parseMaxResults(lowerPrompt);
-    const unresolvedCriteria = this.parseUnresolved(normalizedPrompt, lowerPrompt, industry, leadTypes, locations, companySize);
+    const criteriaPrompt = normalizedPrompt.replace(/\breal-estate\b/gi, 'real estate');
+    const companySize = this.parseCompanySize(criteriaPrompt);
+    let working = this.withoutSizeClause(criteriaPrompt);
+    const exclusions = this.parseExclusions(working);
+    working = this.withoutExclusions(working);
+    const count = this.parseRequestedCount(working);
+    working = this.withoutCountClause(working, count?.count);
+    const located = this.takeLocations(working);
+    working = located ? working.slice(0, located.index).trim() : working;
+    const locations = located?.locations ?? this.countryFallback(criteriaPrompt);
+    const { industry, leadTypes } = this.interpretSubject(working, criteriaPrompt);
+    const companyFields = COMPANY_FIELDS.filter((field) => criteriaPrompt.toLowerCase().includes(field));
+    const contactFields = CONTACT_FIELDS.filter((field) => criteriaPrompt.toLowerCase().includes(field));
+    const titles = this.collectMatches(criteriaPrompt.toLowerCase(), CONTACT_TITLES);
+    const requiredFields = this.parseRequiredFields(criteriaPrompt, companyFields, contactFields);
+    const optionalFields = this.parseOptionalFields(criteriaPrompt, companyFields, contactFields, requiredFields);
+    const minimumScore = this.parseMinimumScore(criteriaPrompt);
+    const unresolvedCriteria = this.parseUnresolved(normalizedPrompt, industry, leadTypes, locations, companySize, count?.count);
+    if (count?.capped) {
+      unresolvedCriteria.push({
+        text: String(count.requested),
+        reason: `requested count was limited to the safety cap of ${RESULT_SAFETY_CAP}`,
+      });
+    }
 
+    const searchIntent = this.describeIntent(count?.count, industry, leadTypes, locations, companySize);
     return {
       industry,
       leadTypes,
       locations,
-      ...(companySize ? { companySize } : {}),
+      ...(companySize ? { companySize, employeeRange: companySize } : {}),
       companyFields,
       ...(titles.length || contactFields.length ? {
         contactRequirements: {
@@ -77,42 +76,140 @@ export class SearchPlanParser {
       ...(optionalFields.length ? { optionalFields } : {}),
       ...(titles.length ? { requiredRoles: titles } : {}),
       ...(minimumScore !== undefined ? { minimumScore } : {}),
-      ...(maxResults !== undefined ? { maxResults } : {}),
+      ...(count ? { requestedCount: count.count, maxResults: count.count, countIntent: count.intent } : {}),
+      ...(exclusions.length ? { exclusions } : {}),
+      searchIntent,
       unresolvedCriteria,
     };
   }
 
-  private parseLocations(prompt: string) {
-    const locations = Object.entries(STATE_NAMES)
-      .filter(([term]) => new RegExp(`\\b${this.escape(term)}\\b`, 'i').test(prompt))
-      .map(([, state]) => ({ country: 'US', state }));
-
-    if (/\b(united states|usa|us)\b/i.test(prompt) && locations.length === 0) {
-      return [{ country: 'US' }];
-    }
-
-    return [...new Map(locations.map((location) => [location.state, location])).values()];
+  private parseRequestedCount(prompt: string): { count: number; requested: number; intent: 'exact' | 'maximum' | 'minimum'; capped: boolean } | undefined {
+    const qualified = [...prompt.matchAll(/\b(up to|at least|maximum of|maximum|max|limit of|limit|minimum of|minimum|min)\s+(\d{1,5})\b/gi)];
+    const bare = [...prompt.matchAll(/\b(?:find|get|show|need|want|search(?:\s+for)?|looking\s+for)\s+(\d{1,5})\b/gi)];
+    const noun = [...prompt.matchAll(/\b(\d{1,5})\s+(?:companies|company|leads|lead|agencies|agency|firms|firm|businesses|business|restaurants|restaurant)\b/gi)];
+    type Hit = { index: number; count: number; intent: 'exact' | 'maximum' | 'minimum' };
+    const hits: Hit[] = [
+      ...qualified.map((match) => ({
+        index: match.index ?? 0,
+        count: Number(match[2]),
+        intent: /at least|minimum|\bmin\b/i.test(match[1]) ? 'minimum' as const : 'maximum' as const,
+      })),
+      ...bare.map((match) => ({ index: match.index ?? 0, count: Number(match[1]), intent: 'exact' as const })),
+      ...noun.map((match) => ({ index: match.index ?? 0, count: Number(match[1]), intent: 'exact' as const })),
+    ].filter((hit) => Number.isInteger(hit.count) && hit.count >= 1);
+    hits.sort((left, right) => left.index - right.index);
+    const selected = hits[0];
+    if (!selected) return undefined;
+    return {
+      count: Math.min(RESULT_SAFETY_CAP, selected.count),
+      requested: selected.count,
+      intent: selected.intent,
+      capped: selected.count > RESULT_SAFETY_CAP,
+    };
   }
 
-  private parseCompanySize(prompt: string) {
+  private withoutCountClause(prompt: string, count: number | undefined): string {
+    if (count === undefined) return prompt;
+    return prompt
+      .replace(/\b(?:up to|at least|maximum of|maximum|max|limit of|limit|minimum of|minimum|min)\s+\d{1,5}\b/gi, ' ')
+      .replace(new RegExp(`\\b${count}\\b`), ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private takeLocations(prompt: string): { index: number; locations: SearchLocation[] } | null {
+    const pattern = /\bin\s+(.+?)(?=\s+(?:that|who|which|with|without)\b|$)/gi;
+    let match: RegExpExecArray | null;
+    let found: { index: number; text: string } | null = null;
+    while ((match = pattern.exec(prompt))) {
+      found = { index: match.index, text: match[1].trim() };
+    }
+    if (!found?.text) return null;
+    const locations = found.text
+      .split(/\s+and\s+/i)
+      .map((part) => interpretPlace(part))
+      .filter((location) => Boolean(location.country || location.state || location.city || location.region))
+      .slice(0, 3);
+    if (!locations.length) return null;
+    return { index: found.index, locations };
+  }
+
+  private countryFallback(prompt: string): SearchLocation[] {
+    if (/\b(united states|usa|u\.s\.a\.|u\.s\.)\b/i.test(prompt)) return [{ country: 'US' }];
+    return [];
+  }
+
+  private interpretSubject(working: string, fullPrompt: string): { industry: string[]; leadTypes: string[] } {
+    const industry: string[] = [];
+    const leadTypes: string[] = [];
+    for (const [pattern, leadType, impliedIndustry] of LEAD_PHRASES) {
+      if (!pattern.test(fullPrompt)) continue;
+      if (!leadTypes.includes(leadType)) leadTypes.push(leadType);
+      if (impliedIndustry && !industry.includes(impliedIndustry)) industry.push(impliedIndustry);
+    }
+    let subject = working
+      .replace(/^(?:please\s+)?(?:find|get|show(?:\s+me)?|search(?:\s+for)?|looking\s+for|i\s+need|we\s+need|need)\s+/i, '')
+      .replace(/^\d+\s+/, '')
+      .replace(/\b(companies|company|agencies|agency|firms|firm|businesses|business|leads|lead)\b/gi, ' ')
+      .replace(/\b(that|who|which|are|is|their|with|plus|need|identify|the|a|an|or)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/[?.!]+$/g, '');
+    for (const [pattern] of LEAD_PHRASES) subject = subject.replace(pattern, ' ');
+    subject = subject.replace(/\s+/g, ' ').trim();
+    if (/\breal estate\b/i.test(subject) && !industry.includes('real_estate')) industry.push('real_estate');
+    const words = subject.toLowerCase().split(/\s+/).filter((word) => word && !VAGUE.has(word) && word !== 'and');
+    if (!industry.length && words.length && words.length <= 6) {
+      const slug = slugIndustry(words.join(' '));
+      if (slug) industry.push(slug);
+    }
+    return { industry, leadTypes };
+  }
+
+  private describeIntent(count: number | undefined, industry: string[], leadTypes: string[], locations: SearchLocation[], companySize?: CompanySize): string {
+    const place = locations.map((location) => [location.city, location.state, location.region, location.country].filter(Boolean).join(', ')).filter(Boolean).join(' and ');
+    const category = leadTypes[0]?.replace(/_/g, ' ') || industry[0]?.replace(/_/g, ' ') || 'companies';
+    const size = companySize ? ` with ${companySize.min ?? ''}${companySize.min != null && companySize.max != null ? '-' : ''}${companySize.max ?? (companySize.min != null ? '+' : '')} employees` : '';
+    return [`find`, count ? String(count) : undefined, category, place ? `in ${place}` : undefined].filter(Boolean).join(' ') + size;
+  }
+
+  private parseCompanySize(prompt: string): CompanySize | undefined {
     const range = prompt.match(/\b(?:company\s+size\s+)?(\d+)\s*(?:to|-|–)\s*(\d+)(?:\s*employees?)?\b/i);
     if (range && (/\bemployees?\b/i.test(prompt) || /\bcompany\s+size\b/i.test(prompt))) {
-      return { min: Number(range[1]), max: Number(range[2]) };
+      const min = Number(range[1]);
+      const max = Number(range[2]);
+      if (Number.isInteger(min) && Number.isInteger(max) && min >= 0 && max >= min) return { min, max };
     }
-
-    const upperBound = prompt.match(/\b(\d+)\s*\+\s*employees?\b/i);
-    if (upperBound) {
-      return { min: Number(upperBound[1]) };
+    const lowerBound = prompt.match(/\b(\d+)\s*\+\s*employees?\b/i);
+    if (lowerBound) {
+      const min = Number(lowerBound[1]);
+      if (Number.isInteger(min) && min >= 0) return { min };
     }
-
-    if (/\b(small company|small business)\b/i.test(prompt)) {
-      return { max: 50 };
-    }
-
     return undefined;
   }
 
-  private parseUnresolved(prompt: string, lowerPrompt: string, industry: string[], leadTypes: string[], locations: unknown[], companySize?: unknown) {
+  private withoutSizeClause(prompt: string): string {
+    return prompt
+      .replace(/\b(?:with\s+)?(?:company\s+size\s+)?\d+\s*(?:to|-|–)\s*\d+\s*employees?\b/gi, ' ')
+      .replace(/\bcompany\s+size\s+\d+\s*(?:to|-|–)\s*\d+\b/gi, ' ')
+      .replace(/\b\d+\s*\+\s*employees?\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private parseExclusions(prompt: string): string[] {
+    const matches = [...prompt.matchAll(/\b(?:excluding|except|but not|without)\s+([^.,;]+)/gi)];
+    return [...new Set(matches.map((match) => match[1].trim()).filter((text) => text && !/^specifying\b/i.test(text)))];
+  }
+
+  private withoutExclusions(prompt: string): string {
+    return prompt
+      .replace(/\b(?:excluding|except|but not|without)\s+[^.,;]+/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private parseUnresolved(prompt: string, industry: string[], leadTypes: string[], locations: SearchLocation[], companySize?: CompanySize, requestedCount?: number) {
     const unresolvedCriteria = [];
     if (/actively buying distressed properties/i.test(prompt)) {
       unresolvedCriteria.push({
@@ -120,7 +217,7 @@ export class SearchPlanParser {
         reason: 'requires evidence-based source classification',
       });
     }
-    if (!industry.length && !leadTypes.length && !locations.length && !companySize) {
+    if (!industry.length && !leadTypes.length && !locations.length && !companySize && requestedCount === undefined) {
       unresolvedCriteria.push({
         text: prompt,
         reason: 'no supported deterministic search criteria were recognized',
@@ -151,19 +248,11 @@ export class SearchPlanParser {
       if (requiredFields.includes(field)) continue;
       if (new RegExp(`\\boptional\\b[^.]{0,30}\\b${this.escape(field)}\\b`, 'i').test(prompt)
         || new RegExp(`\\b${this.escape(field)}\\b[^.]{0,30}\\boptional\\b`, 'i').test(prompt)
-        || prompt.includes(field)) {
+        || prompt.toLowerCase().includes(field)) {
         optional.add(field);
       }
     }
     return [...optional];
-  }
-
-  private parseMaxResults(prompt: string) {
-    const match = prompt.match(/\b(?:up to|maximum of|maximum|max|limit of|limit)\s+(\d{1,3})\b/i);
-    if (!match) return undefined;
-    const value = Number(match[1]);
-    if (!Number.isInteger(value) || value < 1) return undefined;
-    return Math.min(100, value);
   }
 
   private parseMinimumScore(prompt: string) {
@@ -180,4 +269,13 @@ export class SearchPlanParser {
   private escape(value: string) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
+}
+
+function slugIndustry(phrase: string): string {
+  const words = phrase.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return '';
+  const last = words[words.length - 1];
+  if (last.length > 4 && last.endsWith('s') && !last.endsWith('ss')) words[words.length - 1] = last.endsWith('ies') ? `${last.slice(0, -3)}y` : last.slice(0, -1);
+  const slug = words.join('_').replace(/[^a-z0-9_]+/g, '').replace(/^_+|_+$/g, '');
+  return slug.length >= 2 ? slug : '';
 }

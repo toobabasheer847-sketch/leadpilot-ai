@@ -11,7 +11,7 @@ import { SourceDiscoveryJobData } from './source-discovery.queue';
 import { SourceDiscoveryService } from './services/source-discovery.service';
 import { StructuredLoggerService } from '../common/observability/structured-logger.service';
 
-@Processor('source-discovery-queue')
+@Processor('source-discovery-queue', { concurrency: 1, lockDuration: 3_600_000, lockRenewTime: 60_000 })
 export class SourceDiscoveryProcessor extends WorkerHost {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,

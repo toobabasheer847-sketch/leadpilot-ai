@@ -2,6 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import { OutboundRequestError, OutboundRequestService } from '../../../common/outbound-request.service';
 import { SourceNormalizerService } from '../../services/source-normalizer.service';
 import { OsmSourceProvider } from './osm.provider';
+import { searchWindows } from './overpass.query-builder';
 
 const plan = {
   industry: ['legal'],
@@ -142,7 +143,7 @@ describe('OsmSourceProvider', () => {
 
   it('returns an empty result for an empty Overpass response', async () => {
     const { provider } = providerWith({ elements: [] });
-    await expect(provider.searchBusinesses(plan, context)).resolves.toEqual({ provider: 'osm', results: [] });
+    await expect(provider.searchBusinesses(plan, context)).resolves.toEqual({ provider: 'osm', results: [], duplicatesRemoved: 0, rejectedCandidates: 0 });
   });
 
   it('rejects a malformed Overpass response', async () => {
@@ -170,7 +171,7 @@ describe('OsmSourceProvider', () => {
       .mockResolvedValueOnce(httpResponse({ remark: 'bad gateway' }, 502))
       .mockResolvedValueOnce(httpResponse({ elements: [] }, 200));
     const recovered = providerWith({}, 502, { 'sourceProvider.retries': 1 }, unavailable);
-    await expect(recovered.provider.searchBusinesses(plan, context)).resolves.toEqual({ provider: 'osm', results: [] });
+    await expect(recovered.provider.searchBusinesses(plan, context)).resolves.toEqual({ provider: 'osm', results: [], duplicatesRemoved: 0, rejectedCandidates: 0 });
     expect(unavailable).toHaveBeenCalledTimes(3);
 
     await expect(providerWith({ remark: 'server error' }, 503).provider.searchBusinesses(plan, context)).rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE' });
@@ -212,6 +213,100 @@ describe('OsmSourceProvider', () => {
       unresolvedCriteria: [],
     }, context)).rejects.toMatchObject({ code: 'PROVIDER_INVALID_REQUEST' });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('covers Texas with bounded partitions, drops excluded businesses, and keeps source evidence', async () => {
+    const texasBox = { south: 25.83706, west: -106.645846, north: 36.500453, east: -93.507822 };
+    const windows = searchWindows(texasBox);
+    const elements = [
+      { type: 'node', id: 1, lat: 30.27, lon: -97.74, tags: { name: 'Trinity Investments', office: 'company', 'addr:city': 'Austin', 'addr:state': 'Texas', 'addr:postcode': '78701', 'addr:country': 'US' } },
+      { type: 'node', id: 2, lat: 30.27, lon: -97.74, tags: { name: 'trinity investments', office: 'company', 'addr:city': 'Austin', 'addr:state': 'Texas' } },
+      { type: 'node', id: 3, lat: 29.76, lon: -95.37, tags: { name: 'Oak Stream Investors', office: 'company', 'addr:city': 'Houston', 'addr:state': 'Texas' } },
+      { type: 'node', id: 4, lat: 29.42, lon: -98.49, tags: { name: 'Oak Stream Investor Group', office: 'company', 'addr:city': 'San Antonio', 'addr:state': 'Texas' } },
+      { type: 'node', id: 5, tags: { name: 'Austin Realty Investments', office: 'estate_agent', 'addr:city': 'Austin', 'addr:state': 'Texas' } },
+      { type: 'node', id: 6, tags: { name: 'Hill Country Brokerage', office: 'company' } },
+      { type: 'node', id: 7, tags: { name: 'Metro Realtor Group', office: 'estate_agent' } },
+      { type: 'node', id: 8, tags: { name: 'Capital Mortgage Lender', office: 'financial' } },
+      { type: 'node', id: 9, tags: { name: 'Lone Star Title Company', office: 'company' } },
+      { type: 'node', id: 19, lat: 36.1, lon: -95.9, tags: { name: 'Cavalry Investments', office: 'company', 'addr:city': 'Tulsa', 'addr:state': 'OK' } },
+      { type: 'node', id: 20, lat: 36.0521, lon: -95.7917, tags: { name: 'Broken Arrow Investments', office: 'company' } },
+      { type: 'node', id: 21, lat: 32.78, lon: -96.8, tags: { name: 'Holdings Without Address', office: 'company' } },
+      { type: 'node', id: 10, lat: 32.78, lon: -96.8, tags: { name: 'Holdings Without Address', office: 'company' } },
+    ];
+    const fetch = jest.fn()
+      .mockResolvedValueOnce(httpResponse([{ boundingbox: [String(texasBox.south), String(texasBox.north), String(texasBox.west), String(texasBox.east)] }]))
+      .mockResolvedValue(httpResponse({ elements }));
+    const { provider } = providerWith({ elements: [] }, 200, { 'sourceProvider.overpassMaxResults': 50, 'sourceProvider.retryDelayMs': 0 }, fetch);
+
+    const result = await provider.searchBusinesses({
+      industry: ['real_estate'],
+      leadTypes: ['real_estate_investor'],
+      locations: [{ country: 'US', state: 'Texas' }],
+      companyFields: [],
+      companySize: { min: 1, max: 50 },
+      maxResults: 50,
+      unresolvedCriteria: [],
+    }, context);
+
+    expect(fetch).toHaveBeenCalledTimes(1 + windows.length);
+    expect(windows.length).toBeGreaterThan(3);
+    const query = decodeURIComponent(String(fetch.mock.calls[1]?.[1]?.body));
+    expect(query).toContain('investor|investment|acquisition|holdings');
+    expect(query).not.toContain('["office"="estate_agent"]');
+    expect(query).not.toContain('Texas');
+    expect(result.results.map((item) => item.name).sort()).toEqual([
+      'Holdings Without Address',
+      'Oak Stream Investor Group',
+      'Oak Stream Investors',
+      'Trinity Investments',
+    ]);
+    const trinity = result.results.find((item) => item.externalId === 'node/1');
+    expect(trinity).toMatchObject({
+      sourceUrl: 'https://www.openstreetmap.org/node/1',
+      address: { city: 'Austin', state: 'Texas', postalCode: '78701', country: 'US' },
+    });
+    expect(trinity?.rawData).toEqual(expect.objectContaining({ provider: 'osm', osmType: 'node', osmId: 1 }));
+    expect(trinity).not.toHaveProperty('employeeCount');
+    const unlisted = result.results.find((item) => item.externalId === 'node/10');
+    expect(unlisted?.website).toBeUndefined();
+    expect(unlisted?.phone).toBeUndefined();
+    expect(unlisted?.email).toBeUndefined();
+    expect(unlisted?.address?.addressLine1).toBeUndefined();
+    expect(unlisted?.address?.city).toBeUndefined();
+    expect(unlisted?.address?.state).toBeUndefined();
+    expect(unlisted?.address?.postalCode).toBeUndefined();
+    expect(unlisted?.address?.country).toBeUndefined();
+    expect(result.results.every((item) => !/realty|brokerage|realtor|mortgage|title company/i.test(item.name))).toBe(true);
+    expect(result.results.some((item) => item.name === 'Broken Arrow Investments')).toBe(false);
+    expect(result.results.filter((item) => item.name === 'Holdings Without Address')).toHaveLength(1);
+    expect(result.duplicatesRemoved).toBeGreaterThan(0);
+    expect(result.rejectedCandidates).toBeGreaterThan(0);
+  });
+
+  it('stops at the requested maximum instead of returning every partition hit', async () => {
+    const texasBox = { south: 25.83706, west: -106.645846, north: 36.500453, east: -93.507822 };
+    const elements = [1, 2, 3].map((id) => ({
+      type: 'node',
+      id,
+      lat: 30 + id,
+      lon: -97,
+      tags: { name: `Investor Office ${id}`, office: 'company', 'addr:city': `City ${id}`, 'addr:state': 'Texas' },
+    }));
+    const fetch = jest.fn()
+      .mockResolvedValueOnce(httpResponse([{ boundingbox: [String(texasBox.south), String(texasBox.north), String(texasBox.west), String(texasBox.east)] }]))
+      .mockResolvedValue(httpResponse({ elements }));
+    const { provider } = providerWith({ elements: [] }, 200, { 'sourceProvider.overpassMaxResults': 50 }, fetch);
+    const result = await provider.searchBusinesses({
+      industry: ['real_estate'],
+      leadTypes: ['real_estate_investor'],
+      locations: [{ country: 'US', state: 'Texas' }],
+      companyFields: [],
+      maxResults: 2,
+      unresolvedCriteria: [],
+    }, context);
+
+    expect(result.results).toHaveLength(2);
+    expect(decodeURIComponent(String(fetch.mock.calls[1]?.[1]?.body))).toContain('out center 2;');
   });
 
   it('does not call Overpass when the endpoint is not https', async () => {

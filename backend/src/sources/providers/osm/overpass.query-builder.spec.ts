@@ -1,5 +1,6 @@
 import { SearchPlan } from '../../../search/types/search-plan.types';
-import { assertLocationText, buildOverpassQuery, searchWindows } from './overpass.query-builder';
+import { companySizeFit } from '../../../qualification/engine/qualification-engine';
+import { assertLocationText, buildOverpassQuery, coordinateWithinRequestedState, investorCandidateAllowed, matchesRequestedState, MAX_DISCOVERY_PARTITIONS, searchWindows } from './overpass.query-builder';
 
 const bbox = { south: 25.7, west: -80.3, north: 25.9, east: -80.1 };
 
@@ -42,7 +43,9 @@ describe('buildOverpassQuery', () => {
       locations: [{ country: 'US', state: 'New York' }],
     }), { timeoutSeconds: 25, maxResults: 15, bbox });
 
-    expect(query).toContain('["name"~"investor|investments|acquisition",i]');
+    expect(query).toContain('["name"~"investor|investment|acquisition|holdings|buy and hold|fix and flip",i]');
+    expect(query).toContain('["office"!="estate_agent"]');
+    expect(query).not.toContain('["name"!~');
     expect(query).not.toContain('["office"="estate_agent"]');
     expect(query).not.toContain('["office"="property_management"]');
   });
@@ -53,8 +56,9 @@ describe('buildOverpassQuery', () => {
       leadTypes: ['real_estate_investor'],
     }), { timeoutSeconds: 25, maxResults: 50, bbox });
 
-    expect(query).toContain('["name"~"investor|investments|acquisition",i]');
-    expect(query).not.toContain('estate_agent');
+    expect(query).toContain('["name"~"investor|investment|acquisition|holdings|buy and hold|fix and flip",i]');
+    expect(query).not.toContain('["office"="estate_agent"]');
+    expect(query).not.toContain('["shop"="estate_agent"]');
     expect(query).toContain('out center 50;');
   });
 
@@ -77,19 +81,59 @@ describe('buildOverpassQuery', () => {
     expect(() => buildOverpassQuery(plan(), { timeoutSeconds: 25, maxResults: 10, bbox: { south: 2, west: 2, north: 1, east: 3 } })).toThrow(/requires a location/);
   });
 
-  it('caps the result limit and splits a large area into one-degree windows', () => {
+  it('caps the result limit and partitions a large area into bounded local windows', () => {
     const query = buildOverpassQuery(plan(), { timeoutSeconds: 25, maxResults: 500, bbox });
     expect(query).toContain('out center 100;');
 
     const parent = { south: 25.83706, west: -106.645846, north: 36.500453, east: -93.507822 };
     const windows = searchWindows(parent);
-    expect(windows).toHaveLength(3);
-    expect(windows[0].north).toBeLessThan(parent.north);
-    expect(windows[0].east).toBeLessThan(parent.east);
-    expect(windows[0].south).toBeGreaterThan(parent.south);
-    expect(windows[0].west).toBeGreaterThan(parent.west);
-    expect(windows.every((window) => window.south >= parent.south && window.north <= parent.north && window.west >= parent.west && window.east <= parent.east)).toBe(true);
-    expect(windows.every((window) => Math.abs(window.north - window.south - 1) < 0.000001 && Math.abs(window.east - window.west - 1) < 0.000001)).toBe(true);
+    expect(windows).toHaveLength(MAX_DISCOVERY_PARTITIONS);
+    expect(windows.length).toBeGreaterThan(3);
+    expect(Math.min(...windows.map((window) => window.south))).toBeCloseTo(parent.south, 6);
+    expect(Math.max(...windows.map((window) => window.north))).toBeCloseTo(parent.north, 6);
+    expect(Math.min(...windows.map((window) => window.west))).toBeCloseTo(parent.west, 6);
+    expect(Math.max(...windows.map((window) => window.east))).toBeCloseTo(parent.east, 6);
+    expect(windows.every((window) => window.north - window.south <= 4.01 && window.east - window.west <= 4.01)).toBe(true);
+    const dallas = { lat: 32.9448189, lon: -97.1192319 };
+    expect(windows.some((window) => dallas.lat >= window.south && dallas.lat <= window.north && dallas.lon >= window.west && dallas.lon <= window.east)).toBe(true);
     expect(searchWindows(bbox)).toEqual([bbox]);
+  });
+
+  it('keeps investor-name candidates and rejects brokerage, realtor, lender, and title companies', () => {
+    expect(investorCandidateAllowed('Trinity Investments', 'company')).toBe(true);
+    expect(investorCandidateAllowed('Oak Stream Investors', 'office')).toBe(true);
+    expect(investorCandidateAllowed('Hill Country Brokerage', 'company')).toBe(false);
+    expect(investorCandidateAllowed('Metro Realtor Group', 'estate agent')).toBe(false);
+    expect(investorCandidateAllowed('Austin Realty Investments', 'estate agent')).toBe(false);
+    expect(investorCandidateAllowed('Capital Mortgage Lender', 'financial')).toBe(false);
+    expect(investorCandidateAllowed('Lone Star Title Company', 'company')).toBe(false);
+    expect(investorCandidateAllowed('Premier Property Management', 'property management')).toBe(false);
+    expect(investorCandidateAllowed('Texas Investment Directory', 'company')).toBe(false);
+    expect(investorCandidateAllowed('Summit Holdings', 'insurance')).toBe(false);
+  });
+
+  it('keeps a Texas address and rejects a neighboring state without inventing a missing state', () => {
+    expect(matchesRequestedState('Texas', 'TX')).toBe(true);
+    expect(matchesRequestedState('Texas', 'Texas')).toBe(true);
+    expect(matchesRequestedState('Texas', 'OK')).toBe(false);
+    expect(matchesRequestedState('Texas', 'Oklahoma')).toBe(false);
+    expect(matchesRequestedState('Texas', 'NM')).toBe(false);
+    expect(matchesRequestedState('Texas', 'AR')).toBe(false);
+    expect(matchesRequestedState('Texas', undefined)).toBe(true);
+    expect(coordinateWithinRequestedState('Texas', 32.9448, -97.1192)).toBe(true);
+    expect(coordinateWithinRequestedState('Texas', 31.76, -106.49)).toBe(true);
+    expect(coordinateWithinRequestedState('Texas', 33.5829, -102.3673)).toBe(true);
+    expect(coordinateWithinRequestedState('Texas', 36.0521, -95.7917)).toBe(false);
+    expect(coordinateWithinRequestedState('Texas', 35.746, -95.4039)).toBe(false);
+    expect(coordinateWithinRequestedState('Texas', 36.1198, -94.1409)).toBe(false);
+    expect(coordinateWithinRequestedState('Texas', 35.6588, -105.9407)).toBe(false);
+    expect(coordinateWithinRequestedState('Texas', 34.0271, -94.7381)).toBe(false);
+    expect(coordinateWithinRequestedState('Texas', undefined, undefined)).toBe(true);
+    expect(coordinateWithinRequestedState('Florida', 36.0521, -95.7917)).toBe(true);
+  });
+
+  it('leaves a missing employee count unknown for a requested 1-50 range', () => {
+    expect(companySizeFit(null, null, { min: 1, max: 50 })).toBe('UNKNOWN');
+    expect(companySizeFit(null, null, { min: 1, max: 50 })).not.toBe('MATCHED');
   });
 });

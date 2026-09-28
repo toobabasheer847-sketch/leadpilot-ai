@@ -21,6 +21,6 @@ import { QualificationService } from './qualification.service';
   ],
   controllers: [QualificationController],
   providers: [QualificationService, QualificationQueue, QualificationProcessor],
-  exports: [QualificationService, QualificationQueue],
+  exports: [QualificationService, QualificationQueue, BullModule],
 })
 export class QualificationModule {}

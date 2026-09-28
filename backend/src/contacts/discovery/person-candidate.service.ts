@@ -19,6 +19,7 @@ export class PersonCandidateService {
       facebookUrl: raw.facebookUrl ?? null,
       instagramUrl: raw.instagramUrl ?? null,
       youtubeUrl: raw.youtubeUrl ?? null,
+      twitterUrl: raw.twitterUrl ?? null,
       normalizedName: raw.fullName.toLowerCase(),
       verificationStatus: raw.verificationStatus ?? 'NOT_VERIFIED',
       status: raw.status ?? 'DISCOVERED',

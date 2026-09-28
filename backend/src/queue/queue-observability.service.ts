@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { QueueEvents } from 'bullmq';
 import { MetricsService } from '../common/observability/metrics.service';
 import { StructuredLoggerService } from '../common/observability/structured-logger.service';
+import { redisEndpoint } from '../redis/redis-endpoint';
 
 const QUEUES = [
   'lead-research-queue',
@@ -31,10 +32,19 @@ export class QueueObservabilityService implements OnModuleInit, OnModuleDestroy 
   ) {}
 
   onModuleInit() {
-    const redisUrl = this.config.get<string>('redis.url') ?? 'redis://localhost:6379';
-    const parsed = new URL(redisUrl);
+    const redisUrl = this.config.get<string>('redis.url') ?? 'redis://127.0.0.1:6379';
+    const endpoint = redisEndpoint(redisUrl);
     for (const queue of QUEUES) {
-      const events = new QueueEvents(queue, { connection: { host: parsed.hostname, port: Number(parsed.port || 6379), password: parsed.password || undefined } });
+      const events = new QueueEvents(queue, {
+        connection: {
+          ...endpoint,
+          maxRetriesPerRequest: null,
+          connectTimeout: 10_000,
+          retryStrategy(times: number) {
+            return Math.min(times * 500, 5_000);
+          },
+        },
+      });
       events.on('waiting', ({ jobId }) => {
         this.metrics.increment('jobs_total', { queue, status: 'queued' });
         this.logger.info('job.queued', { queue, jobId });
@@ -60,7 +70,13 @@ export class QueueObservabilityService implements OnModuleInit, OnModuleDestroy 
         this.metrics.increment('jobs_total', { queue, status: 'delayed' });
         this.logger.info('job.delayed', { queue, jobId });
       });
-      events.on('error', () => this.logger.warn('queue.events.error', { queue }));
+      events.on('error', () => {
+        const key = `error:${queue}`;
+        const last = this.started.get(key) ?? 0;
+        if (Date.now() - last < 60_000) return;
+        this.started.set(key, Date.now());
+        this.logger.warn('queue.events.error', { queue });
+      });
       this.events.push(events);
     }
   }

@@ -1,6 +1,7 @@
 export const LEAD_PIPELINE_QUEUE = 'lead-pipeline-queue';
 export const LEAD_PIPELINE_JOB = 'LEAD_PIPELINE';
-export const MAX_STAGE_WAITS = 120;
+/** Three hours of 2s ticks so a 300–500 company stage can finish without being failed for time. */
+export const MAX_STAGE_WAITS = 5400;
 export const STAGE_WAIT_DELAY_MS = 2000;
 
 export const PIPELINE_STATUSES = ['QUEUED', 'RUNNING', 'PARTIAL', 'COMPLETED', 'FAILED', 'CANCELLED'] as const;
@@ -13,6 +14,7 @@ export const PIPELINE_STAGES = [
   'WEBSITE_DISCOVERY',
   'ENRICHMENT',
   'DEEP_RESEARCH',
+  'EMPLOYEE_SIZE',
   'DECISION_MAKER_DISCOVERY',
   'CONTACT_QUALITY',
   'EVIDENCE',
@@ -35,6 +37,7 @@ export const STAGE_PROGRESS_KEYS = {
   WEBSITE_DISCOVERY: 'websiteDiscovery',
   ENRICHMENT: 'enrichment',
   DEEP_RESEARCH: 'deepResearch',
+  EMPLOYEE_SIZE: 'employeeSize',
   DECISION_MAKER_DISCOVERY: 'decisionMakerDiscovery',
   CONTACT_QUALITY: 'contactQuality',
   EVIDENCE: 'evidence',
@@ -62,6 +65,7 @@ export const TRACKED_QUEUES = {
   websiteDiscovery: 'company-enrichment-queue',
   enrichment: 'company-enrichment-queue',
   deepResearch: 'lead-research-queue',
+  employeeSize: 'employee-size-queue',
   decisionMakerDiscovery: 'contact-discovery-queue',
   contactQuality: 'contact-quality-queue',
   classification: 'ai-classification-queue',

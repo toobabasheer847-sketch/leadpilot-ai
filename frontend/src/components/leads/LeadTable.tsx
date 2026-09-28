@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { businessValue, formatWhen } from '../../lib/format';
+import { formatCompanySize } from '../../lib/company-size';
 import { collectSocialLinks } from '../../lib/social';
 import type { LeadRecord, LeadSortBy } from '../../types/api';
 import { EmptyState } from '../feedback/States';
@@ -59,19 +60,21 @@ export function LeadTable({ leads, selected = new Set(), onToggle = () => undefi
             </th>
             <SortHeader label="Company" column="companyName" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} />
             <th>Website</th>
+            <th>Company email</th>
             <th>Address</th>
             <th>City</th>
             <th>State</th>
             <th>ZIP</th>
             <th>Company size</th>
+            <th>Size status</th>
             <th>Investor type</th>
             <th>Decision maker</th>
             <th>Title</th>
-            <th>Email</th>
+            <th>Decision maker email</th>
             <th>Phone</th>
             <th>Company social</th>
             <th>Decision maker social</th>
-            <th>Verification</th>
+            <th>Evidence status</th>
             <SortHeader label="Quality" column="score" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} />
             <th>Qualification</th>
             <SortHeader label="Last verified" column="lastVerifiedAt" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} />
@@ -108,12 +111,7 @@ function SortHeader({ label, column, sortBy, sortOrder, onSort }: {
 }
 
 function companySizeLabel(lead: LeadRecord) {
-  const value = lead.company.companySize;
-  const shown = value == null || value === '' ? null : String(value);
-  if (lead.company.companySizeStatus === 'MATCHED') return shown ? `MATCHED 1-50 (${shown})` : 'MATCHED 1-50';
-  if (lead.company.companySizeStatus === 'OUTSIDE_RANGE') return shown ? `OUTSIDE RANGE (${shown})` : 'OUTSIDE RANGE';
-  if (lead.company.companySizeStatus === 'UNKNOWN' || shown == null) return 'UNKNOWN';
-  return shown;
+  return formatCompanySize(lead.company.companySizeStatus, lead.company.companySize);
 }
 
 function socialLabel(links: Array<{ platform: string }>) {
@@ -125,19 +123,21 @@ function leadCells(lead: LeadRecord): Array<{ key: string; node: ReactNode }> {
   return [
     { key: 'company', node: <Link to={`/leads/${lead.id}`}><strong>{businessValue(lead.company.name)}</strong></Link> },
     { key: 'website', node: <ExternalLink href={lead.company.website} /> },
+    { key: 'companyEmail', node: businessValue(lead.company.email) },
     { key: 'address', node: businessValue(lead.company.location?.address) },
     { key: 'city', node: businessValue(lead.company.location?.city) },
     { key: 'state', node: businessValue(lead.company.location?.state) },
     { key: 'zip', node: businessValue(lead.company.location?.zipCode) },
     { key: 'size', node: companySizeLabel(lead) },
+    { key: 'sizeStatus', node: lead.company.companySizeStatus ?? 'UNKNOWN' },
     { key: 'investor', node: businessValue(lead.company.investorType) },
     { key: 'person', node: businessValue(lead.contact?.name) },
     { key: 'title', node: businessValue(lead.contact?.title) },
     { key: 'email', node: businessValue(lead.contact?.email) },
     { key: 'phone', node: businessValue(lead.company.phone ?? lead.contact?.phone) },
     { key: 'companySocial', node: socialLabel(collectSocialLinks({ rows: lead.socialProfiles })) },
-    { key: 'personSocial', node: socialLabel(collectSocialLinks({ contact: lead.contact ? { linkedinUrl: lead.contact.linkedin ?? null, facebookUrl: lead.contact.facebook ?? null, instagramUrl: lead.contact.instagram ?? null, youtubeUrl: lead.contact.youtube ?? null } : null })) },
-    { key: 'verification', node: <LeadStatusBadge status={lead.verification?.status} /> },
+    { key: 'personSocial', node: socialLabel(collectSocialLinks({ contact: lead.contact ? { linkedinUrl: lead.contact.linkedin ?? null, facebookUrl: lead.contact.facebook ?? null, instagramUrl: lead.contact.instagram ?? null, youtubeUrl: lead.contact.youtube ?? null, twitterUrl: lead.contact.twitter ?? null } : null })) },
+    { key: 'evidence', node: <LeadStatusBadge status={lead.verification?.status} /> },
     { key: 'score', node: <LeadScoreBadge score={lead.score} /> },
     { key: 'qualification', node: <LeadStatusBadge status={lead.qualification?.status} /> },
     { key: 'verified', node: formatWhen(lead.lastVerifiedAt) },

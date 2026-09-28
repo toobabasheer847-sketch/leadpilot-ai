@@ -8,6 +8,7 @@ const labels: Record<string, string> = {
   WEBSITE_DISCOVERY: 'Website discovery',
   ENRICHMENT: 'Enrichment',
   DEEP_RESEARCH: 'Website research',
+  EMPLOYEE_SIZE: 'Employee size',
   DECISION_MAKER_DISCOVERY: 'Decision makers',
   CONTACT_QUALITY: 'Contact quality',
   EVIDENCE: 'Evidence',
@@ -19,16 +20,25 @@ const labels: Record<string, string> = {
 };
 
 const counterLabels: Array<[keyof PipelineView['counters'], string]> = [
+  ['requestedCount', 'Requested count'],
   ['companiesDiscovered', 'Companies discovered'],
-  ['companiesProcessed', 'Companies processed'],
-  ['websitesResearched', 'Websites researched'],
+  ['companiesPersisted', 'Companies persisted'],
+  ['discoveryShortfall', 'Not found within budget'],
+  ['companySizeRequested', 'Company size requested'],
+  ['websitesFound', 'Websites found'],
+  ['websitesNotFound', 'Websites not found'],
+  ['companySizeFound', 'Company-size found'],
+  ['companySizeUnknown', 'Company-size unknown'],
   ['decisionMakersFound', 'Decision makers found'],
-  ['contactsFound', 'Contacts found'],
+  ['decisionMakerEmailsFound', 'Decision-maker emails found'],
+  ['companyEmailsFound', 'Company emails found'],
+  ['socialProfilesFound', 'Social profiles found'],
+  ['qualifiedLeads', 'Qualified leads'],
+  ['needsReview', 'Needs review'],
+  ['rejected', 'Rejected'],
   ['evidenceCollected', 'Evidence collected'],
-  ['verifiedFields', 'Verified fields'],
   ['conflictsFound', 'Conflicts'],
   ['duplicatesFound', 'Duplicates'],
-  ['qualifiedLeads', 'Qualified leads'],
 ];
 
 export function PipelineProgress({ pipeline }: { pipeline: PipelineView }) {
@@ -48,9 +58,13 @@ export function PipelineProgress({ pipeline }: { pipeline: PipelineView }) {
         {counterLabels.map(([key, label]) => {
           const value = pipeline.counters[key];
           if (value === null || value === undefined) return null;
-          return <div key={key}><dt>{label}</dt><dd>{value}</dd></div>;
+          const shown = typeof value === 'boolean' ? (value ? 'Yes' : 'No') : value;
+          return <div key={key}><dt>{label}</dt><dd>{shown}</dd></div>;
         })}
       </dl>
+      {pipeline.counters.discoveryShortfall && pipeline.counters.requestedCount != null && pipeline.counters.companiesPersisted != null ? (
+        <p>Found {pipeline.counters.companiesPersisted} credible companies out of {pipeline.counters.requestedCount} requested. Missing companies were not invented.</p>
+      ) : null}
     </div>
   );
 }

@@ -22,13 +22,15 @@ const running: PipelineView = {
   failedAt: '2026-01-01T00:01:00.000Z',
   stages: {
     search: 'COMPLETED', sourceDiscovery: 'FAILED', companyPersistence: 'PENDING', websiteDiscovery: 'PENDING',
-    enrichment: 'PENDING', deepResearch: 'PENDING', decisionMakerDiscovery: 'PENDING', contactQuality: 'PENDING',
+    enrichment: 'PENDING', deepResearch: 'PENDING', employeeSize: 'PENDING', decisionMakerDiscovery: 'PENDING', contactQuality: 'PENDING',
     evidence: 'PENDING', classification: 'PENDING', verification: 'PENDING', deduplication: 'PENDING', scoring: 'PENDING', qualification: 'PENDING',
   },
   stageList: [{ name: 'SEARCH', status: 'COMPLETED' }, { name: 'DISCOVERY', status: 'FAILED' }],
   counters: {
-    companiesDiscovered: null, companiesProcessed: null, websitesResearched: null, decisionMakersFound: null,
-    contactsFound: null, evidenceCollected: null, verifiedFields: null, conflictsFound: null, duplicatesFound: null, qualifiedLeads: null,
+    companiesDiscovered: null, companiesPersisted: null, companiesProcessed: null, requestedCount: null, discoveryShortfall: null, companySizeRequested: null, websitesFound: null, websitesNotFound: null,
+    websitesResearched: null, companySizeFound: null, companySizeUnknown: null, decisionMakersFound: null, decisionMakerEmailsFound: null,
+    companyEmailsFound: null, socialProfilesFound: null, contactsFound: null, evidenceCollected: null, verifiedFields: null,
+    conflictsFound: null, duplicatesFound: null, qualifiedLeads: null, needsReview: null, rejected: null,
   },
   failures: [],
   error: { code: 'CONFIGURATION_ERROR', message: 'Search could not be completed.' },

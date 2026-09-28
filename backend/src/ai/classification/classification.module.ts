@@ -22,6 +22,6 @@ import { OpenRouterProvider } from './providers/openrouter.provider';
     OpenRouterProvider,
     { provide: LLM_PROVIDER, useExisting: OpenRouterProvider },
   ],
-  exports: [ClassificationService, ClassificationQueue, OpenRouterProvider],
+  exports: [ClassificationService, ClassificationQueue, OpenRouterProvider, BullModule],
 })
 export class ClassificationModule {}

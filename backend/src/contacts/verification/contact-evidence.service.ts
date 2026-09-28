@@ -28,8 +28,8 @@ export class ContactEvidenceService {
         evidenceType: item.evidenceType,
         sourceUrl: item.sourceUrl,
         canonicalUrl,
-        sourceType: 'WEBSITE',
-        provider: 'official_website',
+        sourceType: item.evidenceType === 'PUBLIC_WEB_SEARCH' ? 'PUBLIC_WEB' : 'WEBSITE',
+        provider: item.evidenceType === 'PUBLIC_WEB_SEARCH' ? 'web_search' : 'official_website',
         evidenceText: item.evidenceExcerpt,
         evidenceTimestamp: new Date(item.retrievedAt),
         idempotencyKey,
@@ -44,7 +44,7 @@ export class ContactEvidenceService {
       }).onConflictDoNothing({ target: leadEvidence.idempotencyKey });
     }
 
-    for (const field of ['fullName', 'title', 'normalizedRole', 'companyRelationship', 'email', 'phone', 'linkedinUrl', 'facebookUrl', 'instagramUrl', 'youtubeUrl']) {
+    for (const field of ['fullName', 'title', 'normalizedRole', 'companyRelationship', 'email', 'phone', 'linkedinUrl', 'facebookUrl', 'instagramUrl', 'youtubeUrl', 'twitterUrl']) {
       const candidateFields = candidate as unknown as Record<string, string | null | undefined>;
       const value = field === 'fullName' ? candidate.fullName : field === 'title' ? candidate.title : candidateFields[field] ?? null;
       if (!value) continue;

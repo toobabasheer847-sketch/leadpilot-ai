@@ -23,6 +23,14 @@ export class TavilyWebSearchProvider implements WebSearchProvider {
   }
 
   async search(query: WebSearchQuery): Promise<WebSearchResult[]> {
+    const text = buildWebSearchQuery(query);
+    if (!text) return [];
+    return this.searchText(text);
+  }
+
+  async searchText(text: string): Promise<WebSearchResult[]> {
+    const query = text.trim();
+    if (!query) return [];
     const selected = (this.config.get<string>('webSearch.provider') || 'tavily').trim().toLowerCase();
     if (selected !== 'tavily') {
       throw new WebSearchError('CONFIGURATION_ERROR', 'web_search', 'search', false, 'Web search provider is not configured.');
@@ -31,13 +39,11 @@ export class TavilyWebSearchProvider implements WebSearchProvider {
     if (!apiKey) {
       throw new WebSearchError('CONFIGURATION_ERROR', this.name, 'search', false, 'Web search provider is not configured.');
     }
-    const text = buildWebSearchQuery(query);
-    if (!text) return [];
 
     const endpoint = this.config.get<string>('webSearch.tavilyApiUrl')?.trim() || DEFAULT_TAVILY_URL;
     const timeoutMs = this.config.get<number>('webSearch.timeoutMs', 10000);
     const body = {
-      query: text,
+      query,
       max_results: this.maxResults(),
       search_depth: 'basic',
       include_answer: false,

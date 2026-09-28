@@ -28,17 +28,39 @@ export class ExportFormatService {
     const classification = this.record(lead.classification);
     const score = this.record(lead.score);
     const qualification = this.record(lead.qualification);
+    const size = (value: unknown) => this.present(value, 'UNKNOWN');
+    const found = (value: unknown) => this.present(value, 'NOT_FOUND');
     const mapping: Record<ExportField, unknown> = {
-      companyName: company.name, website: company.website, domain: company.domain, companyPhone: company.phone, companyEmail: company.email,
-      address: location.address, city: location.city, state: location.state, zipCode: location.zipCode, country: location.country,
-      contactName: contact.name, contactTitle: contact.title, contactEmail: contact.email, contactPhone: contact.phone,
-      linkedin: contact.linkedin, facebook: contact.facebook, instagram: contact.instagram,
-      investorType: company.investorType, investmentStrategy: company.investmentStrategy, propertyType: this.stringify(company.propertyTypes), marketsServed: this.stringify(company.marketsServed), companySize: company.companySize,
-      classification: classification.decision, classificationConfidence: classification.confidence, score: score.value, scoreBand: score.band,
-      qualificationStatus: qualification.status, verificationStatus: this.record(lead.verification).status, evidence: this.stringify(lead.evidence), sourceUrls: this.stringify(lead.sourceUrls), duplicateStatus: this.record(lead.duplicate).status,
-      createdAt: lead.createdAt, updatedAt: lead.updatedAt, lastVerifiedAt: lead.lastVerifiedAt ?? company.lastVerifiedAt,
+      companyName: found(company.name), website: found(company.website), domain: found(company.domain), companyPhone: found(company.phone), companyEmail: found(company.email),
+      address: found(location.address), city: found(location.city), state: found(location.state), zipCode: found(location.zipCode), country: found(location.country),
+      employeeCount: size(company.employeeCount ?? (typeof company.companySize === 'number' ? company.companySize : null)),
+      employeeRange: size(company.employeeRange ?? (typeof company.companySize === 'string' && company.companySize !== 'CONFLICT' && company.companySize.includes('-') ? company.companySize : null)),
+      companySizeStatus: size(company.companySizeStatus),
+      contactName: found(contact.name), contactTitle: found(contact.title), contactEmail: found(contact.email), contactPhone: found(contact.phone),
+      linkedin: found(contact.linkedin), facebook: found(contact.facebook), instagram: found(contact.instagram),
+      decisionMakerLinkedin: found(contact.linkedin), decisionMakerFacebook: found(contact.facebook), decisionMakerInstagram: found(contact.instagram), decisionMakerYoutube: found(contact.youtube), decisionMakerX: found(contact.twitter),
+      companyLinkedin: this.companySocial(lead, 'linkedin'), companyFacebook: this.companySocial(lead, 'facebook'), companyInstagram: this.companySocial(lead, 'instagram'), companyYoutube: this.companySocial(lead, 'youtube'), companyX: this.companySocial(lead, 'x'),
+      investorType: found(company.investorType), investmentStrategy: found(company.investmentStrategy), propertyType: found(this.stringify(company.propertyTypes)), marketsServed: found(this.stringify(company.marketsServed)), companySize: size(company.companySize),
+      classification: found(classification.decision), classificationConfidence: found(classification.confidence), score: found(score.value), scoreBand: found(score.band),
+      qualificationStatus: found(qualification.status), verificationStatus: found(this.record(lead.verification).status), evidence: found(this.stringify(lead.evidence)), sourceUrls: found(this.stringify(lead.sourceUrls)), duplicateStatus: found(this.record(lead.duplicate).status),
+      createdAt: found(lead.createdAt), updatedAt: found(lead.updatedAt), lastVerifiedAt: found(lead.lastVerifiedAt ?? company.lastVerifiedAt),
     };
-    return mapping[field] ?? null;
+    return mapping[field] ?? 'NOT_FOUND';
+  }
+
+  private present(value: unknown, missing: 'NOT_FOUND' | 'UNKNOWN'): unknown {
+    if (value === null || value === undefined || value === '') return missing;
+    return value;
+  }
+
+  private companySocial(lead: Record<string, unknown>, platform: string): unknown {
+    const profiles = Array.isArray(lead.socialProfiles) ? lead.socialProfiles : [];
+    const match = profiles.find((item) => {
+      if (!item || typeof item !== 'object' || !('platform' in item)) return false;
+      const name = String(item.platform).toLowerCase();
+      return name === platform || (platform === 'x' && name === 'twitter');
+    }) as { profileUrl?: unknown } | undefined;
+    return this.present(match?.profileUrl, 'NOT_FOUND');
   }
 
   private safeCell(value: unknown): string {

@@ -15,7 +15,9 @@ import { UsageModule } from '../usage/usage.module';
 import { AuthModule } from '../auth/auth.module';
 import { selectDiscoveryProvider } from './providers/provider-selection';
 import { DiscoveryProviderRegistry } from './providers/discovery-provider.registry';
+import { WebSearchCompanyDiscovery } from './providers/web-search/web-search-company.discovery';
 import { ProvidersController } from './providers.controller';
+import { EnrichmentModule } from '../enrichment/enrichment.module';
 
 @Module({
   imports: [
@@ -24,6 +26,7 @@ import { ProvidersController } from './providers.controller';
     CommonModule,
     UsageModule,
     AuthModule,
+    EnrichmentModule,
     BullModule.registerQueue({ name: 'source-discovery-queue' }),
   ],
   controllers: [ProvidersController],
@@ -33,6 +36,7 @@ import { ProvidersController } from './providers.controller';
     OsmSourceProvider,
     FakeSourceProvider,
     DiscoveryProviderRegistry,
+    WebSearchCompanyDiscovery,
     {
       provide: SOURCE_PROVIDER,
       inject: [ConfigService, GooglePlacesProvider, OsmSourceProvider, FakeSourceProvider],

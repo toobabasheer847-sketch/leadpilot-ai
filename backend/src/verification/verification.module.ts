@@ -40,6 +40,6 @@ import { CrossSourceEntityMatcherService } from './matching/cross-source-entity-
     { provide: WEBSITE_VERIFICATION_PROVIDER, useExisting: WebsiteVerificationProvider },
     { provide: SOCIAL_VERIFICATION_PROVIDER, useExisting: SocialVerificationProvider },
   ],
-  exports: [VerificationService, VerificationQueue],
+  exports: [VerificationService, VerificationQueue, BullModule],
 })
 export class VerificationModule {}

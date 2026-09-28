@@ -187,7 +187,8 @@ describe('pipeline orchestration', () => {
 
   it('runs deep website research after enrichment in the existing pipeline', () => {
     expect(nextWorkStage('ENRICHMENT')).toBe('DEEP_RESEARCH');
-    expect(nextWorkStage('DEEP_RESEARCH')).toBe('DECISION_MAKER_DISCOVERY');
+    expect(nextWorkStage('DEEP_RESEARCH')).toBe('EMPLOYEE_SIZE');
+    expect(nextWorkStage('EMPLOYEE_SIZE')).toBe('DECISION_MAKER_DISCOVERY');
     expect(nextWorkStage('DECISION_MAKER_DISCOVERY')).toBe('CONTACT_QUALITY');
     expect(nextWorkStage('CONTACT_QUALITY')).toBe('EVIDENCE');
     expect(nextWorkStage('EVIDENCE')).toBe('CLASSIFICATION');
@@ -215,6 +216,7 @@ describe('pipeline orchestration', () => {
   });
 
   it('keeps a partial company failure from completing the whole pipeline as success', async () => {
+    expect(summarizeJobStates(Array.from({ length: 500 }, () => 'completed' as const), 'unused')).toEqual({ state: 'COMPLETED' });
     expect(summarizeJobStates(['completed', 'failed'], 'One company failed.')).toEqual({ state: 'PARTIAL', message: 'One company failed.' });
     expect(summarizeJobStates(['failed', 'failed'], 'All companies failed.')).toEqual({ state: 'FAILED', message: 'All companies failed.' });
     expect(summarizeJobStates(['pending', 'failed'], 'Waiting.')).toEqual({ state: 'PENDING' });
@@ -247,6 +249,7 @@ describe('pipeline orchestration', () => {
     const stageRunner = new PipelineStageRunner(
       {} as never, {} as never, {} as never, {} as never, {} as never,
       {} as never, {} as never, {} as never, {} as never, {} as never,
+      {} as never,
       jobs as never,
     );
     const progress = initialProgress();
@@ -289,15 +292,28 @@ describe('pipeline orchestration', () => {
     stages.sourceDiscovery = 'COMPLETED';
     const masked = maskCounters(stages, {
       companiesDiscovered: 2,
+      companiesPersisted: 2,
       companiesProcessed: 0,
+      requestedCount: 2,
+      discoveryShortfall: 0,
+      companySizeRequested: false,
+      websitesFound: 1,
+      websitesNotFound: 1,
       websitesResearched: 0,
+      companySizeFound: 0,
+      companySizeUnknown: 2,
       decisionMakersFound: 0,
+      decisionMakerEmailsFound: 0,
+      companyEmailsFound: 0,
+      socialProfilesFound: 0,
       contactsFound: 0,
       evidenceCollected: 0,
       verifiedFields: 0,
       conflictsFound: 0,
       duplicatesFound: 0,
       qualifiedLeads: 0,
+      needsReview: 0,
+      rejected: 0,
     });
     expect(masked.companiesDiscovered).toBe(2);
     expect(masked.companiesProcessed).toBeNull();
@@ -315,15 +331,28 @@ function repositoryMock() {
     findBySearchExecution: jest.fn(),
     counters: jest.fn().mockResolvedValue({
       companiesDiscovered: 0,
+      companiesPersisted: 0,
       companiesProcessed: 0,
+      requestedCount: null,
+      discoveryShortfall: null,
+      companySizeRequested: null,
+      websitesFound: 0,
+      websitesNotFound: 0,
       websitesResearched: 0,
+      companySizeFound: 0,
+      companySizeUnknown: 0,
       decisionMakersFound: 0,
+      decisionMakerEmailsFound: 0,
+      companyEmailsFound: 0,
+      socialProfilesFound: 0,
       contactsFound: 0,
       evidenceCollected: 0,
       verifiedFields: 0,
       conflictsFound: 0,
       duplicatesFound: 0,
       qualifiedLeads: 0,
+      needsReview: 0,
+      rejected: 0,
     }),
     audit: jest.fn(),
   };
@@ -340,6 +369,7 @@ function config(values: Record<string, unknown>) {
 function runnerWith(repository: Record<string, unknown>) {
   return new PipelineStageRunner(
     repository as never,
+    {} as never,
     {} as never,
     {} as never,
     {} as never,

@@ -17,6 +17,7 @@ export interface WebSearchResult {
 export interface WebSearchProvider {
   readonly name: string;
   search(query: WebSearchQuery): Promise<WebSearchResult[]>;
+  searchText?(query: string): Promise<WebSearchResult[]>;
 }
 
 export const WEB_SEARCH_PROVIDER = Symbol('WEB_SEARCH_PROVIDER');

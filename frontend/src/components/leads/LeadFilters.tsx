@@ -47,9 +47,11 @@ export function LeadFilters({ values, executions, onSearchChange, onChange }: {
       <label>Company size
         <select value={values.companySizeStatus} onChange={(event) => onChange('companySizeStatus', event.target.value)}>
           <option value="">Any</option>
-          <option value="MATCHED">MATCHED 1-50</option>
-          <option value="UNKNOWN">UNKNOWN</option>
-          <option value="OUTSIDE_RANGE">OUTSIDE RANGE</option>
+          <option value="MATCHED">In requested range</option>
+          <option value="UNKNOWN">Size unknown</option>
+          <option value="OUTSIDE_RANGE">Outside requested range</option>
+          <option value="NOT_REQUESTED">Size not requested</option>
+          <option value="CONFLICT">CONFLICT</option>
         </select>
       </label>
       <label>Investor type

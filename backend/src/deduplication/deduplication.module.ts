@@ -13,6 +13,6 @@ import { DeduplicationService } from './deduplication.service';
   imports: [ConfigModule, AuthModule, UsersModule, OrganizationsModule, BullModule.registerQueue({ name: 'lead-deduplication-queue' })],
   controllers: [DeduplicationController],
   providers: [DeduplicationService, DeduplicationQueue, DeduplicationProcessor],
-  exports: [DeduplicationService, DeduplicationQueue],
+  exports: [DeduplicationService, DeduplicationQueue, BullModule],
 })
 export class DeduplicationModule {}

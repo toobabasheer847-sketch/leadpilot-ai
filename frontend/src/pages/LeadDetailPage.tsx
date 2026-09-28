@@ -7,6 +7,7 @@ import { CompanyOverview } from '../components/company/CompanyOverview';
 import { ConflictPanel } from '../components/company/ConflictPanel';
 import { ContactCard } from '../components/company/ContactCard';
 import { DecisionMakerCard } from '../components/company/DecisionMakerCard';
+import { EmployeeSizeCard } from '../components/company/EmployeeSizeCard';
 import { EvidencePanel } from '../components/company/EvidencePanel';
 import { evidenceTotal, InvestorCard } from '../components/company/InvestorCard';
 import { ResearchHistory } from '../components/company/ResearchHistory';
@@ -140,6 +141,10 @@ export function LeadDetailPage() {
         <h2>Company overview</h2>
         {company.status === 'error' ? <ErrorState message={company.message} /> : null}
         <CompanyOverview company={overview} />
+      </MotionPanel>
+      <MotionPanel>
+        <h2>Employee size</h2>
+        <EmployeeSizeCard company={lead.data.company} evidence={storedEvidence} conflicts={summary?.conflicts ?? []} />
       </MotionPanel>
       <MotionPanel>
         <h2>Investor information</h2>

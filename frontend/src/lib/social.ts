@@ -9,7 +9,7 @@ export interface SocialLinkItem {
 export function collectSocialLinks(input: {
   rows?: SocialProfileRow[] | null;
   map?: SocialProfileMap | null;
-  contact?: Pick<DecisionMaker, 'linkedinUrl' | 'facebookUrl' | 'instagramUrl' | 'youtubeUrl' | 'socialProfileStatus'> | null;
+  contact?: (Pick<DecisionMaker, 'linkedinUrl' | 'facebookUrl' | 'instagramUrl' | 'youtubeUrl' | 'socialProfileStatus'> & { twitterUrl?: string | null }) | null;
 }): SocialLinkItem[] {
   const items: SocialLinkItem[] = [];
   const seen = new Set<string>();
@@ -28,6 +28,7 @@ export function collectSocialLinks(input: {
     add('Facebook', contact.facebookUrl, contact.socialProfileStatus?.facebook);
     add('Instagram', contact.instagramUrl, contact.socialProfileStatus?.instagram);
     add('YouTube', contact.youtubeUrl, contact.socialProfileStatus?.youtube);
+    add('X', contact.twitterUrl, null);
   }
   return items;
 }

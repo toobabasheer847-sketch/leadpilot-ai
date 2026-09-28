@@ -1,5 +1,4 @@
 import { Module } from '@nestjs/common';
-import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule } from '@nestjs/config';
 import { ClassificationModule } from '../ai/classification/classification.module';
 import { AuthModule } from '../auth/auth.module';
@@ -18,7 +17,6 @@ import { ResearchService } from './research.service';
     ConfigModule,
     AuthModule,
     QueueModule,
-    BullModule.registerQueue({ name: 'lead-research-queue' }),
     EnrichmentModule,
     ContactsModule,
     VerificationModule,
@@ -27,6 +25,6 @@ import { ResearchService } from './research.service';
   ],
   controllers: [ResearchController],
   providers: [ResearchService, ResearchQueue, ResearchProcessor],
-  exports: [ResearchService],
+  exports: [ResearchService, QueueModule],
 })
 export class ResearchModule {}

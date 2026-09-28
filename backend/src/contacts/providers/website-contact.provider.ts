@@ -78,7 +78,7 @@ export class WebsiteContactProvider implements ContactDiscoveryProvider {
       try {
         const resolved = new URL(match[1], sourceUrl);
         const host = resolved.hostname.toLowerCase();
-        if (!['linkedin.com', 'facebook.com', 'instagram.com', 'youtube.com', 'youtu.be'].some((domain) => host === domain || host.endsWith(`.${domain}`))) continue;
+        if (!['linkedin.com', 'facebook.com', 'instagram.com', 'youtube.com', 'youtu.be', 'twitter.com', 'x.com'].some((domain) => host === domain || host.endsWith(`.${domain}`))) continue;
         const normalized = this.normalizer.normalizeUrl(resolved.toString());
         if (normalized) results.push({ url: normalized, excerpt });
       } catch { continue; }
@@ -87,13 +87,14 @@ export class WebsiteContactProvider implements ContactDiscoveryProvider {
   }
 
   private profileFields(profiles: Array<{ url: string; excerpt: string }>) {
-    const fields: Pick<ContactCandidate, 'linkedinUrl' | 'facebookUrl' | 'instagramUrl' | 'youtubeUrl'> = {};
+    const fields: Pick<ContactCandidate, 'linkedinUrl' | 'facebookUrl' | 'instagramUrl' | 'youtubeUrl' | 'twitterUrl'> = {};
     for (const profile of profiles) {
       const host = new URL(profile.url).hostname;
       if (host.includes('linkedin')) fields.linkedinUrl = profile.url;
       else if (host.includes('facebook')) fields.facebookUrl = profile.url;
       else if (host.includes('instagram')) fields.instagramUrl = profile.url;
       else if (host.includes('youtube') || host.includes('youtu.be')) fields.youtubeUrl = profile.url;
+      else if (host.includes('twitter') || host === 'x.com' || host.endsWith('.x.com')) fields.twitterUrl = profile.url;
     }
     return fields;
   }

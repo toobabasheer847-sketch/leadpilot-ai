@@ -1,0 +1,24 @@
+import { Inject, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { WEB_SEARCH_PROVIDER, type WebSearchProvider } from '../../../enrichment/website/web-search.types';
+import type { SearchPlan } from '../../../search/types/search-plan.types';
+import { collectWebCompanyCandidates, queryBudgetForPlan, type WebCompanyCollection } from './company-discovery.assess';
+
+@Injectable()
+export class WebSearchCompanyDiscovery {
+  constructor(
+    @Inject(WEB_SEARCH_PROVIDER) private readonly search: WebSearchProvider,
+    private readonly config: ConfigService,
+  ) {}
+
+  collect(plan: SearchPlan, remaining: number): Promise<WebCompanyCollection> {
+    const provider = (this.config.get<string>('webSearch.provider') || '').trim().toLowerCase();
+    const key = this.config.get<string>('webSearch.tavilyApiKey')?.trim();
+    if (provider !== 'tavily' || !key || typeof this.search.searchText !== 'function') {
+      return Promise.resolve({ results: [], rejected: 0, providerError: null, queriesRun: 0 });
+    }
+    const searchText = this.search.searchText.bind(this.search);
+    const delayMs = Math.min(2000, Math.max(0, this.config.get<number>('sourceProvider.retryDelayMs') ?? 250));
+    return collectWebCompanyCandidates(plan, remaining, (query) => searchText(query), { maxQueries: queryBudgetForPlan(plan, remaining), delayMs });
+  }
+}

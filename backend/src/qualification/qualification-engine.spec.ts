@@ -1,4 +1,4 @@
-import { evaluateQualification, normalizeCriteria } from './engine/qualification-engine';
+import { companySizeFit, evaluateQualification, normalizeCriteria } from './engine/qualification-engine';
 import type { QualificationContext, QualificationCriteria } from './types/qualification.types';
 import type { ScoreBreakdown } from '../scoring/types/scoring.types';
 
@@ -110,6 +110,12 @@ describe('qualification engine', () => {
     expect(decision.missingOptional.join(' ')).toMatch(/email/i);
   });
 
+  it('does not apply an employee-size rule when the search did not request one', () => {
+    const decision = evaluateQualification(baseContext(), criteria({ companySize: undefined }));
+    expect(decision.criterionResults.some((item) => item.criterion === 'companySize')).toBe(false);
+    expect(decision.status).not.toBe('NOT_QUALIFIED');
+  });
+
   it('marks needs review when required verified email is missing', () => {
     const decision = evaluateQualification(baseContext(), criteria({ requiredFields: ['companyName', 'website', 'email'], optionalFields: ['instagram'] }));
     expect(decision.status).toBe('NEEDS_REVIEW');
@@ -178,10 +184,40 @@ describe('qualification engine', () => {
     const mismatch = evaluateQualification(baseContext({ location: { city: 'Miami', state: 'Florida', country: 'US', postalCode: null } }), criteria());
     expect(mismatch.status).toBe('NOT_QUALIFIED');
     expect(mismatch.criterionResults.find((item) => item.criterion === 'location')?.result).toBe('NO_MATCH');
+    const sameCityAsState = evaluateQualification(baseContext({
+      location: { city: 'New York', state: null, country: null, postalCode: null },
+      verifications: [],
+    }), criteria({ locations: [{ country: 'US', state: 'New York' }] }));
+    expect(sameCityAsState.criterionResults.find((item) => item.criterion === 'location')?.result).toBe('MATCH');
+    const cityWithoutState = evaluateQualification(baseContext({
+      location: { city: 'Beverly Hills', state: null, country: null, postalCode: null },
+      verifications: [],
+    }), criteria({ locations: [{ country: 'US', state: 'California' }] }));
+    expect(cityWithoutState.criterionResults.find((item) => item.criterion === 'location')?.result).toBe('NEEDS_REVIEW');
+    expect(cityWithoutState.status).not.toBe('NOT_QUALIFIED');
   });
 
   it('matches and mismatches company size without inventing counts', () => {
-    expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: 20 } }), criteria()).criterionResults.find((item) => item.criterion === 'companySize')?.result).toBe('MATCH');
+    expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: 1, employeeRange: null } }), criteria()).criterionResults.find((item) => item.criterion === 'companySize')?.result).toBe('MATCH');
+    expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: 23, employeeRange: null } }), criteria()).criterionResults.find((item) => item.criterion === 'companySize')?.result).toBe('MATCH');
+    expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: 50, employeeRange: null } }), criteria()).criterionResults.find((item) => item.criterion === 'companySize')?.result).toBe('MATCH');
+    expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: 51, employeeRange: null } }), criteria()).status).toBe('NOT_QUALIFIED');
+    expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: 0, employeeRange: null } }), criteria()).status).toBe('NOT_QUALIFIED');
+    expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: null, employeeRange: '1-10' } }), criteria()).criterionResults.find((item) => item.criterion === 'companySize')?.result).toBe('MATCH');
+    expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: null, employeeRange: '11-50' } }), criteria()).criterionResults.find((item) => item.criterion === 'companySize')?.result).toBe('MATCH');
+    expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: null, employeeRange: '10+' } }), criteria()).criterionResults.find((item) => item.criterion === 'companySize')?.result).toBe('NOT_FOUND');
+    expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: null, employeeRange: 'small company' } }), criteria()).criterionResults.find((item) => item.criterion === 'companySize')?.result).toBe('NOT_FOUND');
+    expect(companySizeFit(23, null, { min: 1, max: 50 })).toBe('MATCHED');
+    expect(companySizeFit(1, null, { min: 1, max: 50 })).toBe('MATCHED');
+    expect(companySizeFit(50, null, { min: 1, max: 50 })).toBe('MATCHED');
+    expect(companySizeFit(51, null, { min: 1, max: 50 })).toBe('OUTSIDE_RANGE');
+    expect(companySizeFit(null, '1-10', { min: 1, max: 50 })).toBe('MATCHED');
+    expect(companySizeFit(null, '11-50', { min: 1, max: 50 })).toBe('MATCHED');
+    expect(companySizeFit(null, '51-200', { min: 1, max: 50 })).toBe('OUTSIDE_RANGE');
+    expect(companySizeFit(null, '1-200', { min: 1, max: 50 })).toBe('UNKNOWN');
+    expect(companySizeFit(null, null, { min: 1, max: 50 })).toBe('UNKNOWN');
+    expect(companySizeFit(null, '10+', { min: 1, max: 50 })).toBe('UNKNOWN');
+    expect(companySizeFit(null, 'small company', { min: 1, max: 50 })).toBe('UNKNOWN');
     expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: 200 } }), criteria()).status).toBe('NOT_QUALIFIED');
     expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: null, employeeRange: null } }), criteria()).status).toBe('NEEDS_REVIEW');
     expect(evaluateQualification(baseContext({ company: { ...baseContext().company, employeeCount: null, employeeRange: '10-40' } }), criteria()).criterionResults.find((item) => item.criterion === 'companySize')?.result).toBe('MATCH');

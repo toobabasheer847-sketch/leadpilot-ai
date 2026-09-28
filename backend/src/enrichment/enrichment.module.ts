@@ -17,10 +17,13 @@ import { WebsiteDiscoveryService } from './website/website-discovery.service';
 import { WebsiteFetchService } from './website/website-fetch.service';
 import { WebsiteNormalizerService } from './website/website-normalizer.service';
 import { WebsiteParserService } from './website/website-parser.service';
+import { EmployeeSizeProcessor } from './employee-size/employee-size.processor';
+import { EMPLOYEE_SIZE_QUEUE, EmployeeSizeQueue } from './employee-size/employee-size.queue';
+import { EmployeeSizeService } from './employee-size/employee-size.service';
 import { UsageModule } from '../usage/usage.module';
 
 @Module({
-  imports: [ConfigModule, AuthModule, UsersModule, OrganizationsModule, UsageModule, BullModule.registerQueue({ name: 'company-enrichment-queue' })],
+  imports: [ConfigModule, AuthModule, UsersModule, OrganizationsModule, UsageModule, BullModule.registerQueue({ name: 'company-enrichment-queue' }, { name: EMPLOYEE_SIZE_QUEUE })],
   controllers: [CompanyController],
   providers: [
     WebsiteNormalizerService,
@@ -35,7 +38,10 @@ import { UsageModule } from '../usage/usage.module';
     CompanyEnrichmentQueue,
     CompanyEnrichmentProcessor,
     EnrichmentService,
+    EmployeeSizeService,
+    EmployeeSizeQueue,
+    EmployeeSizeProcessor,
   ],
-  exports: [EnrichmentService, CompanyEnrichmentQueue, WebsiteNormalizerService, WebsiteFetchService, WebsiteDiscoveryService, WebsiteParserService, EvidenceRepository],
+  exports: [EnrichmentService, CompanyEnrichmentQueue, EmployeeSizeQueue, WebsiteNormalizerService, WebsiteFetchService, WebsiteDiscoveryService, WebsiteParserService, EvidenceRepository, WEB_SEARCH_PROVIDER, BullModule],
 })
 export class EnrichmentModule {}

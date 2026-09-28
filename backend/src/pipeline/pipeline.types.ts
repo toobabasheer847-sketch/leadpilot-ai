@@ -24,15 +24,28 @@ export interface PipelineProgressState {
 
 export interface PipelineCounters {
   companiesDiscovered: number | null;
+  companiesPersisted: number | null;
   companiesProcessed: number | null;
+  requestedCount: number | null;
+  discoveryShortfall: number | null;
+  companySizeRequested: boolean | null;
+  websitesFound: number | null;
+  websitesNotFound: number | null;
   websitesResearched: number | null;
+  companySizeFound: number | null;
+  companySizeUnknown: number | null;
   decisionMakersFound: number | null;
+  decisionMakerEmailsFound: number | null;
+  companyEmailsFound: number | null;
+  socialProfilesFound: number | null;
   contactsFound: number | null;
   evidenceCollected: number | null;
   verifiedFields: number | null;
   conflictsFound: number | null;
   duplicatesFound: number | null;
   qualifiedLeads: number | null;
+  needsReview: number | null;
+  rejected: number | null;
 }
 
 export interface PipelineStageStatus {

@@ -192,19 +192,73 @@ function evaluateLocation(context: QualificationContext, criteria: Qualification
       excerpt: [context.location.city, context.location.state, context.location.country].filter(Boolean).join(', '),
     }, verification);
   }
-  const match = criteria.locations.some((wanted) => {
-    const countryOk = !wanted.country || !context.location?.country || wanted.country.toLowerCase() === context.location.country.toLowerCase();
-    const stateOk = !wanted.state || (context.location?.state && normalizeState(wanted.state) === normalizeState(context.location.state));
-    const cityOk = !wanted.city || (context.location?.city && wanted.city.toLowerCase() === context.location.city.toLowerCase());
-    return countryOk && stateOk && cityOk;
-  });
-  return evidence('location', match ? 'MATCH' : 'NO_MATCH', true, match
-    ? `Location matched requested criteria (${[context.location.state, context.location.country].filter(Boolean).join(', ')}).`
-    : `Location did not match requested criteria (found ${[context.location.city, context.location.state, context.location.country].filter(Boolean).join(', ') || 'unknown'}).`, {
+  const foundLabel = [context.location.city, context.location.state, context.location.country].filter(Boolean).join(', ') || 'unknown';
+  const fits = criteria.locations.map((wanted) => placeFit(wanted, context.location));
+  if (fits.includes('match')) {
+    return evidence('location', 'MATCH', true, `Location matched requested criteria (${foundLabel}).`, {
+      source: 'company_locations',
+      sourceUrl: null,
+      excerpt: foundLabel,
+    }, verification);
+  }
+  if (fits.includes('incomplete')) {
+    return evidence('location', 'NEEDS_REVIEW', true, `Location evidence is incomplete for the requested place (found ${foundLabel}).`, {
+      source: 'company_locations',
+      sourceUrl: null,
+      excerpt: foundLabel,
+    }, verification);
+  }
+  return evidence('location', 'NO_MATCH', true, `Location did not match requested criteria (found ${foundLabel}).`, {
     source: 'company_locations',
     sourceUrl: null,
-    excerpt: [context.location.city, context.location.state, context.location.country].filter(Boolean).join(', '),
+    excerpt: foundLabel,
   }, verification);
+}
+
+function placeFit(
+  wanted: { country?: string; state?: string; city?: string; region?: string },
+  found: QualificationContext['location'],
+): 'match' | 'conflict' | 'incomplete' {
+  let matched = false;
+  let missing = false;
+  const agree = (ok: boolean | undefined, present: boolean) => {
+    if (!present) missing = true;
+    else if (ok) matched = true;
+    else return true;
+    return false;
+  };
+  let conflict = false;
+  if (wanted.country) conflict = agree(found?.country ? sameCountry(wanted.country, found.country) : false, Boolean(found?.country)) || conflict;
+  if (wanted.state) {
+    const stateAgrees = Boolean(found?.state && normalizeState(wanted.state) === normalizeState(found.state))
+      || Boolean(!found?.state && found?.city && normalizeState(found.city) === normalizeState(wanted.state));
+    const statePresent = Boolean(found?.state) || stateAgrees;
+    conflict = agree(stateAgrees, statePresent) || conflict;
+  }
+  if (wanted.city) conflict = agree(Boolean(found?.city && found.city.toLowerCase() === wanted.city.toLowerCase()), Boolean(found?.city)) || conflict;
+  if (wanted.region) {
+    const haystack = [found?.city, found?.state].filter(Boolean).join(' ').toLowerCase();
+    conflict = agree(haystack.includes(wanted.region.toLowerCase()), Boolean(haystack)) || conflict;
+  }
+  if (conflict) return 'conflict';
+  if (matched) return 'match';
+  if (missing) return 'incomplete';
+  return 'incomplete';
+}
+
+function sameCountry(left: string, right: string) {
+  const aliases: Record<string, string> = {
+    us: 'us',
+    usa: 'us',
+    'united states': 'us',
+    'united states of america': 'us',
+    uae: 'ae',
+    'united arab emirates': 'ae',
+    uk: 'gb',
+    'united kingdom': 'gb',
+  };
+  const normalize = (value: string) => aliases[value.trim().toLowerCase()] ?? value.trim().toLowerCase();
+  return normalize(left) === normalize(right);
 }
 
 function evaluateCompanySize(context: QualificationContext, criteria: QualificationCriteria): CriterionEvidence {

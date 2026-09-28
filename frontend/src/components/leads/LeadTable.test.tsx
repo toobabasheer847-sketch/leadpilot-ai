@@ -34,6 +34,23 @@ describe('lead table', () => {
     expect(screen.queryByText('VERIFIED')).not.toBeInTheDocument();
     expect(screen.getAllByText('Not available').length).toBeGreaterThan(0);
     expect(screen.getByText('NEEDS_REVIEW')).toBeInTheDocument();
+    expect(screen.getAllByText('UNKNOWN').length).toBeGreaterThan(0);
+  });
+
+  it('shows the stored employee count, range, and conflict', () => {
+    const sized = {
+      ...lead,
+      company: { ...lead.company, companySize: 23, companySizeStatus: 'MATCHED' as const },
+    };
+    const { rerender } = render(<MemoryRouter><LeadTable leads={[sized]} /></MemoryRouter>);
+    expect(screen.getByText('23')).toBeInTheDocument();
+    expect(screen.queryByText('MATCHED 1-50 (23)')).not.toBeInTheDocument();
+
+    rerender(<MemoryRouter><LeadTable leads={[{ ...lead, company: { ...lead.company, companySize: '11-50', companySizeStatus: 'MATCHED' } }]} /></MemoryRouter>);
+    expect(screen.getByText('11–50')).toBeInTheDocument();
+
+    rerender(<MemoryRouter><LeadTable leads={[{ ...lead, company: { ...lead.company, companySize: 'CONFLICT', companySizeStatus: 'CONFLICT' } }]} /></MemoryRouter>);
+    expect(screen.getAllByText('CONFLICT').length).toBeGreaterThan(0);
   });
 
   it('selects only the current page and opens the company route', async () => {

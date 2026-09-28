@@ -16,13 +16,28 @@ describe('official website validation', () => {
     })).toMatchObject({ accepted: true, reason: 'OFFICIAL_WEBSITE' });
   });
 
-  it('rejects a different company that shares one name token', () => {
+  it('rejects a directory host and a different company that shares one name token', () => {
     expect(evaluateOfficialWebsite({
       companyName: 'Trinity Investments',
       url: 'https://startupintros.com/trinity',
       title: 'TRINITY: Funding, Team & Investors | Startup Intros',
       text: 'Trinity Capital is an international alternative asset manager.',
+    })).toMatchObject({ accepted: false, reason: 'DIRECTORY' });
+    expect(evaluateOfficialWebsite({
+      companyName: 'Trinity Investments',
+      url: 'https://profiles.example/trinity-capital',
+      title: 'Trinity Capital | Investments',
+      text: 'Trinity Capital is an international alternative asset manager.',
     })).toMatchObject({ accepted: false, reason: 'DIFFERENT_COMPANY' });
+  });
+
+  it('rejects a job board', () => {
+    expect(evaluateOfficialWebsite({
+      ...oak,
+      url: 'https://www.indeed.com/cmp/oak-stream-investors',
+      title: 'Oak Stream Investors jobs',
+      text: 'Oak Stream Investors careers in Austin, Texas.',
+    })).toMatchObject({ accepted: false, reason: 'DIRECTORY' });
   });
 
   it('rejects a directory page', () => {

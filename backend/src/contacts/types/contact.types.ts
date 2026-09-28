@@ -25,6 +25,7 @@ export interface ContactCandidate {
   facebookUrl?: string | null;
   instagramUrl?: string | null;
   youtubeUrl?: string | null;
+  twitterUrl?: string | null;
   companyName: string;
   sourceUrl: string;
   evidence: ContactEvidenceEntry[];

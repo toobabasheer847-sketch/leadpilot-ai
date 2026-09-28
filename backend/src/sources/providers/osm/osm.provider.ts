@@ -7,7 +7,8 @@ import { SourceNormalizerService } from '../../services/source-normalizer.servic
 import { NormalizedSourceResult, SourceProvider, SourceSearchContext, SourceSearchResult } from '../../types/source.types';
 import { isRetryableProviderError, SourceProviderError } from '../source-provider.error';
 import { OverpassElement, OverpassResponse } from './osm.types';
-import { buildOverpassQuery, discoveryLocations, locationLabel, searchWindows } from './overpass.query-builder';
+import { discoveryTarget } from '../../../search/search-plan.limits';
+import { buildOverpassQuery, coordinateWithinRequestedState, discoveryLocations, investorCandidateAllowed, isRealEstateInvestorDiscovery, locationLabel, matchesRequestedState, searchWindows } from './overpass.query-builder';
 import type { OverpassBBox } from './overpass.query-builder';
 
 const OSM_PROVIDER_NAME = 'osm';
@@ -65,30 +66,71 @@ export class OsmSourceProvider implements SourceProvider {
     }
     const locations = discoveryLocations(plan);
     const timeoutSeconds = Math.min(25, Math.max(1, Math.floor(this.timeoutMs / 1000) - 5));
-    const resultLimit = clamp(plan.maxResults ?? this.maxResults, 1, this.maxResults, this.maxResults);
+    const resultLimit = discoveryTarget(plan);
+    const perQueryMax = Math.min(this.maxResults, resultLimit);
+    const investorSearch = isRealEstateInvestorDiscovery(plan);
+    const requestedState = plan.locations.find((location) => location.state?.trim())?.state;
     return this.enqueue(async () => {
       const normalized: NormalizedSourceResult[] = [];
+      let rejectedCandidates = 0;
+      let partitions = 0;
+      let timedOutPartitions = 0;
       for (const location of locations) {
-        if (normalized.length >= resultLimit) break;
+        if (dedupeResults(normalized).length >= resultLimit) break;
         const bbox = await this.geocode(locationLabel(location));
-        for (const window of searchWindows(bbox)) {
-          if (normalized.length >= resultLimit) break;
+        const windows = searchWindows(bbox);
+        for (let index = 0; index < windows.length; index += 1) {
+          const accepted = dedupeResults(normalized);
+          if (accepted.length >= resultLimit) break;
+          if (index > 0 && this.retryDelayMs > 0) await delay(this.retryDelayMs);
           const query = buildOverpassQuery(plan, {
             timeoutSeconds,
-            maxResults: resultLimit - normalized.length,
-            bbox: window,
+            maxResults: Math.min(perQueryMax, Math.max(1, resultLimit - accepted.length)),
+            bbox: windows[index],
           });
-          const payload = await this.requestWithRetry(query);
+          let payload: OverpassResponse;
+          partitions += 1;
+          try {
+            payload = await this.requestWithRetry(query);
+          } catch (error) {
+            if (error instanceof SourceProviderError && error.code === 'PROVIDER_TIMEOUT') {
+              timedOutPartitions += 1;
+              continue;
+            }
+            throw error;
+          }
           for (const element of payload.elements ?? []) {
             try {
-              normalized.push(this.normalizeResult(element));
+              const candidate = this.normalizeResult(element);
+              if (investorSearch && !investorCandidateAllowed(candidate.name, candidate.category)) {
+                rejectedCandidates += 1;
+                continue;
+              }
+              if (!matchesRequestedState(requestedState, candidate.address?.state)) {
+                rejectedCandidates += 1;
+                continue;
+              }
+              if (!coordinateWithinRequestedState(requestedState, candidate.address?.latitude, candidate.address?.longitude)) {
+                rejectedCandidates += 1;
+                continue;
+              }
+              normalized.push(candidate);
             } catch (error) {
               if (!(error instanceof SourceProviderError)) throw error;
             }
           }
         }
       }
-      return { provider: this.name, results: dedupeResults(normalized).slice(0, resultLimit) };
+      const unique = dedupeResults(normalized);
+      if (unique.length === 0 && timedOutPartitions > 0 && timedOutPartitions === partitions) {
+        throw new SourceProviderError('PROVIDER_TIMEOUT', 'OpenStreetMap provider request timed out.');
+      }
+      return {
+        provider: this.name,
+        results: unique.slice(0, resultLimit),
+        duplicatesRemoved: normalized.length - unique.length,
+        rejectedCandidates,
+      };
     });
   }
 
@@ -269,7 +311,13 @@ function parseOverpassPayload(payload: unknown): OverpassResponse {
     throw new SourceProviderError('PROVIDER_UNKNOWN_ERROR', 'OpenStreetMap provider returned an invalid response.');
   }
   const body = payload as OverpassResponse;
-  if (Array.isArray(body.elements)) return body;
+      if (Array.isArray(body.elements)) {
+        const remark = typeof body.remark === 'string' ? body.remark : '';
+        if (body.elements.length === 0 && /timed out|timeout/i.test(remark)) {
+          throw new SourceProviderError('PROVIDER_TIMEOUT', 'OpenStreetMap provider request timed out.');
+        }
+        return body;
+      }
   const remark = typeof body.remark === 'string' ? body.remark : '';
   if (/timed out|timeout/i.test(remark)) {
     throw new SourceProviderError('PROVIDER_TIMEOUT', 'OpenStreetMap provider request timed out.');
@@ -288,18 +336,33 @@ function dedupeResults(results: NormalizedSourceResult[]): NormalizedSourceResul
   const seen = new Set<string>();
   const unique: NormalizedSourceResult[] = [];
   for (const result of ranked) {
-    const keys = [`osm:${result.externalId}`];
-    if (result.website) keys.push(`website:${result.website}`);
-    const phone = phoneMatchKey(result.phone);
-    if (phone) keys.push(`phone:${phone}`);
-    const city = result.address?.city?.trim().toLowerCase();
-    const state = result.address?.state?.trim().toLowerCase();
-    if (city && state) keys.push(`name:${result.name.trim().toLowerCase()}|${city}|${state}`);
+    const keys = identityKeys(result);
     if (keys.some((key) => seen.has(key))) continue;
     keys.forEach((key) => seen.add(key));
     unique.push(result);
   }
   return unique;
+}
+
+function identityKeys(result: NormalizedSourceResult): string[] {
+  const keys = [`osm:${result.externalId}`];
+  if (result.website) keys.push(`website:${result.website.trim().toLowerCase()}`);
+  const phone = phoneMatchKey(result.phone);
+  if (phone) keys.push(`phone:${phone}`);
+  const name = normalizeBusinessName(result.name);
+  const city = result.address?.city?.trim().toLowerCase();
+  const state = result.address?.state?.trim().toLowerCase();
+  if (name && city && state) keys.push(`place:${name}|${city}|${state}`);
+  const latitude = result.address?.latitude;
+  const longitude = result.address?.longitude;
+  if (name && typeof latitude === 'number' && typeof longitude === 'number') {
+    keys.push(`geo:${name}|${latitude.toFixed(3)}|${longitude.toFixed(3)}`);
+  }
+  return keys;
+}
+
+function normalizeBusinessName(name: string): string {
+  return name.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 function completeness(result: NormalizedSourceResult): number {

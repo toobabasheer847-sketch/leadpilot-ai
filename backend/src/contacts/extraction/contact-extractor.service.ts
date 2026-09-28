@@ -2,6 +2,17 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ContactEvidenceEntry, ContactStatus, VerificationStatus } from '../types/contact.types';
 
+const GENERIC_LOCAL_PARTS = new Set(['john', 'jane', 'info', 'contact', 'hello', 'office', 'support', 'sales', 'admin', 'team', 'inquiries', 'enquiry', 'enquiries', 'noreply', 'no-reply', 'careers', 'jobs']);
+
+export function publicPersonEmail(text: string): string | null {
+  const match = text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
+  if (!match) return null;
+  const value = match[0];
+  const local = value.split('@')[0].toLowerCase();
+  if (GENERIC_LOCAL_PARTS.has(local) || value.toLowerCase().includes('example.com')) return null;
+  return value;
+}
+
 @Injectable()
 export class ContactExtractorService {
   constructor(private readonly config: ConfigService) {}
@@ -71,15 +82,7 @@ export class ContactExtractorService {
   }
 
   extractPublicEmail(text: string): string | null {
-    const match = text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
-    if (!match) return null;
-    const value = match[0];
-    const local = value.split('@')[0].toLowerCase();
-    const blocked = ['john', 'jane', 'info', 'contact', 'hello', 'support', 'sales'];
-    if (blocked.includes(local) || value.includes('example.com')) {
-      return null;
-    }
-    return value;
+    return publicPersonEmail(text);
   }
 
   extractPublicPhone(text: string): string | null {

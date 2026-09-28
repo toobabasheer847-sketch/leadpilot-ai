@@ -26,6 +26,8 @@ export interface NormalizedSourceResult {
 export interface SourceSearchResult {
   provider: string;
   results: NormalizedSourceResult[];
+  duplicatesRemoved?: number;
+  rejectedCandidates?: number;
 }
 
 export interface SourceSearchContext {

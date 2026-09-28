@@ -413,7 +413,7 @@ describe('web search website discovery', () => {
     };
     const trinity = await discovery(fetchPage, search).discover({ companyName: 'Trinity Investments', existingWebsite: 'https://startupintros.com/trinity' });
     expect(trinity).toMatchObject({ status: 'NOT_FOUND', website: null, clearStoredWebsite: true });
-    expect(trinity.rejectedSearchHits).toEqual(expect.arrayContaining([expect.objectContaining({ reason: 'DIFFERENT_COMPANY', hit: expect.objectContaining({ url: 'https://startupintros.com/trinity' }) })]));
+    expect(trinity.rejectedSearchHits).toEqual(expect.arrayContaining([expect.objectContaining({ reason: 'DIRECTORY', hit: expect.objectContaining({ url: 'https://startupintros.com/trinity' }) })]));
     expect(JSON.stringify(trinity)).not.toMatch(/trinityinvestments\.com/i);
 
     const oak = await discovery(fetchPage, search).discover({ companyName: 'Oak Stream Investors', state: 'Texas' });
@@ -450,6 +450,6 @@ describe('web search website discovery', () => {
     const saved = await enrichment.runCompanyEnrichment({ companyId: 'company-1', organizationId: 'org-1' });
     expect(saved).toMatchObject({ website: null, websiteStatus: 'NOT_FOUND' });
     expect(updateCompany).toHaveBeenCalledWith('company-1', { website: null });
-    expect(persistEvidence).toHaveBeenCalledWith('company-1', 'https://startupintros.com/trinity', [expect.objectContaining({ value: 'DIFFERENT_COMPANY', evidenceType: 'META_DATA' })], undefined, expect.objectContaining({ provider: 'tavily', sourceType: 'WEB_SEARCH', verified: false }));
+    expect(persistEvidence).toHaveBeenCalledWith('company-1', 'https://startupintros.com/trinity', [expect.objectContaining({ value: 'DIRECTORY', evidenceType: 'META_DATA' })], undefined, expect.objectContaining({ provider: 'tavily', sourceType: 'WEB_SEARCH', verified: false }));
   });
 });

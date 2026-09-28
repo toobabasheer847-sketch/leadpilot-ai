@@ -19,6 +19,7 @@ export class PipelineJobInspector {
     @InjectQueue('lead-scoring-queue') scoring: Queue,
     @InjectQueue('lead-qualification-queue') qualification: Queue,
     @InjectQueue('lead-research-queue') research: Queue,
+    @InjectQueue('employee-size-queue') employeeSize: Queue,
   ) {
     this.queues = {
       'company-enrichment-queue': enrichment,
@@ -30,6 +31,7 @@ export class PipelineJobInspector {
       'lead-scoring-queue': scoring,
       'lead-qualification-queue': qualification,
       'lead-research-queue': research,
+      'employee-size-queue': employeeSize,
     };
   }
 

@@ -13,6 +13,6 @@ import { ScoringService } from './scoring.service';
   imports: [ConfigModule, AuthModule, UsersModule, OrganizationsModule, BullModule.registerQueue({ name: 'lead-scoring-queue' })],
   controllers: [ScoringController],
   providers: [ScoringService, ScoringQueue, ScoringProcessor],
-  exports: [ScoringService, ScoringQueue],
+  exports: [ScoringService, ScoringQueue, BullModule],
 })
 export class ScoringModule {}
