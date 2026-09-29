@@ -247,21 +247,59 @@ export class VerificationService {
       return { ...evidenceSignal, provider: providerSignal.provider || evidenceSignal.provider };
     }
     if (evidenceSignal.status === 'VERIFIED') {
-      return { ...evidenceSignal, provider: providerSignal.provider || evidenceSignal.provider, metadata: { ...evidenceSignal.metadata, ...providerSignal.metadata } };
+      return {
+        ...evidenceSignal,
+        provider: providerSignal.provider || evidenceSignal.provider,
+        metadata: {
+          ...evidenceSignal.metadata,
+          ...providerSignal.metadata,
+          ownershipVerified: evidenceSignal.metadata?.ownershipVerified ?? Boolean(((evidenceSignal.metadata?.sourceCount as number | undefined) ?? 0) >= 2),
+          verificationKind: evidenceSignal.metadata?.verificationKind
+            ?? (providerSignal.metadata?.deliverabilityVerified ? 'evidence_and_deliverability' : 'independent_evidence'),
+        },
+      };
     }
     if (providerSignal.status === 'INVALID') return { ...providerSignal, conflict: evidenceSignal.conflict };
+    // ZeroBounce (or similar) deliverability VERIFIED is preserved, but ownership stays false unless evidence already verified.
     if (providerSignal.status === 'VERIFIED' && (evidenceSignal.status === 'SUPPORTED' || evidenceSignal.status === 'UNVERIFIED' || evidenceSignal.status === 'FOUND')) {
       return {
         ...providerSignal,
         evidenceId: evidenceSignal.evidenceId ?? providerSignal.evidenceId,
         provenance: evidenceSignal.provenance ?? providerSignal.provenance,
-        metadata: { ...evidenceSignal.metadata, ...providerSignal.metadata, evidenceStatus: evidenceSignal.status },
+        metadata: {
+          ...evidenceSignal.metadata,
+          ...providerSignal.metadata,
+          evidenceStatus: evidenceSignal.status,
+          ownershipVerified: false,
+          deliverabilityVerified: providerSignal.metadata?.deliverabilityVerified ?? true,
+          verificationKind: providerSignal.metadata?.verificationKind ?? 'deliverability',
+        },
       };
     }
     if (evidenceSignal.status === 'SUPPORTED') {
-      return { ...evidenceSignal, provider: providerSignal.provider || evidenceSignal.provider, metadata: { ...evidenceSignal.metadata, ...providerSignal.metadata } };
+      return {
+        ...evidenceSignal,
+        provider: providerSignal.provider || evidenceSignal.provider,
+        metadata: {
+          ...evidenceSignal.metadata,
+          ...providerSignal.metadata,
+          ownershipVerified: false,
+          deliverabilityVerified: providerSignal.metadata?.deliverabilityVerified ?? false,
+          verificationKind: 'evidence_supported',
+        },
+      };
     }
-    return { ...providerSignal, evidenceId: evidenceSignal.evidenceId ?? providerSignal.evidenceId, provenance: evidenceSignal.provenance ?? providerSignal.provenance };
+    return {
+      ...providerSignal,
+      evidenceId: evidenceSignal.evidenceId ?? providerSignal.evidenceId,
+      provenance: evidenceSignal.provenance ?? providerSignal.provenance,
+      metadata: {
+        ...evidenceSignal.metadata,
+        ...providerSignal.metadata,
+        ownershipVerified: providerSignal.metadata?.ownershipVerified ?? false,
+        deliverabilityVerified: providerSignal.metadata?.deliverabilityVerified ?? false,
+      },
+    };
   }
 
   private async persistResults(data: VerificationJobData, results: VerificationResult[]) {

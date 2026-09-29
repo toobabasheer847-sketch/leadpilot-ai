@@ -60,6 +60,7 @@ export interface VerificationCardModel {
   status: string | null;
   evidenceCount: number | null;
   verifiedAt: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export function verificationCards(fields: VerificationField[], evidence: EvidenceItem[]): VerificationCardModel[] {
@@ -67,7 +68,7 @@ export function verificationCards(fields: VerificationField[], evidence: Evidenc
   for (const requested of REQUESTED_FIELDS) {
     const matches = fields.filter((field) => field.fieldName === requested.key);
     if (!matches.length) {
-      cards.push({ key: requested.key, label: requested.label, value: null, status: 'NOT_FOUND', evidenceCount: null, verifiedAt: null });
+      cards.push({ key: requested.key, label: requested.label, value: null, status: 'NOT_FOUND', evidenceCount: null, verifiedAt: null, metadata: null });
       continue;
     }
     matches.forEach((field, index) => {
@@ -78,6 +79,7 @@ export function verificationCards(fields: VerificationField[], evidence: Evidenc
         status: field.status,
         evidenceCount: evidenceCountFor(requested.key, field.metadata, evidence),
         verifiedAt: field.checkedAt,
+        metadata: typeof field.metadata === 'object' && field.metadata !== null ? field.metadata as Record<string, unknown> : null,
       });
     });
   }

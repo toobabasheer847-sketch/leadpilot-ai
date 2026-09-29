@@ -185,7 +185,7 @@ export function LeadDetailPage() {
         {verification.status === 'ready' && verification.data.fields.length > 0 ? (
           <div className="detail-grid">
             {verificationCards(verification.data.fields, storedEvidence).map((card) => (
-              <VerificationCard key={card.key} label={card.label} value={card.value} status={card.status} evidenceCount={card.evidenceCount} verifiedAt={card.verifiedAt} />
+              <VerificationCard key={card.key} label={card.label} value={card.value} status={card.status} evidenceCount={card.evidenceCount} verifiedAt={card.verifiedAt} metadata={card.metadata} />
             ))}
           </div>
         ) : null}

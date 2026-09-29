@@ -30,10 +30,10 @@ describe('lead table', () => {
   it('prints NOT_FOUND as Not Found and keeps the returned verification status', () => {
     render(<MemoryRouter><LeadTable leads={[lead]} /></MemoryRouter>);
     expect(screen.getAllByText('Not Found').length).toBeGreaterThan(0);
-    expect(screen.getByText('SUPPORTED')).toBeInTheDocument();
-    expect(screen.queryByText('VERIFIED')).not.toBeInTheDocument();
+    expect(screen.getByText('Evidence Supported')).toBeInTheDocument();
+    expect(screen.queryByText('Verified')).not.toBeInTheDocument();
     expect(screen.getAllByText('Not available').length).toBeGreaterThan(0);
-    expect(screen.getByText('NEEDS_REVIEW')).toBeInTheDocument();
+    expect(screen.getByText('Needs Review')).toBeInTheDocument();
     expect(screen.getAllByText('UNKNOWN').length).toBeGreaterThan(0);
   });
 

@@ -26,9 +26,9 @@ describe('company intelligence presentation', () => {
       evidenceSummary: { independentSources: 2 },
     }} />);
     expect(screen.getAllByText('Not Found').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('UNVERIFIED').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Unverified').length).toBeGreaterThan(0);
     expect(screen.queryByText(/@/)).not.toBeInTheDocument();
-    expect(screen.queryByText('VERIFIED')).not.toBeInTheDocument();
+    expect(screen.queryByText('Verified')).not.toBeInTheDocument();
     expect(screen.getByText('Evidence count 2')).toBeInTheDocument();
   });
 
@@ -46,7 +46,7 @@ describe('company intelligence presentation', () => {
     }]} />);
     expect(screen.getByText(/Founder/)).toBeInTheDocument();
     expect(screen.getByText(/Former CEO/)).toBeInTheDocument();
-    expect(screen.getByText('NEEDS_REVIEW')).toBeInTheDocument();
+    expect(screen.getByText('Needs Review')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'https://stored.example/a' })).toHaveAttribute('rel', 'noopener noreferrer');
     expect(screen.queryByRole('button', { name: /winner|use this|select source/i })).not.toBeInTheDocument();
   });

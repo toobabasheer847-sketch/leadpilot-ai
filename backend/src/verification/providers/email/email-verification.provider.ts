@@ -48,7 +48,12 @@ export class EmailVerificationProvider implements VerificationProvider {
       status: 'UNVERIFIED',
       verificationType: 'SYNTAX_CHECK',
       provider: 'local-email',
-      metadata: { ownershipVerified: false, deliverabilityVerified: false, genericMailbox: false },
+      metadata: {
+        ownershipVerified: false,
+        deliverabilityVerified: false,
+        verificationKind: 'syntax',
+        genericMailbox: false,
+      },
     };
   }
 
@@ -80,6 +85,7 @@ export class EmailVerificationProvider implements VerificationProvider {
           metadata: {
             ownershipVerified: false,
             deliverabilityVerified: true,
+            verificationKind: 'deliverability',
             zeroBounceStatus: payload.status,
             zeroBounceSubStatus: payload.sub_status ?? null,
           },

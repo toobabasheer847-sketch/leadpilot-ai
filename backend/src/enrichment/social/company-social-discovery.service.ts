@@ -15,22 +15,11 @@ export class CompanySocialDiscoveryService {
       if (!candidate) {
         continue;
       }
-      const lower = candidate.toLowerCase();
-      if (lower.includes('linkedin.com')) {
-        urls.add(candidate);
+      // Company social discovery must not ingest person profile URLs (e.g. LinkedIn /in/).
+      if (!isPublicCompanyProfile(candidate) && !isCompanyProfileUrl(candidate)) {
+        continue;
       }
-      if (lower.includes('facebook.com')) {
-        urls.add(candidate);
-      }
-      if (lower.includes('instagram.com')) {
-        urls.add(candidate);
-      }
-      if (lower.includes('youtube.com') || lower.includes('youtu.be')) {
-        urls.add(candidate);
-      }
-      if (lower.includes('x.com') || lower.includes('twitter.com')) {
-        urls.add(candidate);
-      }
+      urls.add(candidate);
     }
 
     return Array.from(urls);

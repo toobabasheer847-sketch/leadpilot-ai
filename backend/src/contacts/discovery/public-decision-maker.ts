@@ -41,10 +41,10 @@ export function assessPublicDecisionMaker(
   options?: { allowedRoles?: string[] },
 ): ContactCandidate | null {
   const text = `${hit.title}. ${hit.snippet}`.replace(/\s+/g, ' ').trim();
-  const title = TITLES.find(([pattern]) => pattern.test(text));
+  const title = extractDecisionMakerTitle(text);
   if (!title) return null;
-  if (options?.allowedRoles?.length && !roleMatches(title[1], options.allowedRoles)) return null;
-  const fullName = personName(text, title[1], companyName);
+  if (options?.allowedRoles?.length && !roleMatches(title, options.allowedRoles)) return null;
+  const fullName = personName(text, title, companyName);
   if (!fullName) return null;
   const clause = personWindows(text, fullName);
   if (!companyAssociated(companyName, clause)) return null;
@@ -54,7 +54,7 @@ export function assessPublicDecisionMaker(
   const retrievedAt = hit.retrievedAt ?? new Date().toISOString();
   const evidence = [
     evidenceEntry('fullName', fullName, hit.url, text, retrievedAt),
-    evidenceEntry('title', title[1], hit.url, text, retrievedAt),
+    evidenceEntry('title', title, hit.url, text, retrievedAt),
     evidenceEntry('companyRelationship', companyName, hit.url, text, retrievedAt),
   ];
   if (email) evidence.push(evidenceEntry('email', email, hit.url, text, retrievedAt));
@@ -66,8 +66,8 @@ export function assessPublicDecisionMaker(
     fullName,
     firstName: parts[0],
     lastName: parts.slice(1).join(' ') || null,
-    title: title[1],
-    originalTitle: title[1],
+    title,
+    originalTitle: title,
     companyRelationship: companyName,
     email,
     emailStatus: email ? 'UNVERIFIED' : 'NOT_FOUND',
@@ -83,17 +83,54 @@ export function assessPublicDecisionMaker(
   };
 }
 
+/**
+ * Exact/canonical role matching. Prevents "Office Manager" from satisfying "Manager"
+ * or "CEO" via loose substring checks. Aliases (CEO ↔ Chief Executive Officer) still match.
+ */
 export function roleMatches(title: string, allowedRoles: string[]): boolean {
-  const normalizedTitle = title.trim().toLowerCase().replace(/[_-]+/g, ' ');
+  const titleKey = canonicalizeRole(title);
+  if (!titleKey) return false;
   return allowedRoles.some((role) => {
-    const normalizedRole = role.trim().toLowerCase().replace(/[_-]+/g, ' ');
-    if (!normalizedRole) return false;
-    if (normalizedTitle === normalizedRole) return true;
-    if (normalizedTitle.includes(normalizedRole) || normalizedRole.includes(normalizedTitle)) return true;
-    const compactTitle = normalizedTitle.replace(/\s+/g, '');
-    const compactRole = normalizedRole.replace(/\s+/g, '');
-    return compactTitle === compactRole || compactTitle.includes(compactRole) || compactRole.includes(compactTitle);
+    const roleKey = canonicalizeRole(role);
+    return Boolean(roleKey) && titleKey === roleKey;
   });
+}
+
+/** Prefer multi-word titles; keep qualified "* Manager" titles intact so they do not collapse to Manager. */
+export function extractDecisionMakerTitle(text: string): string | null {
+  const qualifiedManager = text.match(/\b((?:office|project|account|product|marketing|sales|hiring|property|community|store|branch|district|regional|assistant|general|operations|program|portfolio)\s+manager)\b/i);
+  if (qualifiedManager) {
+    const label = qualifiedManager[1].replace(/\s+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+    // "General Manager" is a supported executive role; other qualified managers stay as their full title.
+    return /^general manager$/i.test(label) ? 'General Manager' : label;
+  }
+  const title = TITLES.find(([pattern]) => pattern.test(text));
+  return title?.[1] ?? null;
+}
+
+const ROLE_CANONICAL: Record<string, string> = {
+  ceo: 'ceo',
+  'chief executive officer': 'ceo',
+  founder: 'founder',
+  'co founder': 'co-founder',
+  'co-founder': 'co-founder',
+  cofounder: 'co-founder',
+  president: 'president',
+  owner: 'owner',
+  'managing director': 'managing director',
+  'managing partner': 'managing partner',
+  'general manager': 'general manager',
+  'investment manager': 'investment manager',
+  principal: 'principal',
+  partner: 'partner',
+  director: 'director',
+  manager: 'manager',
+};
+
+export function canonicalizeRole(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  return ROLE_CANONICAL[normalized] ?? normalized;
 }
 
 function companyAssociated(companyName: string, text: string): boolean {

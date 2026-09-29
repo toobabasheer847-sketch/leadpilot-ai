@@ -1,5 +1,6 @@
 import { assessCategoryEvidence } from '../../search/category-evidence';
 import type { SearchPlan } from '../../search/types/search-plan.types';
+import { roleMatches } from '../../contacts/discovery/public-decision-maker';
 import { sameCountry } from '../../sources/location/location-evidence';
 import type { CriterionEvidence, CriterionResultCode, QualificationContext, QualificationCriteria, QualificationDecision } from '../types/qualification.types';
 
@@ -162,7 +163,7 @@ export function evaluateQualification(context: QualificationContext, criteria: Q
     const key = field.replace(/^(company|person)/, '').toLowerCase();
     const verificationRequired = criteria.verificationRequiredFields.some((item) => item.toLowerCase() === key || item.toLowerCase() === field.toLowerCase())
       || (criteria.verifiedEmailRequired && /email/i.test(key));
-    results.push(evaluateSpecificField(context, field, criteria.companyRequiredFields.includes(field) || criteria.personRequiredFields.includes(field), verificationRequired));
+    results.push(evaluateSpecificField(context, field, criteria.companyRequiredFields.includes(field) || criteria.personRequiredFields.includes(field), verificationRequired, criteria.requiredRoles));
   }
 
   for (const field of ['email', 'phone', 'linkedin', 'facebook', 'instagram', 'youtube'] as const) {
@@ -173,6 +174,7 @@ export function evaluateQualification(context: QualificationContext, criteria: Q
       results.push(evaluateContactField(context, field, criteria.requiredFields.includes(field), {
         personOnlyEmail: personOnly,
         verificationRequired: criteria.verifiedEmailRequired && field === 'email',
+        requiredRoles: criteria.requiredRoles,
       }));
     }
   }
@@ -257,10 +259,10 @@ export function evaluateQualification(context: QualificationContext, criteria: Q
   };
 }
 
-function evaluateSpecificField(context: QualificationContext, field: string, required: boolean, verificationRequired: boolean): CriterionEvidence {
+function evaluateSpecificField(context: QualificationContext, field: string, required: boolean, verificationRequired: boolean, requiredRoles: string[] = []): CriterionEvidence {
   const person = field.startsWith('person');
   const key = field.replace(/^(company|person)/, '').toLowerCase();
-  const contact = context.contacts[0];
+  const contact = preferredContact(context, requiredRoles);
   const value = person
     ? key === 'name' ? contact?.fullName ?? null
       : key === 'title' ? contact?.title ?? null
@@ -546,8 +548,9 @@ function evaluateDecisionMaker(context: QualificationContext, criteria: Qualific
     return evidence('decisionMaker', 'NOT_FOUND', true, 'No reliable decision-maker was found.', null, null);
   }
   const roleMatch = contacts.find((contact) => {
-    const haystack = `${contact.title ?? ''} ${contact.normalizedRole ?? ''}`.toLowerCase();
-    return criteria.requiredRoles.some((role) => haystack.includes(role.toLowerCase()) || haystack.includes(role.replace(/_/g, ' ').toLowerCase()));
+    const title = contact.title ?? '';
+    const normalized = contact.normalizedRole ?? '';
+    return criteria.requiredRoles.some((role) => roleMatches(title, [role]) || roleMatches(normalized, [role]));
   });
   if (!roleMatch) {
     return evidence('decisionMaker', 'NO_MATCH', true, `No decision-maker matched required roles (${criteria.requiredRoles.join(', ')}).`, {
@@ -582,9 +585,9 @@ function evaluateContactField(
   context: QualificationContext,
   field: string,
   required: boolean,
-  options: { personOnlyEmail?: boolean; verificationRequired?: boolean } = {},
+  options: { personOnlyEmail?: boolean; verificationRequired?: boolean; requiredRoles?: string[] } = {},
 ): CriterionEvidence {
-  const contact = context.contacts[0];
+  const contact = preferredContact(context, options.requiredRoles ?? []);
   const value = field === 'email'
     ? (options.personOnlyEmail ? contact?.email ?? null : contact?.email ?? context.company.email)
     : field === 'phone' ? contact?.phone ?? context.company.phone
@@ -603,6 +606,19 @@ function evaluateContactField(
     }
   }
   return evidence(field, 'MATCH', required, `${field} is available.`, { source: 'contact_record', sourceUrl: null, excerpt: value }, verification);
+}
+
+/** Prefer a contact whose title matches requested roles; never invent people. */
+function preferredContact(context: QualificationContext, requiredRoles: string[] = []) {
+  if (requiredRoles.length) {
+    const matched = context.contacts.find((contact) => {
+      const title = contact.title ?? '';
+      const normalized = contact.normalizedRole ?? '';
+      return requiredRoles.some((role) => roleMatches(title, [role]) || roleMatches(normalized, [role]));
+    });
+    if (matched) return matched;
+  }
+  return context.contacts[0];
 }
 
 function evaluateConflicts(context: QualificationContext, criteria: QualificationCriteria): CriterionEvidence | null {

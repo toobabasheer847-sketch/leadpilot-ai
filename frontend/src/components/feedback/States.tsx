@@ -38,7 +38,36 @@ export function Skeleton({ rows = 3 }: { rows?: number }) {
 }
 
 export function StatusBadge({ status }: { status: string | null | undefined }) {
-  const label = !status ? 'Not Found' : status === 'NOT_FOUND' ? 'Not Found' : status;
+  const label = verificationStatusLabel(status);
   const tone = label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   return <span className={`badge badge-${tone}`}>{label}</span>;
+}
+
+/** Human-readable verification statuses without redesigning the badge UI. */
+export function verificationStatusLabel(status: string | null | undefined): string {
+  if (!status) return 'Not Found';
+  switch (status.toUpperCase()) {
+    case 'NOT_FOUND':
+      return 'Not Found';
+    case 'FOUND':
+      return 'Found';
+    case 'UNVERIFIED':
+      return 'Unverified';
+    case 'SUPPORTED':
+      return 'Evidence Supported';
+    case 'VERIFIED':
+      return 'Verified';
+    case 'PARTIALLY_VERIFIED':
+      return 'Partially Verified';
+    case 'NEEDS_REVIEW':
+      return 'Needs Review';
+    case 'CONFLICT':
+      return 'Conflict';
+    case 'INVALID':
+      return 'Invalid';
+    case 'NOT_VERIFIED':
+      return 'Unverified';
+    default:
+      return status;
+  }
 }
