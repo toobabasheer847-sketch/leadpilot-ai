@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { SearchPlan } from '../search/types/search-plan.types';
 import { employeeSizeRequested, contactDiscoveryRequested, decisionMakerRolesForPlan } from '../search/search-plan.limits';
 import type { ClassificationCriteria } from '../ai/classification/types/classification.types';
+import { clampConcurrency, mapWithConcurrency } from '../common/concurrency';
 import { EnrichmentService } from '../enrichment/enrichment.service';
 import { ContactsService } from '../contacts/contacts.service';
 import { ClassificationService } from '../ai/classification/classification.service';
@@ -36,6 +38,8 @@ const KEY_TO_STAGE: Record<TrackedKey, WorkStage> = {
 
 @Injectable()
 export class PipelineStageRunner {
+  private readonly dispatchConcurrency: number;
+
   constructor(
     private readonly repository: PipelineRepository,
     private readonly enrichment: EnrichmentService,
@@ -49,7 +53,14 @@ export class PipelineStageRunner {
     private readonly contactQuality: ContactQualityService,
     private readonly employeeSize: EmployeeSizeQueue,
     private readonly jobs: PipelineJobInspector,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.dispatchConcurrency = clampConcurrency(
+      config.get<number>('enrichment.dispatchConcurrency') ?? config.get<number>('enrichment.concurrency'),
+      8,
+      32,
+    );
+  }
 
   tick(row: PipelineExecutionRow, progress: PipelineProgressState): Promise<StageTick> {
     switch (row.currentStage) {
@@ -63,9 +74,9 @@ export class PipelineStageRunner {
       case 'ENRICHMENT':
         return this.finishTracked(progress, 'enrichment', progress.jobs.websiteDiscovery ?? []);
       case 'DEEP_RESEARCH':
-        return this.tickTracked(row, progress, 'deepResearch');
+        return this.tickDeepResearchParallel(row, progress);
       case 'EMPLOYEE_SIZE':
-        return this.tickTracked(row, progress, 'employeeSize');
+        return this.tickEmployeeSize(row, progress);
       case 'DECISION_MAKER_DISCOVERY':
         return this.tickTracked(row, progress, 'decisionMakerDiscovery');
       case 'CONTACT_QUALITY':
@@ -126,6 +137,84 @@ export class PipelineStageRunner {
     return this.finishTracked(progress, key, progress.jobs[key] ?? []);
   }
 
+  /**
+   * After enrichment, deep research and employee-size are independent per company.
+   * Dispatch both together so a 300-company run does not wait serially for every deep-research job
+   * before starting employee-size work.
+   */
+  private async tickDeepResearchParallel(row: PipelineExecutionRow, progress: PipelineProgressState): Promise<StageTick> {
+    let next = progress;
+    if (!next.jobs.deepResearch) {
+      const [deepIds, sizeIds] = await Promise.all([
+        this.dispatch(row, 'deepResearch'),
+        this.dispatch(row, 'employeeSize'),
+      ]);
+      next = {
+        ...next,
+        jobs: { ...next.jobs, deepResearch: deepIds, employeeSize: sizeIds },
+        stages: {
+          ...next.stages,
+          deepResearch: 'RUNNING',
+          employeeSize: sizeIds.length > 0 ? 'RUNNING' : 'COMPLETED',
+        },
+      };
+      if (deepIds.length === 0 && sizeIds.length === 0) {
+        return this.move(withStageState(withStageState(next, 'deepResearch', 'COMPLETED'), 'employeeSize', 'COMPLETED'), 'deepResearch', 'DECISION_MAKER_DISCOVERY');
+      }
+      return { type: 'wait', progress: next };
+    }
+
+    const deepSettle = await this.jobs.settle(TRACKED_QUEUES.deepResearch, next.jobs.deepResearch ?? []);
+    if (deepSettle.state === 'PENDING') return { type: 'wait', progress: withStageState(next, 'deepResearch', 'RUNNING') };
+
+    const sizeIds = next.jobs.employeeSize ?? [];
+    let sizeSettle: Awaited<ReturnType<PipelineJobInspector['settle']>> = { state: 'COMPLETED' };
+    if (sizeIds.length > 0) {
+      sizeSettle = await this.jobs.settle(TRACKED_QUEUES.employeeSize, sizeIds);
+      if (sizeSettle.state === 'PENDING') {
+        const deepState = deepSettle.state === 'FAILED' || deepSettle.state === 'PARTIAL' ? 'PARTIAL' : 'COMPLETED';
+        return { type: 'wait', progress: withStageState(withStageState(next, 'deepResearch', deepState), 'employeeSize', 'RUNNING') };
+      }
+    }
+
+    if (deepSettle.state === 'FAILED' && (sizeSettle.state === 'FAILED' || sizeIds.length === 0)) {
+      const classified = classifyPipelineError(new Error(deepSettle.message));
+      return this.fail(next, 'DEEP_RESEARCH', classified.code, classified.message);
+    }
+
+    let updated = next;
+    if (deepSettle.state === 'FAILED') {
+      updated = { ...updated, failures: [...updated.failures, { stage: 'DEEP_RESEARCH', message: deepSettle.message }] };
+      updated = withStageState(updated, 'deepResearch', 'PARTIAL');
+    } else if (deepSettle.state === 'PARTIAL') {
+      updated = { ...updated, failures: [...updated.failures, { stage: 'DEEP_RESEARCH', message: deepSettle.message }] };
+      updated = withStageState(updated, 'deepResearch', 'PARTIAL');
+    } else {
+      updated = withStageState(updated, 'deepResearch', 'COMPLETED');
+    }
+
+    if (sizeSettle.state === 'FAILED') {
+      updated = { ...updated, failures: [...updated.failures, { stage: 'EMPLOYEE_SIZE', message: sizeSettle.message }] };
+      updated = withStageState(updated, 'employeeSize', 'PARTIAL');
+    } else if (sizeSettle.state === 'PARTIAL') {
+      updated = { ...updated, failures: [...updated.failures, { stage: 'EMPLOYEE_SIZE', message: sizeSettle.message }] };
+      updated = withStageState(updated, 'employeeSize', 'PARTIAL');
+    } else {
+      updated = withStageState(updated, 'employeeSize', sizeIds.length ? 'COMPLETED' : updated.stages.employeeSize);
+    }
+
+    // Skip the dedicated EMPLOYEE_SIZE stage — work already settled in parallel.
+    return this.move(updated, 'deepResearch', 'DECISION_MAKER_DISCOVERY');
+  }
+
+  private async tickEmployeeSize(row: PipelineExecutionRow, progress: PipelineProgressState): Promise<StageTick> {
+    // When deep-research parallel path already settled employee-size, advance immediately.
+    if (progress.jobs.employeeSize !== undefined && (progress.stages.employeeSize === 'COMPLETED' || progress.stages.employeeSize === 'PARTIAL')) {
+      return this.move(progress, 'employeeSize', nextWorkStage('EMPLOYEE_SIZE'), progress.stages.employeeSize === 'PARTIAL' ? 'PARTIAL' : 'COMPLETED');
+    }
+    return this.tickTracked(row, progress, 'employeeSize');
+  }
+
   private async finishTracked(progress: PipelineProgressState, key: TrackedKey, jobIds: string[]): Promise<StageTick> {
     const settlement = await this.jobs.settle(TRACKED_QUEUES[key], jobIds);
     if (settlement.state === 'PENDING') return { type: 'wait', progress: withStageState(progress, key, 'RUNNING') };
@@ -170,12 +259,15 @@ export class PipelineStageRunner {
     if (key === 'verification') return this.dispatchVerification(row);
     if (!row.searchExecutionId) return [];
     const companyIds = await this.repository.listCompanyIds(row.organizationId, row.searchExecutionId);
-    const jobIds: string[] = [];
-    for (const companyId of companyIds) {
-      const jobId = await this.dispatchCompany(row, key, companyId);
-      if (jobId) jobIds.push(jobId);
-    }
-    return jobIds;
+    const jobIds = await mapWithConcurrency(companyIds, this.dispatchConcurrency, async (companyId) => {
+      try {
+        return await this.dispatchCompany(row, key, companyId);
+      } catch {
+        // One company enqueue failure must not abort the remaining batch.
+        return null;
+      }
+    }, { maxConcurrency: 32 });
+    return jobIds.filter((jobId): jobId is string => Boolean(jobId));
   }
 
   private async planFor(row: PipelineExecutionRow): Promise<unknown> {
@@ -220,33 +312,43 @@ export class PipelineStageRunner {
   private async dispatchDeduplication(row: PipelineExecutionRow): Promise<string[]> {
     if (!row.searchExecutionId) return [];
     const companyIds = await this.repository.listCompanyIds(row.organizationId, row.searchExecutionId);
-    const jobIds: string[] = [];
-    for (const companyId of companyIds) {
-      const companyResult = await this.deduplication.enqueueCompany(companyId, row.organizationId, row.searchExecutionId);
-      if (companyResult.jobId) jobIds.push(String(companyResult.jobId));
-      const contacts = await this.repository.listContactIds(row.organizationId, [companyId]);
-      for (const contact of contacts) {
-        const contactResult = await this.deduplication.enqueueContact(contact.id, row.organizationId, row.searchExecutionId);
-        if (contactResult.jobId) jobIds.push(String(contactResult.jobId));
+    const batches = await mapWithConcurrency(companyIds, this.dispatchConcurrency, async (companyId) => {
+      const ids: string[] = [];
+      try {
+        const companyResult = await this.deduplication.enqueueCompany(companyId, row.organizationId, row.searchExecutionId);
+        if (companyResult.jobId) ids.push(String(companyResult.jobId));
+        const contacts = await this.repository.listContactIds(row.organizationId, [companyId]);
+        for (const contact of contacts) {
+          const contactResult = await this.deduplication.enqueueContact(contact.id, row.organizationId, row.searchExecutionId);
+          if (contactResult.jobId) ids.push(String(contactResult.jobId));
+        }
+      } catch {
+        // Continue remaining companies.
       }
-    }
-    return jobIds;
+      return ids;
+    }, { maxConcurrency: 32 });
+    return batches.flat();
   }
 
   private async dispatchVerification(row: PipelineExecutionRow): Promise<string[]> {
     if (!row.searchExecutionId) return [];
     const companyIds = await this.repository.listCompanyIds(row.organizationId, row.searchExecutionId);
-    const jobIds: string[] = [];
-    for (const companyId of companyIds) {
-      const companyResult = await this.verification.enqueueCompany(companyId, row.organizationId, false, row.searchExecutionId);
-      if (companyResult.status === 'QUEUED' && 'jobId' in companyResult && companyResult.jobId) jobIds.push(String(companyResult.jobId));
-      const contacts = await this.repository.listContactIds(row.organizationId, [companyId]);
-      for (const contact of contacts) {
-        const contactResult = await this.verification.enqueueContact(contact.id, row.organizationId, false, row.searchExecutionId);
-        if (contactResult.status === 'QUEUED' && 'jobId' in contactResult && contactResult.jobId) jobIds.push(String(contactResult.jobId));
+    const batches = await mapWithConcurrency(companyIds, this.dispatchConcurrency, async (companyId) => {
+      const ids: string[] = [];
+      try {
+        const companyResult = await this.verification.enqueueCompany(companyId, row.organizationId, false, row.searchExecutionId);
+        if (companyResult.status === 'QUEUED' && 'jobId' in companyResult && companyResult.jobId) ids.push(String(companyResult.jobId));
+        const contacts = await this.repository.listContactIds(row.organizationId, [companyId]);
+        for (const contact of contacts) {
+          const contactResult = await this.verification.enqueueContact(contact.id, row.organizationId, false, row.searchExecutionId);
+          if (contactResult.status === 'QUEUED' && 'jobId' in contactResult && contactResult.jobId) ids.push(String(contactResult.jobId));
+        }
+      } catch {
+        // Continue remaining companies.
       }
-    }
-    return jobIds;
+      return ids;
+    }, { maxConcurrency: 32 });
+    return batches.flat();
   }
 
   private async dispatchContactQuality(row: PipelineExecutionRow): Promise<string[]> {
@@ -254,15 +356,18 @@ export class PipelineStageRunner {
     const companyIds = await this.repository.listCompanyIds(row.organizationId, row.searchExecutionId);
     const contacts = await this.repository.listContactIds(row.organizationId, companyIds);
     const targetRoles = decisionMakerRolesForPlan(await this.planFor(row));
-    const jobIds: string[] = [];
-    for (const contact of contacts) {
-      const result = await this.contactQuality.enqueue(contact.companyId, contact.id, row.organizationId, {
-        searchExecutionId: row.searchExecutionId,
-        targetRoles,
-      });
-      if (result.jobId) jobIds.push(String(result.jobId));
-    }
-    return jobIds;
+    const jobIds = await mapWithConcurrency(contacts, this.dispatchConcurrency, async (contact) => {
+      try {
+        const result = await this.contactQuality.enqueue(contact.companyId, contact.id, row.organizationId, {
+          searchExecutionId: row.searchExecutionId,
+          targetRoles,
+        });
+        return result.jobId ? String(result.jobId) : null;
+      } catch {
+        return null;
+      }
+    }, { maxConcurrency: 32 });
+    return jobIds.filter((jobId): jobId is string => Boolean(jobId));
   }
 
   private move(progress: PipelineProgressState, completedKey: TrackedKey | 'sourceDiscovery' | 'companyPersistence' | 'search' | 'evidence', next: WorkStage | 'COMPLETED', outcome: 'COMPLETED' | 'PARTIAL' = 'COMPLETED'): StageTick {

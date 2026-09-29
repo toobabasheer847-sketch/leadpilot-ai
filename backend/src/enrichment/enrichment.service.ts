@@ -1,9 +1,11 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { and, eq } from 'drizzle-orm';
 import { DRIZZLE } from '../database/database.constants';
 import type { Database } from '../database/database.types';
 import { auditLogs, companies, pipelineJobs, searchExecutions, sourceRecords } from '../database/schema/schema';
 import type { SearchPlan } from '../search/types/search-plan.types';
+import { clampConcurrency, mapWithConcurrency } from '../common/concurrency';
 import { CompanyEnrichmentRepository } from './repositories/company-enrichment.repository';
 import { EvidenceRepository } from './repositories/evidence.repository';
 import { CompanySocialDiscoveryService } from './social/company-social-discovery.service';
@@ -17,6 +19,8 @@ import { createHash } from 'node:crypto';
 
 @Injectable()
 export class EnrichmentService {
+  private readonly dispatchConcurrency: number;
+
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly queue: CompanyEnrichmentQueue,
@@ -27,38 +31,43 @@ export class EnrichmentService {
     private readonly evidenceRepository: EvidenceRepository,
     private readonly usage: UsageService,
     private readonly providerObservability: ProviderObservabilityService,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.dispatchConcurrency = clampConcurrency(
+      config.get<number>('enrichment.dispatchConcurrency') ?? config.get<number>('enrichment.concurrency'),
+      8,
+      32,
+    );
+  }
 
   async enqueueCompanyEnrichment(executionId: string, organizationId: string): Promise<Array<{ companyId: string; status: 'QUEUED'; jobId: string }>> {
     const rows = await this.db.select({ companyId: sourceRecords.companyId }).from(sourceRecords)
       .where(and(eq(sourceRecords.searchExecutionId, executionId), eq(sourceRecords.organizationId, organizationId)))
       .groupBy(sourceRecords.companyId);
 
-    const enqueued: Array<{ companyId: string; status: 'QUEUED'; jobId: string }> = [];
-    for (const row of rows) {
-      if (!row.companyId) {
-        continue;
+    const companyIds = rows.map((row) => row.companyId).filter((id): id is string => Boolean(id));
+    const enqueued = await mapWithConcurrency(companyIds, this.dispatchConcurrency, async (companyId) => {
+      try {
+        const company = await this.companyRepository.findCompanyForOrganization(companyId, organizationId);
+        if (!company) return null;
+        const idempotencyKey = this.jobKey(company.id, organizationId, executionId);
+        const [existingJob] = await this.db.select({ bullJobId: pipelineJobs.bullJobId }).from(pipelineJobs).where(eq(pipelineJobs.bullJobId, idempotencyKey)).limit(1);
+        if (existingJob?.bullJobId) {
+          return { companyId: company.id, status: 'QUEUED' as const, jobId: existingJob.bullJobId };
+        }
+        const job = await this.queue.enqueue({ companyId: company.id, organizationId, searchExecutionId: executionId, idempotencyKey });
+        await this.db.insert(pipelineJobs).values({
+          searchExecutionId: executionId,
+          jobType: 'COMPANY_ENRICHMENT',
+          status: 'QUEUED',
+          bullJobId: idempotencyKey,
+        });
+        return { companyId: company.id, status: 'QUEUED' as const, jobId: String(job.id) };
+      } catch {
+        return null;
       }
-      const company = await this.companyRepository.findCompanyForOrganization(row.companyId, organizationId);
-      if (!company) {
-        continue;
-      }
-      const idempotencyKey = this.jobKey(company.id, organizationId, executionId);
-      const [existingJob] = await this.db.select({ bullJobId: pipelineJobs.bullJobId }).from(pipelineJobs).where(eq(pipelineJobs.bullJobId, idempotencyKey)).limit(1);
-      if (existingJob?.bullJobId) {
-        enqueued.push({ companyId: company.id, status: 'QUEUED', jobId: existingJob.bullJobId });
-        continue;
-      }
-      const job = await this.queue.enqueue({ companyId: company.id, organizationId, searchExecutionId: executionId, idempotencyKey });
-      await this.db.insert(pipelineJobs).values({
-        searchExecutionId: executionId,
-        jobType: 'COMPANY_ENRICHMENT',
-        status: 'QUEUED',
-        bullJobId: idempotencyKey,
-      });
-      enqueued.push({ companyId: company.id, status: 'QUEUED', jobId: String(job.id) });
-    }
-    return enqueued;
+    }, { maxConcurrency: 32 });
+    return enqueued.filter((item): item is { companyId: string; status: 'QUEUED'; jobId: string } => Boolean(item));
   }
 
   async enqueueForCompany(companyId: string, organizationId: string, searchExecutionId?: string | null): Promise<{ companyId: string; status: 'QUEUED'; jobId: string }> {

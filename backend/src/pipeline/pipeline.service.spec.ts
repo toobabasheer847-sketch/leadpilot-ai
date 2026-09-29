@@ -256,6 +256,7 @@ describe('pipeline orchestration', () => {
       {} as never, {} as never, {} as never, {} as never, {} as never,
       {} as never,
       jobs as never,
+      config({}),
     );
     const progress = initialProgress();
     progress.jobs.websiteDiscovery = ['oak', 'trinity', 'fidelity'];
@@ -393,5 +394,6 @@ function runnerWith(repository: Record<string, unknown>) {
     {} as never,
     {} as never,
     {} as never,
+    config({}),
   );
 }

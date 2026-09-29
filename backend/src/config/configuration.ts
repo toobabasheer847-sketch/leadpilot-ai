@@ -108,6 +108,12 @@ export default () => ({
     respectRobots: process.env.WEBSITE_RESPECT_ROBOTS !== 'false',
   },
 
+  /** Bounded company-level enrichment / research / contact worker concurrency (Phase L). */
+  enrichment: {
+    concurrency: parseInt(process.env.ENRICHMENT_CONCURRENCY ?? '4', 10),
+    dispatchConcurrency: parseInt(process.env.ENRICHMENT_DISPATCH_CONCURRENCY ?? process.env.ENRICHMENT_CONCURRENCY ?? '8', 10),
+  },
+
   deepResearch: {
     maxPages: parseInt(process.env.DEEP_RESEARCH_MAX_PAGES ?? '8', 10),
     maxDepth: parseInt(process.env.DEEP_RESEARCH_MAX_DEPTH ?? '1', 10),
@@ -353,6 +359,15 @@ export function validateEnvironment(config: Record<string, unknown>) {
   const websiteFetchConcurrency = Number(config.WEBSITE_FETCH_CONCURRENCY ?? 2);
   if (!Number.isInteger(websiteFetchConcurrency) || websiteFetchConcurrency < 1 || websiteFetchConcurrency > 10) {
     throw new Error('WEBSITE_FETCH_CONCURRENCY must be between 1 and 10');
+  }
+
+  const enrichmentConcurrency = Number(config.ENRICHMENT_CONCURRENCY ?? 4);
+  if (!Number.isInteger(enrichmentConcurrency) || enrichmentConcurrency < 1 || enrichmentConcurrency > 16) {
+    throw new Error('ENRICHMENT_CONCURRENCY must be an integer between 1 and 16');
+  }
+  const enrichmentDispatchConcurrency = Number(config.ENRICHMENT_DISPATCH_CONCURRENCY ?? enrichmentConcurrency);
+  if (!Number.isInteger(enrichmentDispatchConcurrency) || enrichmentDispatchConcurrency < 1 || enrichmentDispatchConcurrency > 32) {
+    throw new Error('ENRICHMENT_DISPATCH_CONCURRENCY must be an integer between 1 and 32');
   }
 
   const websiteMaxPagesPerCompany = Number(config.WEBSITE_MAX_PAGES_PER_COMPANY ?? 5);

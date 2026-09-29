@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import dns from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { AsyncSemaphore, clampConcurrency } from '../../common/concurrency';
 import { WebsiteFetchResult } from './website.types';
 import { WebsiteNormalizerService } from './website-normalizer.service';
 
@@ -20,6 +21,10 @@ export type WebsiteFetchFailureCategory =
 const FETCH_FAILURES = new Set<WebsiteFetchFailureCategory>([
   'FETCH_TIMEOUT', 'DNS_ERROR', 'TLS_ERROR', 'CONNECTION_ERROR', 'HTTP_4XX', 'HTTP_5XX', 'REDIRECT_ERROR', 'INVALID_CONTENT', 'BLOCKED', 'UNKNOWN_FETCH_ERROR',
 ]);
+
+/** Successful page bodies are reused within this window; not treated as independent evidence. */
+const FETCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const FETCH_CACHE_MAX_ENTRIES = 500;
 
 export function isWebsiteFetchFailure(reason: string): boolean {
   return FETCH_FAILURES.has(reason as WebsiteFetchFailureCategory);
@@ -60,6 +65,26 @@ function networkCode(error: unknown): string {
   return typeof code === 'string' ? code : '';
 }
 
+export interface WebsiteFetchStats {
+  requests: number;
+  cacheHits: number;
+  inFlightJoins: number;
+  duplicatesAvoided: number;
+  retries: number;
+  failures: number;
+  maxInFlight: number;
+}
+
+function cloneFetchResult(result: WebsiteFetchResult): WebsiteFetchResult {
+  return { ...result };
+}
+
+function delayWithJitter(baseMs: number): Promise<void> {
+  const jitter = Math.floor(Math.random() * Math.max(1, baseMs / 2));
+  const ms = Math.min(5000, Math.max(50, baseMs + jitter));
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 @Injectable()
 export class WebsiteFetchService {
   private readonly logger = new Logger(WebsiteFetchService.name);
@@ -69,6 +94,18 @@ export class WebsiteFetchService {
   private readonly retries: number;
   private readonly respectRobots: boolean;
   private readonly robotsRules = new Map<string, string[]>();
+  private readonly gate: AsyncSemaphore;
+  private readonly inFlight = new Map<string, Promise<WebsiteFetchResult>>();
+  private readonly cache = new Map<string, { expiresAt: number; result: WebsiteFetchResult }>();
+  private readonly stats: WebsiteFetchStats = {
+    requests: 0,
+    cacheHits: 0,
+    inFlightJoins: 0,
+    duplicatesAvoided: 0,
+    retries: 0,
+    failures: 0,
+    maxInFlight: 0,
+  };
 
   constructor(
     private readonly configService: ConfigService,
@@ -79,10 +116,61 @@ export class WebsiteFetchService {
     this.maxRedirects = configService.get<number>('website.maxRedirects', 5);
     this.retries = configService.get<number>('website.retries', 2);
     this.respectRobots = configService.get<boolean>('website.respectRobots', true);
+    this.gate = new AsyncSemaphore(clampConcurrency(configService.get<number>('website.fetchConcurrency'), 2, 10));
   }
 
-  async fetchPage(url: string, options?: { timeoutMs?: number; retries?: number }): Promise<WebsiteFetchResult> {
+  /** Observability counters for Phase L (process-local, not evidence). */
+  getStats(): WebsiteFetchStats {
+    return { ...this.stats, maxInFlight: Math.max(this.stats.maxInFlight, this.gate.maxRunning) };
+  }
+
+  resetStatsForTests() {
+    this.stats.requests = 0;
+    this.stats.cacheHits = 0;
+    this.stats.inFlightJoins = 0;
+    this.stats.duplicatesAvoided = 0;
+    this.stats.retries = 0;
+    this.stats.failures = 0;
+    this.stats.maxInFlight = 0;
+    this.cache.clear();
+    this.inFlight.clear();
+  }
+
+  async fetchPage(url: string, options?: { timeoutMs?: number; retries?: number; bypassCache?: boolean }): Promise<WebsiteFetchResult> {
+    const cacheKey = this.cacheKey(url);
+    if (!cacheKey) {
+      throw new WebsiteFetchError('Invalid website URL.', 'REDIRECT_ERROR');
+    }
+
+    if (!options?.bypassCache) {
+      const cached = this.cache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        this.stats.cacheHits += 1;
+        this.stats.duplicatesAvoided += 1;
+        return cloneFetchResult(cached.result);
+      }
+      const pending = this.inFlight.get(cacheKey);
+      if (pending) {
+        this.stats.inFlightJoins += 1;
+        this.stats.duplicatesAvoided += 1;
+        return cloneFetchResult(await pending);
+      }
+    }
+
+    const task = this.gate.run(() => this.fetchPageUncached(url, options));
+    this.inFlight.set(cacheKey, task);
+    try {
+      const result = await task;
+      if (!options?.bypassCache) this.remember(cacheKey, result);
+      return result;
+    } finally {
+      this.inFlight.delete(cacheKey);
+    }
+  }
+
+  private async fetchPageUncached(url: string, options?: { timeoutMs?: number; retries?: number }): Promise<WebsiteFetchResult> {
     const startedAt = Date.now();
+    this.stats.requests += 1;
     const normalized = this.requestUrl(this.publicHttpsUrl(url));
     if (!normalized) {
       throw new WebsiteFetchError('Invalid website URL.', 'REDIRECT_ERROR');
@@ -99,76 +187,103 @@ export class WebsiteFetchService {
       if (!(await this.isAllowedByRobots(safeUrl, timeoutMs))) throw new WebsiteFetchError('Website disallowed by robots.txt.', 'BLOCKED');
       currentUrl = safeUrl;
 
-    for (let attempt = 0; attempt <= retries; attempt += 1) {
-      try {
-        const response = await this.requestPage(currentUrl, timeoutMs);
-        lastStatus = response.statusCode;
-        lastType = response.headers['content-type'] ?? '';
+      for (let attempt = 0; attempt <= retries; attempt += 1) {
+        try {
+          const response = await this.requestPage(currentUrl, timeoutMs);
+          lastStatus = response.statusCode;
+          lastType = response.headers['content-type'] ?? '';
 
-        if (response.statusCode >= 300 && response.statusCode < 400) {
-          if (!response.headers.location || redirectCount >= this.maxRedirects) {
-            throw new WebsiteFetchError('Too many redirects for website fetch.', 'REDIRECT_ERROR');
+          if (response.statusCode >= 300 && response.statusCode < 400) {
+            if (!response.headers.location || redirectCount >= this.maxRedirects) {
+              throw new WebsiteFetchError('Too many redirects for website fetch.', 'REDIRECT_ERROR');
+            }
+
+            const nextUrl = this.resolveLocation(currentUrl, response.headers.location);
+            const validated = await this.validatePublicUrl(nextUrl);
+            if (!(await this.isAllowedByRobots(validated, timeoutMs))) throw new WebsiteFetchError('Website disallowed by robots.txt.', 'BLOCKED');
+            redirectCount += 1;
+            currentUrl = validated;
+            attempt -= 1;
+            continue;
           }
 
-          const nextUrl = this.resolveLocation(currentUrl, response.headers.location);
-          const validated = await this.validatePublicUrl(nextUrl);
-          if (!(await this.isAllowedByRobots(validated, timeoutMs))) throw new WebsiteFetchError('Website disallowed by robots.txt.', 'BLOCKED');
-          redirectCount += 1;
-          currentUrl = validated;
-          attempt -= 1;
-          continue;
-        }
+          if (response.statusCode === 401 || response.statusCode === 403) {
+            throw new WebsiteFetchError(`Website fetch failed with HTTP ${response.statusCode}.`, 'BLOCKED');
+          }
+          if (response.statusCode === 429) {
+            throw new WebsiteFetchError(`Website fetch failed with HTTP ${response.statusCode}.`, 'HTTP_4XX');
+          }
+          if (response.statusCode >= 500) {
+            throw new WebsiteFetchError(`Website fetch failed with HTTP ${response.statusCode}.`, 'HTTP_5XX');
+          }
+          if (response.statusCode < 200 || response.statusCode >= 400) {
+            throw new WebsiteFetchError(`Website fetch failed with HTTP ${response.statusCode}.`, 'HTTP_4XX');
+          }
 
-        if (response.statusCode === 401 || response.statusCode === 403) {
-          throw new WebsiteFetchError(`Website fetch failed with HTTP ${response.statusCode}.`, 'BLOCKED');
-        }
-        if (response.statusCode === 429) {
-          throw new WebsiteFetchError(`Website fetch failed with HTTP ${response.statusCode}.`, 'HTTP_4XX');
-        }
-        if (response.statusCode >= 500) {
-          throw new WebsiteFetchError(`Website fetch failed with HTTP ${response.statusCode}.`, 'HTTP_5XX');
-        }
-        if (response.statusCode < 200 || response.statusCode >= 400) {
-          throw new WebsiteFetchError(`Website fetch failed with HTTP ${response.statusCode}.`, 'HTTP_4XX');
-        }
+          const headerType = response.headers['content-type']?.toLowerCase() ?? '';
+          const contentType = this.isAllowedContentType(headerType) || !this.looksLikeHtml(response.body) ? headerType : 'text/html';
+          if (!this.isAllowedContentType(contentType)) {
+            throw new WebsiteFetchError(`Unsupported content type: ${contentType || 'unknown'}`, 'INVALID_CONTENT');
+          }
 
-        const headerType = response.headers['content-type']?.toLowerCase() ?? '';
-        const contentType = this.isAllowedContentType(headerType) || !this.looksLikeHtml(response.body) ? headerType : 'text/html';
-        if (!this.isAllowedContentType(contentType)) {
-          throw new WebsiteFetchError(`Unsupported content type: ${contentType || 'unknown'}`, 'INVALID_CONTENT');
-        }
+          const body = response.body;
+          if (Buffer.byteLength(body, 'utf8') > this.maxResponseBytes) {
+            throw new WebsiteFetchError('Website response exceeds configured maximum size.', 'INVALID_CONTENT');
+          }
 
-        const body = response.body;
-        if (Buffer.byteLength(body, 'utf8') > this.maxResponseBytes) {
-          throw new WebsiteFetchError('Website response exceeds configured maximum size.', 'INVALID_CONTENT');
+          return {
+            url: safeUrl,
+            finalUrl: currentUrl,
+            statusCode: response.statusCode,
+            contentType,
+            body,
+            title: this.extractTitle(body),
+            description: this.extractMetaDescription(body),
+            canonicalUrl: this.normalizer.normalizeUrl(this.extractCanonicalUrl(body)),
+            redirectCount,
+          };
+        } catch (error) {
+          if (this.shouldRetry(error) && attempt < retries) {
+            this.stats.retries += 1;
+            await delayWithJitter(250 * (2 ** attempt));
+            continue;
+          }
+          throw error;
         }
-
-        return {
-          url: safeUrl,
-          finalUrl: currentUrl,
-          statusCode: response.statusCode,
-          contentType,
-          body,
-          title: this.extractTitle(body),
-          description: this.extractMetaDescription(body),
-          canonicalUrl: this.normalizer.normalizeUrl(this.extractCanonicalUrl(body)),
-          redirectCount,
-        };
-      } catch (error) {
-        if (this.shouldRetry(error) && attempt < retries) {
-          continue;
-        }
-        throw error;
       }
-    }
 
-    throw new WebsiteFetchError('Website fetch failed after retries.', 'UNKNOWN_FETCH_ERROR');
+      throw new WebsiteFetchError('Website fetch failed after retries.', 'UNKNOWN_FETCH_ERROR');
     } catch (error) {
+      this.stats.failures += 1;
       const category = websiteFetchFailureCategory(error);
       const failure = error instanceof WebsiteFetchError ? error : new WebsiteFetchError(error instanceof Error ? error.message : 'Website fetch failed.', category, networkCode(error));
       this.logFailure(normalized, currentUrl, lastStatus, redirectCount, lastType, failure.category, timeoutMs, networkCode(error), Date.now() - startedAt);
       throw failure;
     }
+  }
+
+  private cacheKey(url: string): string | null {
+    const normalized = this.normalizer.normalizeUrl(this.publicHttpsUrl(url));
+    if (!normalized) return null;
+    try {
+      const parsed = new URL(normalized);
+      parsed.hash = '';
+      parsed.username = '';
+      parsed.password = '';
+      const path = parsed.pathname.replace(/\/+$/u, '') || '/';
+      return `${parsed.protocol}//${parsed.hostname.toLowerCase()}${path}${parsed.search}`.toLowerCase();
+    } catch {
+      return null;
+    }
+  }
+
+  private remember(key: string, result: WebsiteFetchResult) {
+    while (this.cache.size >= FETCH_CACHE_MAX_ENTRIES) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest === undefined) break;
+      this.cache.delete(oldest);
+    }
+    this.cache.set(key, { expiresAt: Date.now() + FETCH_CACHE_TTL_MS, result: cloneFetchResult(result) });
   }
 
   private async requestPage(url: string, timeoutMs = this.timeoutMs): Promise<{ statusCode: number; headers: Record<string, string>; body: string }> {

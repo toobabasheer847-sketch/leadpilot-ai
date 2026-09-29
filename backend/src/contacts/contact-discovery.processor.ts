@@ -1,6 +1,7 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Inject } from '@nestjs/common';
 import { Job } from 'bullmq';
+import { enrichmentWorkerConcurrency } from '../common/enrichment-concurrency';
 import { ContactsService } from './contacts.service';
 import { ContactDiscoveryJobData } from './contact-discovery.queue';
 import { DRIZZLE } from '../database/database.constants';
@@ -9,7 +10,7 @@ import { and, eq } from 'drizzle-orm';
 import { pipelineJobs } from '../database/schema/schema';
 import { StructuredLoggerService } from '../common/observability/structured-logger.service';
 
-@Processor('contact-discovery-queue', { concurrency: 2, lockDuration: 300_000, lockRenewTime: 15_000, stalledInterval: 30_000, maxStalledCount: 2 })
+@Processor('contact-discovery-queue', { concurrency: enrichmentWorkerConcurrency(), lockDuration: 300_000, lockRenewTime: 15_000, stalledInterval: 30_000, maxStalledCount: 2 })
 export class ContactDiscoveryProcessor extends WorkerHost {
   constructor(
     private readonly contactsService: ContactsService,

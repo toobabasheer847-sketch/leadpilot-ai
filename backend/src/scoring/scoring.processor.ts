@@ -1,9 +1,10 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
+import { enrichmentWorkerConcurrency } from '../common/enrichment-concurrency';
 import { ScoringService } from './scoring.service';
 import type { ScoringJobData } from './types/scoring.types';
 
-@Processor('lead-scoring-queue', { lockDuration: 180_000, lockRenewTime: 15_000, stalledInterval: 30_000, maxStalledCount: 2 })
+@Processor('lead-scoring-queue', { concurrency: enrichmentWorkerConcurrency(), lockDuration: 180_000, lockRenewTime: 15_000, stalledInterval: 30_000, maxStalledCount: 2 })
 export class ScoringProcessor extends WorkerHost {
   constructor(private readonly service: ScoringService) { super(); }
 

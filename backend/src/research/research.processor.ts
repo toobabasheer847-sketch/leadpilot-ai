@@ -1,11 +1,12 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { NotFoundException } from '@nestjs/common';
 import { Job, UnrecoverableError } from 'bullmq';
+import { enrichmentWorkerConcurrency } from '../common/enrichment-concurrency';
 import { StructuredLoggerService } from '../common/observability/structured-logger.service';
 import { DeepResearchJobData } from './research.queue';
 import { ResearchService } from './research.service';
 
-@Processor('lead-research-queue', { lockDuration: 300_000, lockRenewTime: 15_000, stalledInterval: 30_000, maxStalledCount: 2 })
+@Processor('lead-research-queue', { concurrency: enrichmentWorkerConcurrency(), lockDuration: 300_000, lockRenewTime: 15_000, stalledInterval: 30_000, maxStalledCount: 2 })
 export class ResearchProcessor extends WorkerHost {
   constructor(
     private readonly research: ResearchService,

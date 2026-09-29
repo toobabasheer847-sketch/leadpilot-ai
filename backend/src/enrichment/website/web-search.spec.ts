@@ -293,6 +293,7 @@ describe('web search website discovery', () => {
       { persistEvidence: jest.fn() } as never,
       { checkRequestRate: jest.fn(), recordUsage: jest.fn() } as never,
       { track: jest.fn() } as never,
+      { get: () => undefined } as never,
     );
     await expect(enrichment.runCompanyEnrichment({ companyId: 'company-1', organizationId: 'org-b' })).rejects.toBeInstanceOf(NotFoundException);
     expect(findCompanyForOrganization).toHaveBeenCalledWith('company-1', 'org-b');
@@ -354,6 +355,7 @@ describe('web search website discovery', () => {
       { persistEvidence } as never,
       { checkRequestRate: jest.fn(), recordUsage: jest.fn() } as never,
       { track: async (_provider: string, _operation: string, callback: () => Promise<{ value: unknown }>) => (await callback()).value } as never,
+      { get: () => undefined } as never,
     );
     const saved = await enrichment.runCompanyEnrichment({ companyId: 'company-1', organizationId: 'org-1' });
     expect(saved.website).toBe('https://existing.example/');
@@ -393,6 +395,7 @@ describe('web search website discovery', () => {
       { persistEvidence } as never,
       { checkRequestRate: jest.fn(), recordUsage: jest.fn() } as never,
       { track: async (_provider: string, _operation: string, callback: () => Promise<{ value: unknown }>) => (await callback()).value } as never,
+      { get: () => undefined } as never,
     );
     const kept = await verified.runCompanyEnrichment({ companyId: 'company-1', organizationId: 'org-1' });
     expect(kept.website).toBe('https://startupintros.com/trinity');
@@ -449,6 +452,7 @@ describe('web search website discovery', () => {
       { persistEvidence } as never,
       { checkRequestRate: jest.fn(), recordUsage: jest.fn() } as never,
       { track: async (_provider: string, _operation: string, callback: () => Promise<{ value: unknown }>) => (await callback()).value } as never,
+      { get: () => undefined } as never,
     );
     const saved = await enrichment.runCompanyEnrichment({ companyId: 'company-1', organizationId: 'org-1' });
     expect(saved).toMatchObject({ website: null, websiteStatus: 'NOT_FOUND' });
