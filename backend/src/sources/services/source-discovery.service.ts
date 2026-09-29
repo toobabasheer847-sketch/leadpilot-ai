@@ -26,6 +26,10 @@ import { isPersistableDiscoveryCandidate } from './discovery-candidate.gate';
 import { dedupeDiscoveryCandidates } from './discovery-fallback';
 import { DiscoveryExecutionCircuit } from './discovery-execution-circuit';
 import {
+  detectDiscoveryProviderCapabilities,
+  usableMapProviders,
+} from './discovery-provider-capabilities';
+import {
   aggregateDiscoveryFailure,
   classifyDiscoveryProviderOutcome,
   discoveryCompletedWithLimitationsMessage,
@@ -99,41 +103,86 @@ export class SourceDiscoveryService {
     let candidates = 0;
     let primaryError: string | null = null;
     const excludePool: NormalizedSourceResult[] = [];
+    const globalQueryBudget = discoveryQueryBudget(seek);
+    let globalQueriesIssued = 0;
 
-    for (const mapProvider of mapProviders) {
+    // Phase R — capability inventory at execution start (no secrets).
+    const capabilities = detectDiscoveryProviderCapabilities({
+      mapProviders,
+      webSearchConfigured: this.webSearchConfigured(),
+      includeWebSearch: !synthetic,
+    });
+    await this.audit(organizationId, executionId, 'DISCOVERY_PROVIDER_CAPABILITIES', undefined, {
+      summary: capabilities.summary,
+      available: capabilities.availableProviders.join(','),
+      unavailable: capabilities.unavailableProviders.join(','),
+      executionId,
+      organizationId,
+    });
+
+    for (const capability of capabilities.providers) {
+      if (capability.available) continue;
+      attempts.push({
+        provider: capability.provider,
+        outcome: 'CONFIGURATION_ERROR',
+        message: capability.reason,
+        resultsCount: 0,
+        acceptedCandidates: 0,
+        duplicatesRemoved: 0,
+        queriesRun: 0,
+        queriesSkipped: 0,
+        skipped: true,
+        errorCategory: 'CONFIGURATION_ERROR',
+      });
+      circuit.trip(capability.provider, 'CONFIGURATION_ERROR', capability.reason);
+    }
+
+    const runnableMaps = usableMapProviders(mapProviders, capabilities);
+
+    for (const mapProvider of runnableMaps) {
       if (candidates >= seek) break;
+      if (globalQueriesIssued >= globalQueryBudget && candidates > 0) break;
       const providerName = mapProvider.providerName();
       if (circuit.isUnavailable(providerName)) {
-        const remainingBudget = Math.max(0, discoveryQueryBudget(seek) - 0);
+        const remainingBudget = Math.max(0, globalQueryBudget - globalQueriesIssued);
         queriesSkipped += remainingBudget;
         attempts.push({
           provider: providerName,
           outcome: circuit.reason(providerName)?.outcome ?? 'FATAL_ERROR',
           message: circuit.reason(providerName)?.message ?? 'Provider unavailable for this execution.',
           resultsCount: 0,
+          acceptedCandidates: 0,
+          duplicatesRemoved: 0,
           queriesRun: 0,
           queriesSkipped: remainingBudget,
+          skipped: true,
+          errorCategory: circuit.reason(providerName)?.outcome ?? 'FATAL_ERROR',
         });
         continue;
       }
 
       let providerResults: NormalizedSourceResult[] = [];
+      let enrichmentSupplements: NormalizedSourceResult[] = [];
       let providerError: string | null = null;
       let errorCode: string | null = null;
       let queriesRun = 0;
+      let duplicatesRemoved = 0;
       try {
         const result = await this.providerObservability.track(providerName, 'DISCOVERY', async () => ({ value: await mapProvider.searchBusinesses(plan, context) }));
         const room = Math.max(0, acceptanceCap - candidates);
-        const { accepted, duplicatesRemoved } = dedupeDiscoveryCandidates(excludePool, result.results.slice(0, room));
-        if ((result.results.length ?? 0) > accepted.length + duplicatesRemoved) {
-          rejected += result.results.length - accepted.length - duplicatesRemoved;
+        const deduped = dedupeDiscoveryCandidates(excludePool, result.results.slice(0, room));
+        if ((result.results.length ?? 0) > deduped.accepted.length + deduped.duplicatesRemoved) {
+          rejected += result.results.length - deduped.accepted.length - deduped.duplicatesRemoved;
         }
-        providerResults = accepted;
+        providerResults = deduped.accepted;
+        enrichmentSupplements = deduped.supplements;
+        duplicatesRemoved = (result.duplicatesRemoved ?? 0) + deduped.duplicatesRemoved;
         providerError = result.providerError ?? null;
         rejected += result.rejectedCandidates ?? 0;
-        duplicates += (result.duplicatesRemoved ?? 0) + duplicatesRemoved;
+        duplicates += duplicatesRemoved;
         queriesRun = result.queriesRun ?? 0;
         providerQueries += queriesRun;
+        globalQueriesIssued += queriesRun;
       } catch (error) {
         if (!isRecoverableDiscoveryError(error)) throw error;
         providerError = error.message;
@@ -145,18 +194,36 @@ export class SourceDiscoveryService {
         error: providerError,
         errorCode,
       });
-      const budget = discoveryQueryBudget(seek);
       const skipped = providerError && DISCOVERY_PROVIDER_CIRCUIT_OUTCOMES.has(outcome)
-        ? Math.max(0, budget - queriesRun)
+        ? Math.max(0, globalQueryBudget - globalQueriesIssued)
         : 0;
       queriesSkipped += skipped;
+      let acceptedFromProvider = 0;
+      if (providerResults.length || enrichmentSupplements.length) {
+        excludePool.push(...providerResults);
+        mapDiscovered += providerResults.length;
+        // Supplements enrich empty fields via upsert; companyAlreadyInExecution keeps accepted count honest.
+        acceptedFromProvider = await this.persistResults(
+          organizationId,
+          executionId,
+          mapProvider.getSourceType(),
+          [...providerResults, ...enrichmentSupplements],
+          synthetic,
+          context,
+        );
+        candidates += acceptedFromProvider;
+      }
       attempts.push({
         provider: providerName,
         outcome,
         message: providerError,
         resultsCount: providerResults.length,
+        acceptedCandidates: acceptedFromProvider,
+        duplicatesRemoved,
         queriesRun,
         queriesSkipped: skipped,
+        skipped: false,
+        errorCategory: providerError ? outcome : null,
       });
       circuit.trip(providerName, outcome, providerError);
 
@@ -169,13 +236,6 @@ export class SourceDiscoveryService {
           executionId,
           organizationId,
         });
-      }
-
-      if (providerResults.length) {
-        excludePool.push(...providerResults);
-        mapDiscovered += providerResults.length;
-        const added = await this.persistResults(organizationId, executionId, mapProvider.getSourceType(), providerResults, synthetic, context);
-        candidates += added;
       }
 
       await this.auditProgress(organizationId, executionId, {
@@ -199,24 +259,42 @@ export class SourceDiscoveryService {
 
     // Stream web discovery + refill: persist each accepted chunk immediately so hanging SERP
     // queries cannot block COMPANIES_SAVED / WEBSITE_DISCOVERY forever.
-    if (!synthetic) {
+    const webUsable = !synthetic && capabilities.webSearchAvailable && !circuit.isUnavailable('web_search');
+    if (webUsable) {
       let round = 0;
       let webQueriesRun = 0;
       let webQueriesSkipped = 0;
       let webResultsCount = 0;
-      while (candidates < seek && round <= refillRounds && !circuit.isUnavailable('web_search')) {
+      let webDuplicates = 0;
+      let webAccepted = 0;
+      while (
+        candidates < seek
+        && round <= refillRounds
+        && !circuit.isUnavailable('web_search')
+        && globalQueriesIssued < globalQueryBudget
+      ) {
         const need = seek - candidates;
         const before = candidates;
-        const roundBudget = discoveryQueryBudget(need);
+        const roundBudget = Math.min(discoveryQueryBudget(need), Math.max(0, globalQueryBudget - globalQueriesIssued));
+        if (roundBudget <= 0) break;
         try {
           const extra = await this.webDiscovery.collect(plan, need, [...excludePool], round, {
             onBatch: async (batch) => {
-              const { accepted, duplicatesRemoved } = dedupeDiscoveryCandidates(excludePool, batch);
+              const { accepted, duplicatesRemoved, supplements } = dedupeDiscoveryCandidates(excludePool, batch);
               duplicates += duplicatesRemoved;
-              if (!accepted.length) return;
+              webDuplicates += duplicatesRemoved;
+              if (!accepted.length && !supplements.length) return;
               excludePool.push(...accepted);
-              const added = await this.persistResults(organizationId, executionId, 'web_search', accepted, false, context);
+              const added = await this.persistResults(
+                organizationId,
+                executionId,
+                'web_search',
+                [...accepted, ...supplements],
+                false,
+                context,
+              );
               candidates += added;
+              webAccepted += added;
               webDiscovered += accepted.length;
               webResultsCount += accepted.length;
               await this.auditProgress(organizationId, executionId, {
@@ -240,20 +318,14 @@ export class SourceDiscoveryService {
           const run = extra.queriesRun ?? 0;
           webQueriesRun += run;
           providerQueries += run;
+          globalQueriesIssued += run;
           rejected += extra.rejected;
           if (extra.providerError) {
             webError = extra.providerError;
             const outcome = classifyDiscoveryProviderOutcome({ resultsCount: webResultsCount, error: webError });
-            const skipped = Math.max(0, roundBudget - run);
+            const skipped = Math.max(0, roundBudget - run) + Math.max(0, refillRounds - round) * roundBudget;
             webQueriesSkipped += skipped;
             queriesSkipped += skipped;
-            // Remaining refill rounds are not issued once the web circuit opens.
-            const remainingRounds = Math.max(0, refillRounds - round);
-            if (remainingRounds > 0) {
-              const skippedRounds = remainingRounds * roundBudget;
-              webQueriesSkipped += skippedRounds;
-              queriesSkipped += skippedRounds;
-            }
             circuit.trip('web_search', outcome, webError);
             await this.audit(organizationId, executionId, 'SOURCE_PROVIDER_PARTIAL', undefined, {
               provider: 'web_search',
@@ -280,29 +352,20 @@ export class SourceDiscoveryService {
         round += 1;
       }
 
-      if (webQueriesRun > 0 || webError || webResultsCount > 0 || (!circuit.isUnavailable('web_search') && mapProviders.length > 0)) {
+      if (webQueriesRun > 0 || webError || webResultsCount > 0 || candidates < seek) {
         const webOutcome = classifyDiscoveryProviderOutcome({ resultsCount: webResultsCount, error: webError });
-        // Record web even when never called only if we intentionally skipped due to circuit before any attempt.
-        if (webQueriesRun > 0 || webError || webResultsCount > 0) {
-          attempts.push({
-            provider: 'web_search',
-            outcome: webOutcome,
-            message: webError,
-            resultsCount: webResultsCount,
-            queriesRun: webQueriesRun,
-            queriesSkipped: webQueriesSkipped,
-          });
-        } else if (candidates < seek) {
-          // Web was eligible but produced nothing without error (honest empty / no progress).
-          attempts.push({
-            provider: 'web_search',
-            outcome: 'EMPTY',
-            message: null,
-            resultsCount: 0,
-            queriesRun: webQueriesRun,
-            queriesSkipped: webQueriesSkipped,
-          });
-        }
+        attempts.push({
+          provider: 'web_search',
+          outcome: webOutcome,
+          message: webError,
+          resultsCount: webResultsCount,
+          acceptedCandidates: webAccepted,
+          duplicatesRemoved: webDuplicates,
+          queriesRun: webQueriesRun,
+          queriesSkipped: webQueriesSkipped,
+          skipped: false,
+          errorCategory: webError ? webOutcome : null,
+        });
       }
     }
 
@@ -336,6 +399,7 @@ export class SourceDiscoveryService {
       shortfall: String(shortfall),
       remainingTarget: String(remaining),
       providerQueries: String(providerQueries),
+      queriesIssued: String(globalQueriesIssued),
       queriesSkipped: String(queriesSkipped),
       providersAttempted: String(progress.providersAttempted),
       providersSucceeded: String(progress.providersSucceeded),
@@ -343,7 +407,9 @@ export class SourceDiscoveryService {
       providersUnavailable: String(progress.providersUnavailable),
       providersQuotaExceeded: String(progress.providersQuotaExceeded),
       providersFailed: String(progress.providersFailed),
+      providersSkipped: String(progress.providersSkipped),
       providerStatusSummary: progress.providerStatusSummary,
+      capabilitySummary: capabilities.summary,
       discoveryStatus: shortfall > 0
         ? (limitations ? 'COMPLETED_WITH_SHORTFALL' : 'SHORTFALL')
         : 'COMPLETE',
@@ -368,6 +434,7 @@ export class SourceDiscoveryService {
       duplicatesRemoved: duplicates,
       shortfall,
       providerQueries,
+      queriesIssued: globalQueriesIssued,
       queriesSkipped,
       providersAttempted: progress.providersAttempted,
       providersSucceeded: progress.providersSucceeded,
@@ -375,12 +442,21 @@ export class SourceDiscoveryService {
       providersUnavailable: progress.providersUnavailable,
       providersQuotaExceeded: progress.providersQuotaExceeded,
       providersFailed: progress.providersFailed,
+      providersSkipped: progress.providersSkipped,
       providerStatusSummary: progress.providerStatusSummary,
+      capabilitySummary: capabilities.summary,
       providerAttempts: attempts,
       primaryError,
       webError,
       limitationsMessage: limitations,
     };
+  }
+
+  /** Phase R — web search configured check without exposing secrets. */
+  private webSearchConfigured(): boolean {
+    const provider = (this.config.get<string>('webSearch.provider') ?? 'tavily').trim();
+    if (provider === 'fake' || provider === 'fake_web_search') return true;
+    return Boolean(this.config.get<string>('webSearch.tavilyApiKey')?.trim());
   }
 
   async listCandidates(executionId: string, organizationId: string, page: number, limit: number) {
@@ -499,7 +575,14 @@ export class SourceDiscoveryService {
         const company = await this.upsertCompany(organizationId, provider, normalized);
         const alreadyLinked = await this.companyAlreadyInExecution(organizationId, executionId, company.id);
         const sourceRecord = await this.upsertSourceRecord(organizationId, executionId, company.id, provider, normalized, context);
-        if (!synthetic) await this.createEvidence(company.id, sourceRecord.id, normalized, provider);
+        // Cross-provider rediscovery fills empty fields (upsert) but is not independent verification evidence.
+        if (!synthetic) {
+          await this.createEvidence(company.id, sourceRecord.id, normalized, provider, {
+            independentVerification: false,
+            crossProviderSupplement: alreadyLinked,
+            role: 'discovery_candidate',
+          });
+        }
         if (!alreadyLinked) accepted += 1;
       } catch (error) {
         await this.audit(organizationId, executionId, 'SOURCE_RESULT_REJECTED', undefined, { reason: error instanceof Error ? error.name : 'unknown' });
@@ -561,12 +644,38 @@ export class SourceDiscoveryService {
     return record;
   }
 
-  private async createEvidence(companyId: string, sourceRecordId: string, result: ReturnType<SourceNormalizerService['normalize']>, provider: string) {
+  private async createEvidence(
+    companyId: string,
+    sourceRecordId: string,
+    result: ReturnType<SourceNormalizerService['normalize']>,
+    provider: string,
+    flags: { independentVerification: boolean; crossProviderSupplement: boolean; role: string } = {
+      independentVerification: false,
+      crossProviderSupplement: false,
+      role: 'discovery_candidate',
+    },
+  ) {
     const snippet = typeof result.rawData?.snippet === 'string' ? result.rawData.snippet : '';
     const facts = [result.name, result.website, result.phone, result.email, result.category, result.address?.addressLine1, result.address?.city, result.address?.state, result.address?.postalCode, snippet].filter(Boolean).join(' | ');
     if (!facts) return;
     const locationEvidence = result.rawData?.locationEvidence;
-    await this.db.insert(leadEvidence).values({ companyId, sourceRecordId, evidenceType: 'PROVIDER_RESULT', sourceUrl: result.sourceUrl, evidenceText: facts, evidenceTimestamp: new Date(), provider, metadata: { externalId: result.externalId, verified: false, ...(locationEvidence ? { locationEvidence } : {}) } });
+    await this.db.insert(leadEvidence).values({
+      companyId,
+      sourceRecordId,
+      evidenceType: 'PROVIDER_RESULT',
+      sourceUrl: result.sourceUrl,
+      evidenceText: facts,
+      evidenceTimestamp: new Date(),
+      provider,
+      metadata: {
+        externalId: result.externalId,
+        verified: false,
+        independentVerification: flags.independentVerification,
+        crossProviderSupplement: flags.crossProviderSupplement,
+        role: flags.role,
+        ...(locationEvidence ? { locationEvidence } : {}),
+      },
+    });
   }
 
   private async auditProgress(

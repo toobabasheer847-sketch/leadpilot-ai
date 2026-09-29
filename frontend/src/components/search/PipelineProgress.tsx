@@ -32,6 +32,7 @@ const counterLabels: Array<[keyof PipelineView['counters'], string]> = [
   ['discoveryProvidersAttempted', 'Providers attempted'],
   ['discoveryProvidersSucceeded', 'Providers succeeded'],
   ['discoveryProvidersFailed', 'Providers failed'],
+  ['discoveryProvidersSkipped', 'Providers skipped'],
   ['discoveryProviderStatusSummary', 'Provider status'],
   ['companySizeRequested', 'Company size requested'],
   ['websitesFound', 'Websites found'],

@@ -43,8 +43,15 @@ export interface DiscoveryProviderAttempt {
   outcome: DiscoveryProviderOutcome;
   message: string | null;
   resultsCount: number;
+  /** Unique candidates accepted from this provider after cross-provider dedupe. */
+  acceptedCandidates?: number;
+  /** Duplicates removed against companies already discovered in this execution. */
+  duplicatesRemoved?: number;
   queriesRun: number;
   queriesSkipped: number;
+  /** True when the provider was not invoked (config missing or circuit already open). */
+  skipped?: boolean;
+  errorCategory?: DiscoveryProviderOutcome | null;
 }
 
 export function providerDisplayName(provider: string): string {
@@ -190,8 +197,11 @@ export function discoveryProgressSummary(attempts: DiscoveryProviderAttempt[]): 
   providersUnavailable: number;
   providersQuotaExceeded: number;
   providersFailed: number;
+  providersSkipped: number;
   queriesAttempted: number;
   queriesSkipped: number;
+  acceptedCandidates: number;
+  duplicatesRemoved: number;
   providerStatusLines: string[];
   providerStatusSummary: string;
 } {
@@ -207,8 +217,11 @@ export function discoveryProgressSummary(attempts: DiscoveryProviderAttempt[]): 
     || a.outcome === 'RATE_LIMITED'
   )).length;
   const providersFailed = attempts.filter((a) => DISCOVERY_PROVIDER_FAILURE_OUTCOMES.has(a.outcome)).length;
+  const providersSkipped = attempts.filter((a) => a.skipped).length;
   const queriesAttempted = attempts.reduce((sum, a) => sum + a.queriesRun, 0);
   const queriesSkipped = attempts.reduce((sum, a) => sum + a.queriesSkipped, 0);
+  const acceptedCandidates = attempts.reduce((sum, a) => sum + (a.acceptedCandidates ?? 0), 0);
+  const duplicatesRemoved = attempts.reduce((sum, a) => sum + (a.duplicatesRemoved ?? 0), 0);
   const providerStatusLines = attempts.map((a) => `${providerDisplayName(a.provider)} — ${outcomeLabel(a.outcome)}`);
   return {
     providersAttempted,
@@ -217,8 +230,11 @@ export function discoveryProgressSummary(attempts: DiscoveryProviderAttempt[]): 
     providersUnavailable,
     providersQuotaExceeded,
     providersFailed,
+    providersSkipped,
     queriesAttempted,
     queriesSkipped,
+    acceptedCandidates,
+    duplicatesRemoved,
     providerStatusLines,
     providerStatusSummary: providerStatusLines.join(' | '),
   };

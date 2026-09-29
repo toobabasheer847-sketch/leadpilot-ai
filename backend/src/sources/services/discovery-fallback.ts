@@ -63,21 +63,28 @@ export function attemptsFromLegacy(
 export function dedupeDiscoveryCandidates(
   existing: NormalizedSourceResult[],
   incoming: NormalizedSourceResult[],
-): { accepted: NormalizedSourceResult[]; duplicatesRemoved: number } {
+): {
+  accepted: NormalizedSourceResult[];
+  duplicatesRemoved: number;
+  /** Phase R — duplicates kept for empty-field enrichment; not counted as new candidates. */
+  supplements: NormalizedSourceResult[];
+} {
   const seen = new Set<string>();
   for (const result of existing) discoveryIdentityKeys(result).forEach((key) => seen.add(key));
   const accepted: NormalizedSourceResult[] = [];
+  const supplements: NormalizedSourceResult[] = [];
   let duplicatesRemoved = 0;
   for (const result of incoming) {
     const keys = discoveryIdentityKeys(result);
     if (keys.some((key) => seen.has(key))) {
       duplicatesRemoved += 1;
+      supplements.push(result);
       continue;
     }
     keys.forEach((key) => seen.add(key));
     accepted.push(result);
   }
-  return { accepted, duplicatesRemoved };
+  return { accepted, duplicatesRemoved, supplements };
 }
 
 export function discoveryIdentityKeys(result: Pick<NormalizedSourceResult, 'externalId' | 'name' | 'website' | 'address'>): string[] {

@@ -50,6 +50,7 @@ const pipeline: PipelineView = {
     discoveryProvidersAttempted: null,
     discoveryProvidersSucceeded: null,
     discoveryProvidersFailed: null,
+    discoveryProvidersSkipped: null,
     discoveryQueriesSkipped: null,
     companySizeRequested: false,
     websitesFound: 1,

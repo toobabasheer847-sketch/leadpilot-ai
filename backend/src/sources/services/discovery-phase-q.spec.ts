@@ -73,6 +73,8 @@ function buildService(input: {
   const config = {
     get: (key: string, fallback?: unknown) => {
       if (key === 'sourceProvider.discoveryRefillRounds') return input.refillRounds ?? 0;
+      if (key === 'webSearch.tavilyApiKey') return 'test-key';
+      if (key === 'webSearch.provider') return 'tavily';
       return fallback ?? 0;
     },
   };

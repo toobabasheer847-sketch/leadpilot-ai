@@ -119,6 +119,7 @@ export class PipelineRepository {
       discoveryProvidersAttempted: discovery.providersAttempted,
       discoveryProvidersSucceeded: discovery.providersSucceeded,
       discoveryProvidersFailed: discovery.providersFailed,
+      discoveryProvidersSkipped: discovery.providersSkipped,
       discoveryQueriesSkipped: discovery.queriesSkipped,
       companySizeRequested: employeeSizeRequested(execution.plan),
       websitesFound,
@@ -252,6 +253,7 @@ export class PipelineRepository {
     providersAttempted: number | null;
     providersSucceeded: number | null;
     providersFailed: number | null;
+    providersSkipped: number | null;
     queriesSkipped: number | null;
   }> {
     const [row] = await this.db.select({ metadata: auditLogs.metadata }).from(auditLogs).where(and(
@@ -277,6 +279,7 @@ export class PipelineRepository {
       providersAttempted: numberOrNull('providersAttempted'),
       providersSucceeded: numberOrNull('providersSucceeded'),
       providersFailed: numberOrNull('providersFailed'),
+      providersSkipped: numberOrNull('providersSkipped'),
       queriesSkipped: numberOrNull('queriesSkipped'),
     };
   }

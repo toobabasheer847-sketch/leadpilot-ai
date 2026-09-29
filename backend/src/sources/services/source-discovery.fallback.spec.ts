@@ -50,7 +50,11 @@ function buildService(input: {
     collect: input.collect ?? jest.fn().mockResolvedValue({ results: [], rejected: 0, providerError: null }),
   };
   const config = {
-    get: (_key: string, fallback?: unknown) => fallback ?? 4,
+    get: (_key: string, fallback?: unknown) => {
+      if (_key === 'webSearch.tavilyApiKey') return 'test-key';
+      if (_key === 'webSearch.provider') return 'tavily';
+      return fallback ?? 4;
+    },
   };
   const service = new SourceDiscoveryService(
     {} as never,

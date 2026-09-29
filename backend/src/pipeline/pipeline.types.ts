@@ -61,6 +61,7 @@ export interface PipelineCounters {
   discoveryProvidersAttempted: number | null;
   discoveryProvidersSucceeded: number | null;
   discoveryProvidersFailed: number | null;
+  discoveryProvidersSkipped: number | null;
   discoveryQueriesSkipped: number | null;
   companySizeRequested: boolean | null;
   websitesFound: number | null;
