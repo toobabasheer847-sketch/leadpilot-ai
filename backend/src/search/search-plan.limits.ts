@@ -72,6 +72,17 @@ export function countShortfall(
   return Math.max(0, explicit - Math.max(0, candidates));
 }
 
+/**
+ * Honest shortfall of QUALIFIED leads vs the user-stated count.
+ * Requested N never means N qualified — this metric keeps that distinction visible.
+ */
+export function qualifiedShortfall(
+  plan: Pick<SearchPlan, 'requestedCount' | 'maxResults' | 'countIntent'> | null | undefined,
+  qualifiedCount: number,
+): number {
+  return countShortfall(plan, qualifiedCount);
+}
+
 /** Distinct web queries allowed for a requested count. Scales past the old fixed 80-query ceiling. */
 export function discoveryQueryBudget(requestedCount: number): number {
   const count = Math.max(1, Math.trunc(requestedCount));

@@ -27,6 +27,7 @@ import { UsageService } from '../usage/usage.service';
 import { evaluateQualification, normalizeCriteria, QUALIFICATION_VERSION } from './engine/qualification-engine';
 import { QualificationQueue } from './qualification.queue';
 import type { QualificationJobData } from './types/qualification.types';
+import { explicitResultCount, qualifiedShortfall, resolveCountIntent } from '../search/search-plan.limits';
 
 @Injectable()
 export class QualificationService {
@@ -72,7 +73,8 @@ export class QualificationService {
 
   private async runExecution(data: QualificationJobData) {
     const execution = await this.findExecution(data.searchExecutionId, data.organizationId);
-    const criteria = normalizeCriteria(this.asPlan(execution.structuredPlan));
+    const plan = this.asPlan(execution.structuredPlan);
+    const criteria = normalizeCriteria(plan);
     const companyIds = await this.companyIdsForExecution(data.searchExecutionId, data.organizationId);
     const stored = [];
     for (const companyId of companyIds) {
@@ -81,6 +83,12 @@ export class QualificationService {
       const row = await this.persist(data, companyId, context.contacts[0]?.id ?? null, decision);
       if (row) stored.push(row);
     }
+    const qualified = stored.filter((row) => row.status === 'QUALIFIED').length;
+    const notQualified = stored.filter((row) => row.status === 'NOT_QUALIFIED').length;
+    const needsReview = stored.filter((row) => row.status === 'NEEDS_REVIEW').length;
+    const requested = explicitResultCount(plan) ?? null;
+    const countIntent = resolveCountIntent(plan) ?? null;
+    const shortfall = requested === null ? 0 : qualifiedShortfall(plan, qualified);
     await this.usage.recordUsage({
       organizationId: data.organizationId,
       operation: 'QUALIFICATION',
@@ -90,12 +98,27 @@ export class QualificationService {
       units: Math.max(1, stored.length || 1),
       status: 'COMPLETED',
       metadata: {
-        qualified: stored.filter((row) => row.status === 'QUALIFIED').length,
-        notQualified: stored.filter((row) => row.status === 'NOT_QUALIFIED').length,
-        needsReview: stored.filter((row) => row.status === 'NEEDS_REVIEW').length,
+        requested,
+        countIntent,
+        persisted: companyIds.length,
+        qualified,
+        notQualified,
+        needsReview,
+        shortfall,
       },
     });
-    await this.audit(data.organizationId, data.searchExecutionId, 'LEAD_QUALIFICATION_COMPLETED', { count: stored.length });
+    await this.audit(data.organizationId, data.searchExecutionId, 'LEAD_QUALIFICATION_COMPLETED', {
+      count: stored.length,
+      requested,
+      countIntent,
+      discovered: companyIds.length,
+      persisted: companyIds.length,
+      qualified,
+      notQualified,
+      needsReview,
+      shortfall,
+      // Never claim requested == qualified; shortfall stays honest when providers lack evidence.
+    });
     return stored;
   }
 

@@ -205,6 +205,7 @@ export function emptyCounters(): PipelineCounters {
     companiesPersisted: null,
     companiesProcessed: null,
     requestedCount: null,
+    countIntent: null,
     discoveryShortfall: null,
     discoveryRejected: null,
     discoveryDuplicatesRemoved: null,
@@ -225,6 +226,7 @@ export function emptyCounters(): PipelineCounters {
     conflictsFound: null,
     duplicatesFound: null,
     qualifiedLeads: null,
+    qualifiedShortfall: null,
     needsReview: null,
     rejected: null,
   };
@@ -237,6 +239,7 @@ export function maskCounters(stages: StageMap, counts: PipelineCounters): Pipeli
     companiesPersisted: ready('companyPersistence') ? counts.companiesPersisted : null,
     companiesProcessed: ready('companyPersistence') ? counts.companiesProcessed : null,
     requestedCount: counts.requestedCount,
+    countIntent: counts.countIntent,
     discoveryShortfall: ready('sourceDiscovery') ? counts.discoveryShortfall : null,
     discoveryRejected: ready('sourceDiscovery') ? counts.discoveryRejected : null,
     discoveryDuplicatesRemoved: ready('sourceDiscovery') ? counts.discoveryDuplicatesRemoved : null,
@@ -257,6 +260,7 @@ export function maskCounters(stages: StageMap, counts: PipelineCounters): Pipeli
     conflictsFound: ready('verification') ? counts.conflictsFound : null,
     duplicatesFound: ready('deduplication') ? counts.duplicatesFound : null,
     qualifiedLeads: ready('qualification') ? counts.qualifiedLeads : null,
+    qualifiedShortfall: ready('qualification') ? counts.qualifiedShortfall : null,
     needsReview: ready('qualification') ? counts.needsReview : null,
     rejected: ready('qualification') ? counts.rejected : null,
   };

@@ -27,6 +27,8 @@ export interface PipelineCounters {
   companiesPersisted: number | null;
   companiesProcessed: number | null;
   requestedCount: number | null;
+  /** SearchPlan countIntent: exact | maximum | minimum | approximate */
+  countIntent: string | null;
   discoveryShortfall: number | null;
   discoveryRejected: number | null;
   discoveryDuplicatesRemoved: number | null;
@@ -47,6 +49,8 @@ export interface PipelineCounters {
   conflictsFound: number | null;
   duplicatesFound: number | null;
   qualifiedLeads: number | null;
+  /** requestedCount − qualifiedLeads when a count was requested (never invents leads). */
+  qualifiedShortfall: number | null;
   needsReview: number | null;
   rejected: number | null;
 }

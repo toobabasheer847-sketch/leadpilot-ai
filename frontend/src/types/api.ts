@@ -97,6 +97,7 @@ export interface PipelineCounters {
   companiesPersisted: number | null;
   companiesProcessed: number | null;
   requestedCount: number | null;
+  countIntent: string | null;
   discoveryShortfall: number | null;
   discoveryRejected: number | null;
   discoveryDuplicatesRemoved: number | null;
@@ -117,6 +118,7 @@ export interface PipelineCounters {
   conflictsFound: number | null;
   duplicatesFound: number | null;
   qualifiedLeads: number | null;
+  qualifiedShortfall: number | null;
   needsReview: number | null;
   rejected: number | null;
 }
@@ -247,6 +249,27 @@ export interface LeadRecord {
     status: string;
     score?: number | null;
     scoreBand?: string | null;
+    /** Normalized SearchPlan criteria used for this decision (traceability). */
+    criteriaSnapshot?: {
+      industry?: string[];
+      leadTypes?: string[];
+      locations?: unknown[];
+      companySize?: unknown;
+      requiredRoles?: string[];
+      requiredFields?: string[];
+      optionalFields?: string[];
+      companyRequiredFields?: string[];
+      personRequiredFields?: string[];
+      socialPlatforms?: string[];
+      personEmailRequired?: boolean;
+      companyEmailRequired?: boolean;
+      verifiedEmailRequired?: boolean;
+      exclusions?: string[];
+      requestedCount?: number;
+      countIntent?: string;
+      minimumScore?: number;
+      [key: string]: unknown;
+    } | null;
     criterionResults?: Array<{ criterion: string; result: string; message?: string; required?: boolean }>;
     qualifiedReasons?: string[];
     disqualifiedReasons?: string[];

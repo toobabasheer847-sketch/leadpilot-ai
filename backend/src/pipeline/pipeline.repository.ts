@@ -4,7 +4,7 @@ import { DRIZZLE } from '../database/database.constants';
 import type { Database } from '../database/database.types';
 import { auditLogs, companies, companyContacts, companySocialProfiles, leadDuplicates, leadEvidence, leadQualifications, leadVerifications, pipelineExecutions, researchExecutions, searchExecutions, sourceRecords, verificationConflicts } from '../database/schema/schema';
 import type { PipelineCounters } from './pipeline.types';
-import { employeeSizeRequested, explicitResultCount } from '../search/search-plan.limits';
+import { employeeSizeRequested, explicitResultCount, qualifiedShortfall, resolveCountIntent } from '../search/search-plan.limits';
 import type { SearchPlan } from '../search/types/search-plan.types';
 
 export type PipelineExecutionRow = typeof pipelineExecutions.$inferSelect;
@@ -103,12 +103,14 @@ export class PipelineRepository {
     const execution = await this.executionPlan(organizationId, searchExecutionId);
     const discovery = await this.discoveryDiagnostics(organizationId, searchExecutionId);
     const requestedCount = explicitResultCount(execution.plan);
+    const countIntent = resolveCountIntent(execution.plan) ?? null;
     const discovered = execution.totalCandidates > 0 ? execution.totalCandidates : companyIds.length;
     return {
       companiesDiscovered: discovered,
       companiesPersisted: companyIds.length,
       companiesProcessed: companyIds.length,
       requestedCount: requestedCount ?? null,
+      countIntent,
       discoveryShortfall: requestedCount === undefined ? null : Math.max(0, requestedCount - companyIds.length),
       discoveryRejected: discovery.rejected,
       discoveryDuplicatesRemoved: discovery.duplicatesRemoved,
@@ -129,6 +131,7 @@ export class PipelineRepository {
       conflictsFound,
       duplicatesFound,
       qualifiedLeads,
+      qualifiedShortfall: requestedCount === undefined ? null : qualifiedShortfall(execution.plan, qualifiedLeads),
       needsReview,
       rejected,
     };

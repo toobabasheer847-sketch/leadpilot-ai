@@ -123,15 +123,16 @@ export class SearchPlanParser {
   }
 
   private parseRequestedCount(prompt: string): { count: number; requested: number; intent: 'exact' | 'maximum' | 'minimum' | 'approximate'; capped: boolean } | undefined {
-    const qualified = [...prompt.matchAll(/\b(up to|at least|maximum of|maximum|max|limit of|limit|minimum of|minimum|min|around|about|approximately|approx)\s+(\d{1,5})\b/gi)];
-    const bare = [...prompt.matchAll(/\b(?:find|get|show|need|want|search(?:\s+for)?|looking\s+for)\s+(\d{1,5})\b/gi)];
+    const qualified = [...prompt.matchAll(/\b(exactly|up to|at least|maximum of|maximum|max|limit of|limit|minimum of|minimum|min|around|about|approximately|approx)\s+(\d{1,5})\b/gi)];
+    const bare = [...prompt.matchAll(/\b(?:find|get|show|need|want|search(?:\s+for)?|looking\s+for)\s+(?:exactly\s+)?(\d{1,5})\b/gi)];
     const noun = [...prompt.matchAll(/\b(\d{1,5})\s+(?:companies|company|leads|lead|agencies|agency|firms|firm|businesses|business|restaurants|restaurant)\b/gi)];
     type Hit = { index: number; count: number; intent: 'exact' | 'maximum' | 'minimum' | 'approximate' };
     const hits: Hit[] = [
       ...qualified.map((match) => ({
         index: match.index ?? 0,
         count: Number(match[2]),
-        intent: /around|about|approximately|\bapprox\b/i.test(match[1]) ? 'approximate' as const
+        intent: /exactly/i.test(match[1]) ? 'exact' as const
+          : /around|about|approximately|\bapprox\b/i.test(match[1]) ? 'approximate' as const
           : /at least|minimum|\bmin\b/i.test(match[1]) ? 'minimum' as const : 'maximum' as const,
       })),
       ...bare.map((match) => ({ index: match.index ?? 0, count: Number(match[1]), intent: 'exact' as const })),
@@ -151,7 +152,7 @@ export class SearchPlanParser {
   private withoutCountClause(prompt: string, count: number | undefined): string {
     if (count === undefined) return prompt;
     return prompt
-      .replace(/\b(?:up to|at least|maximum of|maximum|max|limit of|limit|minimum of|minimum|min|around|about|approximately|approx)\s+\d{1,5}\b/gi, ' ')
+      .replace(/\b(?:exactly|up to|at least|maximum of|maximum|max|limit of|limit|minimum of|minimum|min|around|about|approximately|approx)\s+\d{1,5}\b/gi, ' ')
       .replace(new RegExp(`\\b${count}\\b`), ' ')
       .replace(/\s+/g, ' ')
       .trim();

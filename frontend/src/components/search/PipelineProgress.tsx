@@ -21,9 +21,10 @@ const labels: Record<string, string> = {
 
 const counterLabels: Array<[keyof PipelineView['counters'], string]> = [
   ['requestedCount', 'Requested count'],
+  ['countIntent', 'Count intent'],
   ['companiesDiscovered', 'Companies discovered'],
   ['companiesPersisted', 'Companies persisted'],
-  ['discoveryShortfall', 'Not found within budget'],
+  ['discoveryShortfall', 'Discovery shortfall'],
   ['discoveryRejected', 'Candidates rejected'],
   ['discoveryDuplicatesRemoved', 'Duplicates removed'],
   ['discoveryProviderQueries', 'Provider queries'],
@@ -37,6 +38,7 @@ const counterLabels: Array<[keyof PipelineView['counters'], string]> = [
   ['companyEmailsFound', 'Company emails found'],
   ['socialProfilesFound', 'Social profiles found'],
   ['qualifiedLeads', 'Qualified leads'],
+  ['qualifiedShortfall', 'Qualified shortfall'],
   ['needsReview', 'Needs review'],
   ['rejected', 'Rejected'],
   ['evidenceCollected', 'Evidence collected'],
@@ -46,6 +48,11 @@ const counterLabels: Array<[keyof PipelineView['counters'], string]> = [
 
 export function PipelineProgress({ pipeline }: { pipeline: PipelineView }) {
   const rows = pipeline.stageList.filter((stage) => stage.name !== 'COMPLETED');
+  const requested = pipeline.counters.requestedCount;
+  const persisted = pipeline.counters.companiesPersisted;
+  const qualified = pipeline.counters.qualifiedLeads;
+  const discoveryShortfall = pipeline.counters.discoveryShortfall;
+  const qualifiedShortfall = pipeline.counters.qualifiedShortfall;
   return (
     <div className="stack">
       <ol className="pipeline-list">
@@ -65,8 +72,11 @@ export function PipelineProgress({ pipeline }: { pipeline: PipelineView }) {
           return <div key={key}><dt>{label}</dt><dd>{shown}</dd></div>;
         })}
       </dl>
-      {pipeline.counters.discoveryShortfall && pipeline.counters.requestedCount != null && pipeline.counters.companiesPersisted != null ? (
-        <p>Found {pipeline.counters.companiesPersisted} credible companies out of {pipeline.counters.requestedCount} requested. Missing companies were not invented.</p>
+      {discoveryShortfall && requested != null && persisted != null ? (
+        <p>Found {persisted} credible companies out of {requested} requested. Missing companies were not invented.</p>
+      ) : null}
+      {qualifiedShortfall && requested != null && qualified != null ? (
+        <p>Qualified {qualified} of {requested} requested. Requested count is not a promise of qualified leads.</p>
       ) : null}
     </div>
   );

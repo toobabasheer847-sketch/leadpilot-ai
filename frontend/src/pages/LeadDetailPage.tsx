@@ -158,12 +158,23 @@ export function LeadDetailPage() {
         <dl className="kv">
           <div><dt>Status</dt><dd><LeadStatusBadge status={lead.data.qualification?.status} /></dd></div>
           <div><dt>Score</dt><dd>{lead.data.score ? `${lead.data.score.value}${lead.data.score.band ? ` · ${lead.data.score.band}` : ''}` : 'Not available'}</dd></div>
+          {lead.data.qualification?.criteriaSnapshot?.countIntent || lead.data.qualification?.criteriaSnapshot?.requestedCount != null ? (
+            <div>
+              <dt>Search intent</dt>
+              <dd>
+                {lead.data.qualification.criteriaSnapshot.requestedCount != null ? `${lead.data.qualification.criteriaSnapshot.requestedCount} requested` : 'Count not specified'}
+                {lead.data.qualification.criteriaSnapshot.countIntent ? ` · ${lead.data.qualification.criteriaSnapshot.countIntent}` : ''}
+              </dd>
+            </div>
+          ) : null}
         </dl>
         {Array.isArray(lead.data.qualification?.criterionResults) && lead.data.qualification.criterionResults.length > 0 ? (
           <ul className="stack">
             {lead.data.qualification.criterionResults.map((item) => (
               <li key={`${item.criterion}-${item.result}`}>
-                <strong>{item.criterion}</strong> · <LeadStatusBadge status={item.result} />
+                <strong>{item.criterion}</strong>
+                {item.required ? <span className="muted"> (required)</span> : null}
+                {' · '}<LeadStatusBadge status={item.result} />
                 {item.message ? <span className="muted"> — {item.message}</span> : null}
               </li>
             ))}

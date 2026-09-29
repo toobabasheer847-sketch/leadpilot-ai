@@ -41,6 +41,7 @@ const pipeline: PipelineView = {
     companiesPersisted: 2,
     companiesProcessed: 2,
     requestedCount: 2,
+    countIntent: 'exact',
     discoveryShortfall: 0,
     discoveryRejected: 1,
     discoveryDuplicatesRemoved: 0,
@@ -61,6 +62,7 @@ const pipeline: PipelineView = {
     conflictsFound: null,
     duplicatesFound: null,
     qualifiedLeads: null,
+    qualifiedShortfall: null,
     needsReview: null,
     rejected: null,
   },
@@ -76,11 +78,38 @@ describe('pipeline progress', () => {
     expect(screen.getByText('Website research')).toBeInTheDocument();
     expect(screen.getAllByText('2').length).toBe(3);
     expect(screen.getByText('Requested count')).toBeInTheDocument();
+    expect(screen.getByText('Count intent')).toBeInTheDocument();
+    expect(screen.getByText('exact')).toBeInTheDocument();
     expect(screen.getByText('Companies discovered')).toBeInTheDocument();
     expect(screen.getByText('Company size requested')).toBeInTheDocument();
     expect(screen.getByText('No')).toBeInTheDocument();
     expect(screen.queryByText('Qualified leads')).not.toBeInTheDocument();
+    expect(screen.queryByText('Qualified shortfall')).not.toBeInTheDocument();
     expect(screen.queryByText(/%/)).not.toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/\d+%/);
+  });
+
+  it('distinguishes requested, qualified, and shortfall when present', () => {
+    const done: PipelineView = {
+      ...pipeline,
+      status: 'COMPLETED',
+      counters: {
+        ...pipeline.counters,
+        requestedCount: 100,
+        countIntent: 'exact',
+        companiesDiscovered: 90,
+        companiesPersisted: 80,
+        discoveryShortfall: 20,
+        qualifiedLeads: 63,
+        qualifiedShortfall: 37,
+        needsReview: 10,
+        rejected: 7,
+      },
+    };
+    render(<MemoryRouter><PipelineProgress pipeline={done} /></MemoryRouter>);
+    expect(screen.getByText('Qualified leads')).toBeInTheDocument();
+    expect(screen.getByText('Qualified shortfall')).toBeInTheDocument();
+    expect(screen.getByText(/Qualified 63 of 100 requested/)).toBeInTheDocument();
+    expect(screen.getByText(/Found 80 credible companies out of 100 requested/)).toBeInTheDocument();
   });
 });
