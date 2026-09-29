@@ -1,4 +1,9 @@
 import type { NormalizedSourceResult } from '../types/source.types';
+import {
+  aggregateDiscoveryFailure,
+  classifyDiscoveryProviderOutcome,
+  type DiscoveryProviderAttempt,
+} from './discovery-provider-outcome';
 
 export interface DiscoveryProviderBatch {
   results: NormalizedSourceResult[];
@@ -16,7 +21,8 @@ export function resolveDiscoveryFallback(input: {
 
 /**
  * Zero saved companies is a provider failure only when every available discovery provider failed.
- * A temporary OSM error with a successful (even empty) web response is a shortfall, not a hard fail.
+ * EMPTY / successful empty responses are shortfalls, not hard fails.
+ * Prefer {@link aggregateDiscoveryFailure} with full attempt records when available.
  */
 export function discoveryProviderFailure(
   saved: number,
@@ -24,18 +30,34 @@ export function discoveryProviderFailure(
   primaryError: string | null,
   web: { error: string | null } | null,
 ): string | null {
-  if (saved > 0) return null;
-  const primaryFailed = Boolean(primaryError);
-  const webUnavailable = web === null;
-  const webFailed = Boolean(web?.error);
-  if (!primaryFailed && !webFailed) return null;
-  if (!(primaryFailed && (webUnavailable || webFailed))) return null;
-  const label = primaryProvider === 'osm' ? 'OpenStreetMap' : primaryProvider;
-  const details = [
-    primaryError ? `${label}: ${primaryError}` : '',
-    webFailed ? `Web search: ${web?.error}` : '',
-  ].filter(Boolean);
-  return `Discovery providers failed. ${details.join(' ')}`;
+  return aggregateDiscoveryFailure(saved, attemptsFromLegacy(primaryProvider, primaryError, web));
+}
+
+export function attemptsFromLegacy(
+  primaryProvider: string,
+  primaryError: string | null,
+  web: { error: string | null } | null,
+): DiscoveryProviderAttempt[] {
+  const attempts: DiscoveryProviderAttempt[] = [
+    {
+      provider: primaryProvider,
+      outcome: classifyDiscoveryProviderOutcome({ resultsCount: 0, error: primaryError }),
+      message: primaryError,
+      resultsCount: 0,
+      queriesRun: 0,
+      queriesSkipped: 0,
+    },
+  ];
+  if (web === null) return attempts;
+  attempts.push({
+    provider: 'web_search',
+    outcome: classifyDiscoveryProviderOutcome({ resultsCount: 0, error: web.error }),
+    message: web.error,
+    resultsCount: 0,
+    queriesRun: 0,
+    queriesSkipped: 0,
+  });
+  return attempts;
 }
 
 export function dedupeDiscoveryCandidates(

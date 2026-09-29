@@ -85,10 +85,12 @@ describe('discovery provider fallback', () => {
       'OpenStreetMap provider rate limit reached.',
       { error: 'Web search provider rate limit reached.' },
     );
-    expect(failure).toBe('Discovery providers failed. OpenStreetMap: OpenStreetMap provider rate limit reached. Web search: Web search provider rate limit reached.');
+    expect(failure).toMatch(/Discovery failed because all configured providers were unavailable/i);
+    expect(failure).toMatch(/OpenStreetMap: rate limited/i);
+    expect(failure).toMatch(/Web Search: rate limited/i);
     expect(failure).not.toMatch(/not found within budget/i);
     expect(discoveryProviderFailure(0, 'osm', 'OpenStreetMap provider rate limit reached.', null))
-      .toBe('Discovery providers failed. OpenStreetMap: OpenStreetMap provider rate limit reached.');
+      .toMatch(/Discovery failed because all configured providers were unavailable[\s\S]*OpenStreetMap: rate limited/i);
     expect(discoveryProviderFailure(0, 'osm', null, { error: null })).toBeNull();
   });
 });

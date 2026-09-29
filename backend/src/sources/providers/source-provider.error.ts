@@ -47,7 +47,12 @@ export function isTerminalProviderError(error: unknown): boolean {
   return error instanceof SourceProviderError && (error.terminal || TERMINAL_PROVIDER_ERRORS.has(error.code));
 }
 
-/** Rate limits, timeouts, outages, and unusable primary requests can fall through to the next discovery provider. */
+/**
+ * Provider-level faults that must not abort the whole discovery stage.
+ * Phase Q: quota and auth also fall through so other configured providers can continue.
+ * Bull job terminality remains governed by isTerminalProviderError / error.terminal.
+ * PROVIDER_UNKNOWN_ERROR stays non-recoverable so providers can still surface fatal payloads.
+ */
 export function isRecoverableDiscoveryError(error: unknown): error is SourceProviderError {
   return error instanceof SourceProviderError && (
     error.code === 'PROVIDER_RATE_LIMITED'
@@ -55,5 +60,7 @@ export function isRecoverableDiscoveryError(error: unknown): error is SourceProv
     || error.code === 'PROVIDER_UNAVAILABLE'
     || error.code === 'PROVIDER_NOT_CONFIGURED'
     || error.code === 'PROVIDER_INVALID_REQUEST'
+    || error.code === 'PROVIDER_QUOTA_EXCEEDED'
+    || error.code === 'PROVIDER_AUTH_ERROR'
   );
 }

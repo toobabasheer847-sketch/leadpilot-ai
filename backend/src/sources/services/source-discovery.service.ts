@@ -11,18 +11,29 @@ import { SearchPlan } from '../../search/types/search-plan.types';
 import {
   countShortfall,
   discoveryAcceptanceCap,
+  discoveryQueryBudget,
   discoveryTarget,
   explicitResultCount,
   resolveCountIntent,
 } from '../../search/search-plan.limits';
 import { toCountryCode } from '../location/location-evidence';
 import { isRecoverableDiscoveryError, SourceProviderError } from '../providers/source-provider.error';
-import { SOURCE_PROVIDER } from '../interfaces/source-provider.interface';
+import { DISCOVERY_PROVIDER_CHAIN, SOURCE_PROVIDER } from '../interfaces/source-provider.interface';
 import type { NormalizedSourceResult, SourceProvider, SourceSearchContext } from '../types/source.types';
 import { SourceNormalizerService } from './source-normalizer.service';
 import { fillEmptyCompanyFields, phoneMatchKey } from './company-field-merge';
 import { isPersistableDiscoveryCandidate } from './discovery-candidate.gate';
-import { discoveryProviderFailure, resolveDiscoveryFallback } from './discovery-fallback';
+import { dedupeDiscoveryCandidates } from './discovery-fallback';
+import { DiscoveryExecutionCircuit } from './discovery-execution-circuit';
+import {
+  aggregateDiscoveryFailure,
+  classifyDiscoveryProviderOutcome,
+  discoveryCompletedWithLimitationsMessage,
+  discoveryFailureCodeFromAttempts,
+  discoveryProgressSummary,
+  DISCOVERY_PROVIDER_CIRCUIT_OUTCOMES,
+  type DiscoveryProviderAttempt,
+} from './discovery-provider-outcome';
 import { WebSearchCompanyDiscovery } from '../providers/web-search/web-search-company.discovery';
 
 export function canAttachDiscoveryToOrganization(companyOrganizationId: string, requestOrganizationId: string): boolean {
@@ -56,6 +67,7 @@ export class SourceDiscoveryService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     @Inject(SOURCE_PROVIDER) private readonly provider: SourceProvider,
+    @Inject(DISCOVERY_PROVIDER_CHAIN) private readonly providerChain: SourceProvider[],
     private readonly normalizer: SourceNormalizerService,
     private readonly usage: UsageService,
     private readonly providerObservability: ProviderObservabilityService,
@@ -72,118 +84,239 @@ export class SourceDiscoveryService {
     const target = discoveryTarget(plan);
     const explicit = explicitResultCount(plan);
     const acceptanceCap = discoveryAcceptanceCap(plan);
+    const seek = Math.min(target, acceptanceCap);
     const countIntent = resolveCountIntent(plan) ?? null;
-    const synthetic = this.provider.metadata().synthetic;
+    const mapProviders = this.providerChain.length ? this.providerChain : [this.provider];
+    const synthetic = mapProviders.some((entry) => entry.metadata().synthetic);
     const refillRounds = Math.max(0, this.config.get<number>('sourceProvider.discoveryRefillRounds') ?? 0);
+    const circuit = new DiscoveryExecutionCircuit(executionId, organizationId);
+    const attempts: DiscoveryProviderAttempt[] = [];
     let rejected = 0;
     let duplicates = 0;
     let providerQueries = 0;
-    let primaryResults: NormalizedSourceResult[] = [];
+    let queriesSkipped = 0;
+    let mapDiscovered = 0;
+    let candidates = 0;
     let primaryError: string | null = null;
-    try {
-      const result = await this.providerObservability.track(this.provider.providerName(), 'DISCOVERY', async () => ({ value: await this.provider.searchBusinesses(plan, context) }));
-      primaryResults = result.results.slice(0, acceptanceCap);
-      if ((result.results.length ?? 0) > primaryResults.length) {
-        rejected += result.results.length - primaryResults.length;
+    const excludePool: NormalizedSourceResult[] = [];
+
+    for (const mapProvider of mapProviders) {
+      if (candidates >= seek) break;
+      const providerName = mapProvider.providerName();
+      if (circuit.isUnavailable(providerName)) {
+        const remainingBudget = Math.max(0, discoveryQueryBudget(seek) - 0);
+        queriesSkipped += remainingBudget;
+        attempts.push({
+          provider: providerName,
+          outcome: circuit.reason(providerName)?.outcome ?? 'FATAL_ERROR',
+          message: circuit.reason(providerName)?.message ?? 'Provider unavailable for this execution.',
+          resultsCount: 0,
+          queriesRun: 0,
+          queriesSkipped: remainingBudget,
+        });
+        continue;
       }
-      primaryError = result.providerError ?? null;
-      rejected += result.rejectedCandidates ?? 0;
-      duplicates += result.duplicatesRemoved ?? 0;
-      providerQueries += result.queriesRun ?? 0;
-    } catch (error) {
-      if (!isRecoverableDiscoveryError(error)) throw error;
-      primaryError = error.message;
-    }
-    if (primaryError) {
-      await this.audit(organizationId, executionId, 'SOURCE_PROVIDER_PARTIAL', undefined, {
-        provider: this.provider.providerName(),
-        error: primaryError,
+
+      let providerResults: NormalizedSourceResult[] = [];
+      let providerError: string | null = null;
+      let errorCode: string | null = null;
+      let queriesRun = 0;
+      try {
+        const result = await this.providerObservability.track(providerName, 'DISCOVERY', async () => ({ value: await mapProvider.searchBusinesses(plan, context) }));
+        const room = Math.max(0, acceptanceCap - candidates);
+        const { accepted, duplicatesRemoved } = dedupeDiscoveryCandidates(excludePool, result.results.slice(0, room));
+        if ((result.results.length ?? 0) > accepted.length + duplicatesRemoved) {
+          rejected += result.results.length - accepted.length - duplicatesRemoved;
+        }
+        providerResults = accepted;
+        providerError = result.providerError ?? null;
+        rejected += result.rejectedCandidates ?? 0;
+        duplicates += (result.duplicatesRemoved ?? 0) + duplicatesRemoved;
+        queriesRun = result.queriesRun ?? 0;
+        providerQueries += queriesRun;
+      } catch (error) {
+        if (!isRecoverableDiscoveryError(error)) throw error;
+        providerError = error.message;
+        errorCode = error.code;
+      }
+
+      const outcome = classifyDiscoveryProviderOutcome({
+        resultsCount: providerResults.length,
+        error: providerError,
+        errorCode,
+      });
+      const budget = discoveryQueryBudget(seek);
+      const skipped = providerError && DISCOVERY_PROVIDER_CIRCUIT_OUTCOMES.has(outcome)
+        ? Math.max(0, budget - queriesRun)
+        : 0;
+      queriesSkipped += skipped;
+      attempts.push({
+        provider: providerName,
+        outcome,
+        message: providerError,
+        resultsCount: providerResults.length,
+        queriesRun,
+        queriesSkipped: skipped,
+      });
+      circuit.trip(providerName, outcome, providerError);
+
+      if (providerError) {
+        if (!primaryError) primaryError = providerError;
+        await this.audit(organizationId, executionId, 'SOURCE_PROVIDER_PARTIAL', undefined, {
+          provider: providerName,
+          error: providerError,
+          outcome,
+          executionId,
+          organizationId,
+        });
+      }
+
+      if (providerResults.length) {
+        excludePool.push(...providerResults);
+        mapDiscovered += providerResults.length;
+        const added = await this.persistResults(organizationId, executionId, mapProvider.getSourceType(), providerResults, synthetic, context);
+        candidates += added;
+      }
+
+      await this.auditProgress(organizationId, executionId, {
+        candidates,
+        target: seek,
+        requested: explicit ?? null,
+        discovered: mapDiscovered,
+        accepted: candidates,
+        rejected,
+        duplicates,
+        shortfall: countShortfall(plan, candidates),
+        providerQueries,
+        queriesSkipped,
+        phase: 'MAP_PROVIDER_PERSISTED',
+        attempts,
       });
     }
 
-    const resolved = resolveDiscoveryFallback({
-      primary: { results: primaryResults, error: primaryError },
-      web: { results: [], error: null },
-    });
-    duplicates += resolved.duplicatesRemoved;
-    const cappedPrimary = resolved.primary.slice(0, acceptanceCap);
-    let candidates = await this.persistResults(organizationId, executionId, this.provider.getSourceType(), cappedPrimary, synthetic, context);
-    await this.auditProgress(organizationId, executionId, {
-      candidates,
-      target: Math.min(target, acceptanceCap),
-      requested: explicit ?? null,
-      discovered: primaryResults.length,
-      accepted: candidates,
-      rejected,
-      duplicates,
-      shortfall: countShortfall(plan, candidates),
-      providerQueries,
-      phase: 'PRIMARY_PERSISTED',
-    });
-
     let webError: string | null = null;
     let webDiscovered = 0;
-    const excludePool: NormalizedSourceResult[] = [...cappedPrimary];
 
     // Stream web discovery + refill: persist each accepted chunk immediately so hanging SERP
     // queries cannot block COMPANIES_SAVED / WEBSITE_DISCOVERY forever.
     if (!synthetic) {
       let round = 0;
-      while (candidates < Math.min(target, acceptanceCap) && round <= refillRounds && !webError) {
-        const need = Math.min(target, acceptanceCap) - candidates;
+      let webQueriesRun = 0;
+      let webQueriesSkipped = 0;
+      let webResultsCount = 0;
+      while (candidates < seek && round <= refillRounds && !circuit.isUnavailable('web_search')) {
+        const need = seek - candidates;
         const before = candidates;
+        const roundBudget = discoveryQueryBudget(need);
         try {
           const extra = await this.webDiscovery.collect(plan, need, [...excludePool], round, {
             onBatch: async (batch) => {
-              const added = await this.persistResults(organizationId, executionId, 'web_search', batch, false, context);
+              const { accepted, duplicatesRemoved } = dedupeDiscoveryCandidates(excludePool, batch);
+              duplicates += duplicatesRemoved;
+              if (!accepted.length) return;
+              excludePool.push(...accepted);
+              const added = await this.persistResults(organizationId, executionId, 'web_search', accepted, false, context);
               candidates += added;
-              webDiscovered += batch.length;
+              webDiscovered += accepted.length;
+              webResultsCount += accepted.length;
               await this.auditProgress(organizationId, executionId, {
                 candidates,
-                target: Math.min(target, acceptanceCap),
+                target: seek,
                 requested: explicit ?? null,
-                discovered: primaryResults.length + webDiscovered,
+                discovered: mapDiscovered + webDiscovered,
                 accepted: candidates,
                 rejected,
                 duplicates,
                 shortfall: countShortfall(plan, candidates),
                 providerQueries,
+                queriesSkipped,
                 phase: 'WEB_STREAM_PERSISTED',
                 round: String(round),
+                attempts,
               });
             },
           });
-          excludePool.push(...extra.results);
-          providerQueries += extra.queriesRun ?? 0;
+          excludePool.push(...extra.results.filter((result) => !excludePool.some((existing) => existing.externalId === result.externalId)));
+          const run = extra.queriesRun ?? 0;
+          webQueriesRun += run;
+          providerQueries += run;
           rejected += extra.rejected;
           if (extra.providerError) {
             webError = extra.providerError;
-            await this.audit(organizationId, executionId, 'SOURCE_PROVIDER_PARTIAL', undefined, { provider: 'web_search', error: webError });
+            const outcome = classifyDiscoveryProviderOutcome({ resultsCount: webResultsCount, error: webError });
+            const skipped = Math.max(0, roundBudget - run);
+            webQueriesSkipped += skipped;
+            queriesSkipped += skipped;
+            // Remaining refill rounds are not issued once the web circuit opens.
+            const remainingRounds = Math.max(0, refillRounds - round);
+            if (remainingRounds > 0) {
+              const skippedRounds = remainingRounds * roundBudget;
+              webQueriesSkipped += skippedRounds;
+              queriesSkipped += skippedRounds;
+            }
+            circuit.trip('web_search', outcome, webError);
+            await this.audit(organizationId, executionId, 'SOURCE_PROVIDER_PARTIAL', undefined, {
+              provider: 'web_search',
+              error: webError,
+              outcome,
+              executionId,
+              organizationId,
+            });
           }
           if (candidates <= before) break;
         } catch (error) {
           webError = error instanceof Error ? error.message : 'Web company discovery failed.';
-          await this.audit(organizationId, executionId, 'SOURCE_PROVIDER_PARTIAL', undefined, { provider: 'web_search', error: webError });
+          const outcome = classifyDiscoveryProviderOutcome({ resultsCount: webResultsCount, error: webError });
+          circuit.trip('web_search', outcome, webError);
+          await this.audit(organizationId, executionId, 'SOURCE_PROVIDER_PARTIAL', undefined, {
+            provider: 'web_search',
+            error: webError,
+            outcome,
+            executionId,
+            organizationId,
+          });
           break;
         }
         round += 1;
       }
+
+      if (webQueriesRun > 0 || webError || webResultsCount > 0 || (!circuit.isUnavailable('web_search') && mapProviders.length > 0)) {
+        const webOutcome = classifyDiscoveryProviderOutcome({ resultsCount: webResultsCount, error: webError });
+        // Record web even when never called only if we intentionally skipped due to circuit before any attempt.
+        if (webQueriesRun > 0 || webError || webResultsCount > 0) {
+          attempts.push({
+            provider: 'web_search',
+            outcome: webOutcome,
+            message: webError,
+            resultsCount: webResultsCount,
+            queriesRun: webQueriesRun,
+            queriesSkipped: webQueriesSkipped,
+          });
+        } else if (candidates < seek) {
+          // Web was eligible but produced nothing without error (honest empty / no progress).
+          attempts.push({
+            provider: 'web_search',
+            outcome: 'EMPTY',
+            message: null,
+            resultsCount: 0,
+            queriesRun: webQueriesRun,
+            queriesSkipped: webQueriesSkipped,
+          });
+        }
+      }
     }
 
-    const failure = discoveryProviderFailure(
-      candidates,
-      this.provider.providerName(),
-      primaryError,
-      synthetic ? null : { error: webError },
-    );
+    const failure = aggregateDiscoveryFailure(candidates, attempts);
     if (failure) {
       await this.usage.recordUsage({ organizationId, operation: 'DISCOVERY', provider: this.provider.providerName(), resourceType: 'search_execution', resourceId: executionId, units: 1, status: 'FAILED', requestId: context.requestId });
-      throw new SourceProviderError(discoveryFailureCode(failure), failure, true);
+      throw new SourceProviderError(discoveryFailureCodeFromAttempts(attempts), failure, true);
     }
 
     const shortfall = countShortfall(plan, candidates);
     const remaining = Math.max(0, (explicit ?? target) - candidates);
-    const discovered = primaryResults.length + webDiscovered;
+    const discovered = mapDiscovered + webDiscovered;
+    const progress = discoveryProgressSummary(attempts);
+    const limitations = discoveryCompletedWithLimitationsMessage(candidates, explicit ?? null, attempts);
     const unresolved = (plan.unresolvedRequirements ?? plan.unresolvedCriteria ?? [])
       .map((item) => item.text)
       .filter(Boolean)
@@ -203,6 +336,18 @@ export class SourceDiscoveryService {
       shortfall: String(shortfall),
       remainingTarget: String(remaining),
       providerQueries: String(providerQueries),
+      queriesSkipped: String(queriesSkipped),
+      providersAttempted: String(progress.providersAttempted),
+      providersSucceeded: String(progress.providersSucceeded),
+      providersEmpty: String(progress.providersEmpty),
+      providersUnavailable: String(progress.providersUnavailable),
+      providersQuotaExceeded: String(progress.providersQuotaExceeded),
+      providersFailed: String(progress.providersFailed),
+      providerStatusSummary: progress.providerStatusSummary,
+      discoveryStatus: shortfall > 0
+        ? (limitations ? 'COMPLETED_WITH_SHORTFALL' : 'SHORTFALL')
+        : 'COMPLETE',
+      limitationsMessage: limitations ?? '',
       provider: this.provider.providerName(),
       primaryError: primaryError ?? '',
       webError: webError ?? '',
@@ -223,8 +368,18 @@ export class SourceDiscoveryService {
       duplicatesRemoved: duplicates,
       shortfall,
       providerQueries,
+      queriesSkipped,
+      providersAttempted: progress.providersAttempted,
+      providersSucceeded: progress.providersSucceeded,
+      providersEmpty: progress.providersEmpty,
+      providersUnavailable: progress.providersUnavailable,
+      providersQuotaExceeded: progress.providersQuotaExceeded,
+      providersFailed: progress.providersFailed,
+      providerStatusSummary: progress.providerStatusSummary,
+      providerAttempts: attempts,
       primaryError,
       webError,
+      limitationsMessage: limitations,
     };
   }
 
@@ -427,10 +582,13 @@ export class SourceDiscoveryService {
       duplicates: number;
       shortfall: number;
       providerQueries: number;
+      queriesSkipped?: number;
       phase: string;
       round?: string;
+      attempts?: DiscoveryProviderAttempt[];
     },
   ) {
+    const progress = discoveryProgressSummary(state.attempts ?? []);
     await this.audit(organizationId, executionId, 'DISCOVERY_PROGRESS', undefined, {
       requested: state.requested === null ? '' : String(state.requested),
       discovered: String(state.discovered),
@@ -442,6 +600,14 @@ export class SourceDiscoveryService {
       duplicates: String(state.duplicates),
       shortfall: String(state.shortfall),
       providerQueries: String(state.providerQueries),
+      queriesSkipped: String(state.queriesSkipped ?? progress.queriesSkipped),
+      providersAttempted: String(progress.providersAttempted),
+      providersSucceeded: String(progress.providersSucceeded),
+      providersEmpty: String(progress.providersEmpty),
+      providersUnavailable: String(progress.providersUnavailable),
+      providersQuotaExceeded: String(progress.providersQuotaExceeded),
+      providersFailed: String(progress.providersFailed),
+      providerStatusSummary: progress.providerStatusSummary,
       phase: state.phase,
       ...(state.round ? { round: state.round } : {}),
     });
@@ -450,13 +616,6 @@ export class SourceDiscoveryService {
   private async audit(organizationId: string, entityId: string, action: string, userId?: string, metadata?: Record<string, string>) {
     await this.db.insert(auditLogs).values({ organizationId, entityId, userId, action, entityType: 'search_execution', metadata });
   }
-}
-
-function discoveryFailureCode(failure: string): 'PROVIDER_RATE_LIMITED' | 'PROVIDER_TIMEOUT' | 'PROVIDER_QUOTA_EXCEEDED' | 'PROVIDER_UNAVAILABLE' {
-  if (/plan limit|pay-as-you-go limit|quota|HTTP 432|HTTP 433/i.test(failure)) return 'PROVIDER_QUOTA_EXCEEDED';
-  if (/rate limit|429/i.test(failure)) return 'PROVIDER_RATE_LIMITED';
-  if (/timed out|timeout/i.test(failure)) return 'PROVIDER_TIMEOUT';
-  return 'PROVIDER_UNAVAILABLE';
 }
 
 function columnText(value: string | null | undefined, max: number): string | null {

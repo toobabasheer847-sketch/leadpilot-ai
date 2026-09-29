@@ -115,6 +115,11 @@ export class PipelineRepository {
       discoveryRejected: discovery.rejected,
       discoveryDuplicatesRemoved: discovery.duplicatesRemoved,
       discoveryProviderQueries: discovery.providerQueries,
+      discoveryProviderStatusSummary: discovery.providerStatusSummary,
+      discoveryProvidersAttempted: discovery.providersAttempted,
+      discoveryProvidersSucceeded: discovery.providersSucceeded,
+      discoveryProvidersFailed: discovery.providersFailed,
+      discoveryQueriesSkipped: discovery.queriesSkipped,
       companySizeRequested: employeeSizeRequested(execution.plan),
       websitesFound,
       websitesNotFound: facts.length - websitesFound,
@@ -243,6 +248,11 @@ export class PipelineRepository {
     rejected: number | null;
     duplicatesRemoved: number | null;
     providerQueries: number | null;
+    providerStatusSummary: string | null;
+    providersAttempted: number | null;
+    providersSucceeded: number | null;
+    providersFailed: number | null;
+    queriesSkipped: number | null;
   }> {
     const [row] = await this.db.select({ metadata: auditLogs.metadata }).from(auditLogs).where(and(
       eq(auditLogs.organizationId, organizationId),
@@ -255,10 +265,19 @@ export class PipelineRepository {
       const value = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
       return Number.isFinite(value) ? value : null;
     };
+    const stringOrNull = (key: string) => {
+      const raw = metadata?.[key];
+      return typeof raw === 'string' && raw.trim() ? raw : null;
+    };
     return {
       rejected: numberOrNull('rejected'),
       duplicatesRemoved: numberOrNull('duplicatesRemoved'),
       providerQueries: numberOrNull('providerQueries'),
+      providerStatusSummary: stringOrNull('providerStatusSummary'),
+      providersAttempted: numberOrNull('providersAttempted'),
+      providersSucceeded: numberOrNull('providersSucceeded'),
+      providersFailed: numberOrNull('providersFailed'),
+      queriesSkipped: numberOrNull('queriesSkipped'),
     };
   }
 

@@ -141,7 +141,7 @@ describe('Phase B SearchPlan-driven discovery', () => {
       'osm',
       'OpenStreetMap discovery requires a business category.',
       { error: 'Web search provider is not configured.' },
-    )).toMatch(/Discovery providers failed/);
+    )).toMatch(/Discovery failed because all configured providers were unavailable/i);
   });
 
   it('deduplicates the same company discovered by two providers', () => {

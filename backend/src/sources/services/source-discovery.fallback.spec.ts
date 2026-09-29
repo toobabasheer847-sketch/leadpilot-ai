@@ -26,12 +26,14 @@ function company(name: string, website: string, city = 'San Francisco'): Normali
 function buildService(input: {
   searchBusinesses: SourceProvider['searchBusinesses'];
   collect?: jest.Mock;
+  chain?: SourceProvider[];
 }) {
   const provider = {
     providerName: () => 'osm',
     getSourceType: () => 'osm',
     metadata: () => ({ provider: 'osm', sourceType: 'osm', synthetic: false }),
     searchBusinesses: input.searchBusinesses,
+    health: () => ({ name: 'osm', configured: true, enabled: true }),
   } as unknown as SourceProvider;
   const usage = {
     checkRequestRate: jest.fn().mockResolvedValue(undefined),
@@ -53,6 +55,7 @@ function buildService(input: {
   const service = new SourceDiscoveryService(
     {} as never,
     provider,
+    input.chain ?? [provider],
     { normalize: (value: NormalizedSourceResult) => value } as never,
     usage as never,
     providerObservability as never,
@@ -172,7 +175,7 @@ describe('SourceDiscoveryService OSM web fallback', () => {
 
     await expect(service.discover('exec-4', 'org-1', plan)).rejects.toMatchObject({
       code: 'PROVIDER_QUOTA_EXCEEDED',
-      message: expect.stringMatching(/Discovery providers failed[\s\S]*OpenStreetMap[\s\S]*plan limit/i),
+      message: expect.stringMatching(/Discovery failed because all configured providers were unavailable[\s\S]*OpenStreetMap[\s\S]*(plan limit|quota)/i),
     });
   });
 });
