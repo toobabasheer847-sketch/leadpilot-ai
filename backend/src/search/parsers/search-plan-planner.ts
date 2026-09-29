@@ -5,7 +5,7 @@ import { UsageService } from '../../usage/usage.service';
 import { RESULT_SAFETY_CAP } from '../search-plan.limits';
 import { interpretPlace } from '../search-plan.places';
 import type { CompanySize, SearchLocation, SearchPlan, UnresolvedCriterion } from '../types/search-plan.types';
-import { SearchPlanParser } from './search-plan.parser';
+import { SearchPlanParser, verificationIntentNegated } from './search-plan.parser';
 
 const PLAN_FIELDS = [
   'companyWebsite', 'companyEmail', 'companyPhone', 'companyLinkedin', 'companyFacebook', 'companyInstagram', 'companyYoutube', 'companyX',
@@ -286,7 +286,9 @@ function validateDraft(value: unknown, prompt: string, fallback: SearchPlan): Pl
   if (draft.websiteRequirement.required && !draft.websiteRequirement.requested) throw new Error('Planner marked an unrequested website as required.');
   if (draft.websiteRequirement.required && !/\b(?:must|required|need|only|with|including|and)\b[^.]{0,120}\b(?:company\s+)?website\b/i.test(prompt)) throw new Error('Planner made a plain website request mandatory.');
   if (draft.verificationRequirement.requested && !/\bverified\b|\bverification\b/i.test(prompt)) throw new Error('Planner invented a verification requirement.');
+  if (draft.verificationRequirement.requested && verificationIntentNegated(prompt)) throw new Error('Planner enabled verification despite an explicit negation.');
   if (draft.verificationRequirement.required && !draft.verificationRequirement.requested) throw new Error('Planner marked verification as required without a request.');
+  if (draft.emailRequirement.verified && verificationIntentNegated(prompt)) throw new Error('Planner enabled email verification despite an explicit negation.');
   if (draft.verificationRequirement.fields.some((field) => !fieldMentioned(prompt, field))) throw new Error('Planner assigned verification to an unrequested field.');
   assertFallbackCoverage(draft, fallback);
   if (draft.minimumScore != null) {
@@ -415,9 +417,13 @@ function normalizeDraft(draft: PlannerDraft, prompt: string, fallback: SearchPla
     requiredFields: legacyRequired,
     optionalFields: legacyPreferred,
     preferredFields,
-    emailRequirement: draft.emailRequirement,
+    emailRequirement: verificationIntentNegated(prompt)
+      ? { ...draft.emailRequirement, verified: false }
+      : draft.emailRequirement,
     websiteRequirement: draft.websiteRequirement,
-    verificationRequirement: draft.verificationRequirement,
+    verificationRequirement: verificationIntentNegated(prompt)
+      ? { requested: false, required: false, fields: [] }
+      : draft.verificationRequirement,
     ...(draft.minimumScore != null ? { minimumScore: draft.minimumScore } : {}),
     ...(count != null ? { requestedCount: count, maxResults: Math.min(RESULT_SAFETY_CAP, count), countIntent: intent } : {}),
     ...(fallback.exclusions && { exclusions: fallback.exclusions }),

@@ -53,7 +53,7 @@ describe('plan-aware dynamic columns', () => {
     expect(displayHeaders(['companyName', 'website', 'contactEmail', 'score'])).toEqual([
       'Company Name',
       'Official Website',
-      'Verified Email',
+      'Contact Email',
       'Lead Score',
     ]);
   });

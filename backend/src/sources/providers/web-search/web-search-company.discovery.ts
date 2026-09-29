@@ -12,7 +12,7 @@ export class WebSearchCompanyDiscovery {
     private readonly config: ConfigService,
   ) {}
 
-  collect(plan: SearchPlan, remaining: number, exclude: NormalizedSourceResult[] = []): Promise<WebCompanyCollection> {
+  collect(plan: SearchPlan, remaining: number, exclude: NormalizedSourceResult[] = [], round = 0): Promise<WebCompanyCollection> {
     if (typeof this.search.searchText !== 'function') {
       return Promise.resolve({
         results: [],
@@ -23,6 +23,11 @@ export class WebSearchCompanyDiscovery {
     }
     const searchText = this.search.searchText.bind(this.search);
     const delayMs = Math.min(2000, Math.max(0, this.config.get<number>('sourceProvider.retryDelayMs') ?? 250));
-    return collectWebCompanyCandidates(plan, remaining, (query) => searchText(query, { maxResults: 10 }), { maxQueries: queryBudgetForPlan(plan, remaining), delayMs, exclude });
+    return collectWebCompanyCandidates(plan, remaining, (query) => searchText(query, { maxResults: 20 }), {
+      maxQueries: queryBudgetForPlan(plan, remaining),
+      delayMs,
+      exclude,
+      round,
+    });
   }
 }

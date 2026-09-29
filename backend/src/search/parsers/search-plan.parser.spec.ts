@@ -219,9 +219,9 @@ describe('SearchPlanParser', () => {
     expect(discoveryTarget(parser.parse('Find 300 companies'))).toBe(300);
     expect(discoveryTarget(parser.parse('Find 500 companies'))).toBe(500);
     expect(discoveryTarget(parser.parse('Find companies in Ohio'))).toBe(100);
-    expect(discoveryQueryBudget(50)).toBe(25);
-    expect(discoveryQueryBudget(300)).toBe(150);
-    expect(discoveryQueryBudget(500)).toBe(240);
+    expect(discoveryQueryBudget(50)).toBe(50);
+    expect(discoveryQueryBudget(300)).toBe(300);
+    expect(discoveryQueryBudget(500)).toBe(400);
   });
 
   it('Phase C: expands generic social profile wording to supported company platforms', () => {
@@ -244,5 +244,16 @@ describe('SearchPlanParser', () => {
     expect(plan.decisionMakerRoles).toEqual(expect.arrayContaining(['Founder', 'CEO']));
     expect(plan.emailRequirement?.verified).toBe(true);
     expect(plan.emailRequirement?.required).toBe(true);
+  });
+
+  it('does not require verification when the prompt explicitly disables it', () => {
+    const plan = parser.parse(
+      'Find 300 Real Estate Investment companies in Texas (Cash Home Buyers, Fix & Flip, Wholesalers) with 1-50 employees including Decision Maker Details, Address, Phone, and Social Profiles. Emails do NOT need to be verified.',
+    );
+    expect(plan.requestedCount).toBe(300);
+    expect(plan.leadTypes).toEqual(expect.arrayContaining(['cash_home_buyer', 'fix_and_flip', 'wholesaler']));
+    expect(plan.verificationRequirement).toEqual({ requested: false, required: false, fields: [] });
+    expect(plan.emailRequirement?.verified).toBe(false);
+    expect(plan.emailRequirement?.requested).toBe(true);
   });
 });

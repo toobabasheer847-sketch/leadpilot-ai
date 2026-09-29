@@ -7,9 +7,10 @@ export class PersonCandidateService {
   constructor(private readonly extractor: ContactExtractorService) {}
 
   normalizeCandidate(raw: ContactCandidate): ContactCandidate {
+    const fullName = this.extractor.normalizeName(raw.fullName);
     return {
       ...raw,
-      fullName: this.extractor.normalizeName(raw.fullName),
+      fullName,
       title: raw.title ?? null,
       originalTitle: raw.originalTitle ?? raw.title ?? null,
       normalizedRole: raw.normalizedRole ?? (raw.title ? this.extractor.normalizeTitle(raw.title) : null),
@@ -20,7 +21,7 @@ export class PersonCandidateService {
       instagramUrl: raw.instagramUrl ?? null,
       youtubeUrl: raw.youtubeUrl ?? null,
       twitterUrl: raw.twitterUrl ?? null,
-      normalizedName: raw.fullName.toLowerCase(),
+      normalizedName: fullName.toLowerCase(),
       verificationStatus: raw.verificationStatus ?? 'NOT_VERIFIED',
       status: raw.status ?? 'DISCOVERED',
     };

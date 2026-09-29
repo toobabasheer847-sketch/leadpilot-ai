@@ -101,11 +101,13 @@ function displayStatusForField(field: string, status: string, metadata?: Record<
     const kind = typeof metadata?.verificationKind === 'string' ? metadata.verificationKind : null;
     if (kind === 'ownership') return 'PERSON_OWNERSHIP_VERIFIED';
     if (kind === 'deliverability') return 'DELIVERABILITY_VERIFIED';
-    if (kind === 'independent_evidence' || upper === 'VERIFIED') return 'EVIDENCE_VERIFIED';
-    if (kind === 'evidence_supported' || upper === 'SUPPORTED') return 'SUPPORTED';
-    if (kind === 'syntax') return 'SYNTAX_VALID';
+    if (kind === 'independent_evidence' || upper === 'VERIFIED' || upper === 'EVIDENCE_VERIFIED') return 'EVIDENCE_VERIFIED';
+    if (kind === 'evidence_supported' || upper === 'SUPPORTED' || upper === 'EVIDENCE_SUPPORTED') return 'EVIDENCE_SUPPORTED';
+    if (kind === 'syntax' || upper === 'SYNTAX' || upper === 'SYNTAX_VALID') return 'SYNTAX_VALID';
+    if (upper === 'PERSON_OWNERSHIP_VERIFIED') return 'PERSON_OWNERSHIP_VERIFIED';
+    if (upper === 'DELIVERABILITY_VERIFIED') return 'DELIVERABILITY_VERIFIED';
   }
   if (upper === 'VERIFIED') return 'EVIDENCE_VERIFIED';
-  if (upper === 'SUPPORTED') return 'SUPPORTED';
+  if (upper === 'SUPPORTED' || upper === 'EVIDENCE_SUPPORTED') return 'EVIDENCE_SUPPORTED';
   return upper || 'NOT_FOUND';
 }

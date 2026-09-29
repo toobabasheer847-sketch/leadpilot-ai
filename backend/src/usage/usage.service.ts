@@ -27,8 +27,9 @@ export class UsageService {
   async checkRequestRate(organizationId: string, userId: string | undefined, operation: UsageOperation) {
     const limits = await this.getLimits(organizationId);
     const identity = userId ?? 'anonymous';
+    const minuteLimit = this.minuteLimitFor(operation, limits);
     const windows: Array<[string, number, number]> = [
-      ['minute', limits.requestsPerMinute, 60],
+      ['minute', minuteLimit, 60],
       ['hour', limits.requestsPerHour, 3600],
       ['day', limits.requestsPerDay, 86400],
     ];
@@ -40,6 +41,17 @@ export class UsageService {
         throw new UsageLimitExceededException(`${operation}_${window}`, 0, result.resetAt);
       }
     }
+  }
+
+  /** VERIFICATION uses a higher batch-enqueue ceiling so pipeline company+contact jobs are not capped by the global API minute limit. */
+  private minuteLimitFor(operation: UsageOperation, limits: UsageLimits): number {
+    if (operation !== 'VERIFICATION') return limits.requestsPerMinute;
+    const configured = this.config.get<number>('usage.verificationRequestsPerMinute');
+    if (typeof configured === 'number' && Number.isFinite(configured) && configured > 0) return Math.trunc(configured);
+    if (typeof limits.verificationRequestsPerMinute === 'number' && limits.verificationRequestsPerMinute > 0) {
+      return Math.trunc(limits.verificationRequestsPerMinute);
+    }
+    return 500;
   }
 
   async assertDailyQuota(organizationId: string, operation: UsageOperation, requestedUnits = 1) {

@@ -209,10 +209,16 @@ export function companyNamesCompatible(providerName: string, companyName: string
   return a.includes(b) || b.includes(a);
 }
 
+/**
+ * Snov email status is provider deliverability/validity — never person ownership.
+ * Map to FOUND/UNVERIFIED/NOT_FOUND; verification stage owns truthful statuses.
+ */
 function mapEmailStatus(status?: string): 'FOUND' | 'VERIFIED' | 'UNVERIFIED' | 'NOT_FOUND' {
   if (!status) return 'UNVERIFIED';
-  if (/valid|verified|green/i.test(status)) return 'VERIFIED';
   if (/invalid|not.?found|red/i.test(status)) return 'NOT_FOUND';
+  if (/valid|green|unknown|catch.?all/i.test(status)) return 'FOUND';
+  // Do not map provider "verified" to VERIFIED — that would inflate to ownership/evidence claims.
+  if (/verified/i.test(status)) return 'FOUND';
   return 'UNVERIFIED';
 }
 

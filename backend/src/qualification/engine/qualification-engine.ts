@@ -4,6 +4,7 @@ import type { SearchPlan } from '../../search/types/search-plan.types';
 import { isCompanyProfileUrl, isPersonProfileUrl, roleMatches } from '../../contacts/discovery/public-decision-maker';
 import { assessPersonCompanyRelationship } from '../../contacts/discovery/person-company-relationship';
 import { sameCountry } from '../../sources/location/location-evidence';
+import { rejectDiscoveryUrl } from '../../sources/services/discovery-candidate.gate';
 import { isGenericBusinessEmail } from '../../verification/utils/generic-email';
 import type { CriterionEvidence, CriterionResultCode, QualificationContext, QualificationCriteria, QualificationDecision } from '../types/qualification.types';
 
@@ -218,6 +219,12 @@ export function evaluateQualification(context: QualificationContext, criteria: Q
     // personEmail/companyEmail and personLinkedin* are evaluated above; plain email must not use company fallback for person intent.
     if (field === 'email' && (criteria.personEmailRequired || criteria.companyEmailRequired)) continue;
     if (field !== 'email' && criteria.personRequiredFields.some((item) => tokenEquals(item, `person${field}`))) continue;
+    // Company LinkedIn/Facebook/Instagram are evaluated via companySocial:* — do not also require a person profile for bare tokens.
+    if (field !== 'email' && field !== 'phone') {
+      const coveredByCompanySocial = criteria.socialPlatforms.some((platform) => tokenEquals(platform, field))
+        || criteria.companyRequiredFields.some((item) => tokenEquals(item, `company${field}`) || tokenEquals(item, field));
+      if (coveredByCompanySocial) continue;
+    }
     if (criteria.requiredFields.includes(field) || criteria.optionalFields.includes(field)) {
       const personOnly = criteria.personEmailRequired || criteria.requiredRoles.length > 0 || field !== 'email';
       results.push(evaluateContactField(context, field, criteria.requiredFields.includes(field), {
@@ -238,6 +245,12 @@ export function evaluateQualification(context: QualificationContext, criteria: Q
   for (const field of criteria.verificationRequiredFields) {
     if (/email|personemail|companyemail/i.test(field)) continue;
     if (results.some((item) => tokenEquals(item.criterion, field) || tokenEquals(item.criterion, `person${field}`) || tokenEquals(item.criterion, `company${field}`))) continue;
+    // Company social platforms are already gated by companySocial:* — do not re-require bare facebook/instagram verification on the person.
+    const socialToken = field.replace(/^(company|person)/i, '').toLowerCase();
+    if (['linkedin', 'facebook', 'instagram', 'youtube', 'twitter', 'x'].includes(socialToken)
+      && results.some((item) => item.criterion === `companySocial:${socialToken}` || item.criterion === `person${socialToken}` || item.criterion === `personLinkedin` && socialToken === 'linkedin')) {
+      continue;
+    }
     results.push(evaluateVerificationRequirement(context, field, true));
   }
 
@@ -416,12 +429,12 @@ function evaluateWebsite(context: QualificationContext, required: boolean): Crit
   const verification = fieldStatus(context, 'website');
   const value = context.company.website;
   if (!value) return evidence('website', 'NOT_FOUND', required, 'Official website was not found.', null, verification);
-  if (verification === 'INVALID') {
+  if (rejectDiscoveryUrl(value) || verification === 'INVALID') {
     return evidence('website', 'NO_MATCH', required, 'Website is invalid or is not an official company site (social/directory/news hosts are rejected).', {
       source: 'verification',
       sourceUrl: value,
       excerpt: value,
-    }, verification);
+    }, verification === 'INVALID' ? verification : 'INVALID');
   }
   if (verification === 'CONFLICT' || verification === 'NEEDS_REVIEW') {
     return evidence('website', 'NEEDS_REVIEW', required, 'Website has conflicting verification evidence.', { source: 'verification', sourceUrl: value, excerpt: value }, verification);

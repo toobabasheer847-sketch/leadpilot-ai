@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ContactEvidenceEntry, ContactStatus, VerificationStatus } from '../types/contact.types';
+import { isPlausiblePersonName } from './person-name';
 
 const GENERIC_LOCAL_PARTS = new Set(['john', 'jane', 'info', 'contact', 'hello', 'office', 'support', 'sales', 'admin', 'team', 'inquiries', 'enquiry', 'enquiries', 'noreply', 'no-reply', 'careers', 'jobs']);
 
@@ -12,6 +13,8 @@ export function publicPersonEmail(text: string): string | null {
   if (GENERIC_LOCAL_PARTS.has(local) || value.toLowerCase().includes('example.com')) return null;
   return value;
 }
+
+export { isPlausiblePersonName } from './person-name';
 
 @Injectable()
 export class ContactExtractorService {
@@ -60,7 +63,7 @@ export class ContactExtractorService {
   }
 
   normalizeName(name: string): string {
-    const stopWords = ['ABOUT', 'OUR', 'THE', 'TEAM', 'LEADERSHIP', 'CONTACT', 'HOME', 'WELCOME', 'SERVICES', 'INDUSTRIES', 'COMPANY', 'PAGE'];
+    const stopWords = ['ABOUT', 'OUR', 'THE', 'TEAM', 'LEADERSHIP', 'CONTACT', 'HOME', 'WELCOME', 'SERVICES', 'INDUSTRIES', 'COMPANY', 'PAGE', 'SHARE', 'ARTICLE', 'RELATED', 'POSTS', 'SEARCH', 'MENU'];
     const cleaned = name.replace(/\s+/g, ' ').trim();
     const parts = cleaned.split(/\s+/);
     while (parts.length > 0 && stopWords.includes(parts[0].toUpperCase())) {
@@ -90,12 +93,12 @@ export class ContactExtractorService {
     return match?.[0]?.trim() ?? null;
   }
 
-  extractNameTitlePairs(text: string, targetRoles?: string[]): Array<{ fullName: string; title: string | null; originalTitle: string | null }> {
+  extractNameTitlePairs(text: string, targetRoles?: string[], companyName?: string | null): Array<{ fullName: string; title: string | null; originalTitle: string | null }> {
     const pairs: Array<{ fullName: string; title: string | null; originalTitle: string | null }> = [];
     const nameRegex = /([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})/g;
     const names = Array.from(new Set((text.match(nameRegex) ?? [])
       .map((name) => this.normalizeName(name.trim()))
-      .filter((name) => name && !/^\d+$/.test(name))));
+      .filter((name) => name && !/^\d+$/.test(name) && isPlausiblePersonName(name, companyName))));
     const configuredRoles = this.config.get<string[]>('decisionMaker.rolePriorities', []);
     const titlePriority = (targetRoles?.length
       ? targetRoles.map((role) => role.trim().toUpperCase().replace(/\s+/g, '_'))

@@ -20,6 +20,7 @@ import { SOURCE_PROVIDER } from '../interfaces/source-provider.interface';
 import type { NormalizedSourceResult, SourceProvider, SourceSearchContext } from '../types/source.types';
 import { SourceNormalizerService } from './source-normalizer.service';
 import { fillEmptyCompanyFields, phoneMatchKey } from './company-field-merge';
+import { isPersistableDiscoveryCandidate } from './discovery-candidate.gate';
 import { discoveryProviderFailure, resolveDiscoveryFallback } from './discovery-fallback';
 import { WebSearchCompanyDiscovery } from '../providers/web-search/web-search-company.discovery';
 
@@ -124,6 +125,35 @@ export class SourceDiscoveryService {
     let candidates = 0;
     candidates += await this.persistResults(organizationId, executionId, this.provider.getSourceType(), cappedPrimary, synthetic, context);
     if (!synthetic) candidates += await this.persistResults(organizationId, executionId, 'web_search', cappedWeb, false, context);
+
+    // Keep searching until the acceptance cap is filled or query/provider bounds are exhausted.
+    // Persist-time directory rejection must not permanently stop short of the requested target.
+    const excludePool: NormalizedSourceResult[] = [...cappedPrimary, ...cappedWeb];
+    let refillRounds = 0;
+    while (!synthetic && candidates < Math.min(target, acceptanceCap) && !webError && refillRounds < 4) {
+      refillRounds += 1;
+      const need = Math.min(target, acceptanceCap) - candidates;
+      try {
+        const refill = await this.webDiscovery.collect(plan, need, excludePool, refillRounds);
+        providerQueries += refill.queriesRun;
+        rejected += refill.rejected;
+        if (refill.providerError) {
+          webError = refill.providerError;
+          await this.audit(organizationId, executionId, 'SOURCE_PROVIDER_PARTIAL', undefined, { provider: 'web_search', error: webError });
+        }
+        if (!refill.results.length) break;
+        excludePool.push(...refill.results);
+        const before = candidates;
+        candidates += await this.persistResults(organizationId, executionId, 'web_search', refill.results, false, context);
+        if (candidates <= before) break;
+        if (refill.queriesRun === 0) break;
+      } catch (error) {
+        webError = error instanceof Error ? error.message : 'Web company discovery failed.';
+        await this.audit(organizationId, executionId, 'SOURCE_PROVIDER_PARTIAL', undefined, { provider: 'web_search', error: webError });
+        break;
+      }
+    }
+
     const failure = discoveryProviderFailure(
       candidates,
       this.provider.providerName(),
@@ -289,6 +319,11 @@ export class SourceDiscoveryService {
     for (const raw of results) {
       try {
         const normalized = this.normalizer.normalize(raw);
+        const gate = isPersistableDiscoveryCandidate({ website: normalized.website, sourceUrl: normalized.sourceUrl });
+        if (!gate.ok) {
+          await this.audit(organizationId, executionId, 'SOURCE_RESULT_REJECTED', undefined, { reason: gate.reason, sourceUrl: normalized.sourceUrl.slice(0, 200) });
+          continue;
+        }
         const company = await this.upsertCompany(organizationId, provider, normalized);
         const alreadyLinked = await this.companyAlreadyInExecution(organizationId, executionId, company.id);
         const sourceRecord = await this.upsertSourceRecord(organizationId, executionId, company.id, provider, normalized, context);

@@ -65,7 +65,9 @@ function buildService(input: {
 describe('SourceDiscoveryService OSM web fallback', () => {
   it('continues with web discovery when OpenStreetMap returns a rate-limit providerError', async () => {
     const webCompany = company('Bay Soft Labs', 'https://baysoft.example');
-    const collect = jest.fn().mockResolvedValue({ results: [webCompany], rejected: 0, providerError: null });
+    const collect = jest.fn()
+      .mockResolvedValueOnce({ results: [webCompany], rejected: 0, providerError: null })
+      .mockResolvedValue({ results: [], rejected: 0, providerError: null });
     const { service, webDiscovery } = buildService({
       searchBusinesses: jest.fn().mockResolvedValue({
         provider: 'osm',
@@ -81,7 +83,9 @@ describe('SourceDiscoveryService OSM web fallback', () => {
 
   it('continues with web discovery when OpenStreetMap throws a recoverable rate-limit error', async () => {
     const webCompany = company('Pacific Apps', 'https://pacificapps.example', 'Los Angeles');
-    const collect = jest.fn().mockResolvedValue({ results: [webCompany], rejected: 0, providerError: null });
+    const collect = jest.fn()
+      .mockResolvedValueOnce({ results: [webCompany], rejected: 0, providerError: null })
+      .mockResolvedValue({ results: [], rejected: 0, providerError: null });
     const { service, webDiscovery } = buildService({
       searchBusinesses: jest.fn().mockRejectedValue(
         new SourceProviderError('PROVIDER_RATE_LIMITED', 'OpenStreetMap provider rate limit reached.'),
@@ -96,7 +100,9 @@ describe('SourceDiscoveryService OSM web fallback', () => {
   it('keeps partial OpenStreetMap results and asks web discovery for the remaining count', async () => {
     const osmCompany = company('Coast Code', 'https://coastcode.example', 'San Diego');
     const webCompany = company('Valley Systems', 'https://valleysystems.example', 'San Jose');
-    const collect = jest.fn().mockResolvedValue({ results: [webCompany, osmCompany], rejected: 0, providerError: null });
+    const collect = jest.fn()
+      .mockResolvedValueOnce({ results: [webCompany, osmCompany], rejected: 0, providerError: null })
+      .mockResolvedValue({ results: [], rejected: 0, providerError: null });
     const { service, webDiscovery } = buildService({
       searchBusinesses: jest.fn().mockResolvedValue({
         provider: 'osm',

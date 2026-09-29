@@ -145,7 +145,11 @@ export function publicHitEstablishesRelationship(
   }
   if (isPersonProfileUrl(hit.url) && hasAffiliationLanguage(text, personName, title, companyName)) return true;
   if (hasAffiliationLanguage(text, personName, title, companyName) && isReputableBusinessProfile(hit.url)) return true;
-  // Bare "Name, Title" without company affiliation language is not enough.
+  // Clear public affiliation language (Name, Title of Company) is enough for discovery;
+  // verification still owns deliverability / ownership checks later.
+  if (hasAffiliationLanguage(text, personName, title, companyName) && personMentioned(text, personName) && companyMentioned(text, companyName)) {
+    return true;
+  }
   return false;
 }
 

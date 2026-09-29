@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { WebsiteDiscoveryService } from '../../enrichment/website/website-discovery.service';
 import { WebsiteNormalizerService } from '../../enrichment/website/website-normalizer.service';
 import { isPersonProfileUrl, roleMatches } from '../discovery/public-decision-maker';
-import { ContactExtractorService } from '../extraction/contact-extractor.service';
+import { ContactExtractorService, isPlausiblePersonName } from '../extraction/contact-extractor.service';
 import { ContactCandidate, ContactDiscoveryContext, ContactDiscoveryResult } from '../types/contact.types';
 import { ContactDiscoveryProvider } from './contact-provider.interface';
 
@@ -32,8 +32,9 @@ export class WebsiteContactProvider implements ContactDiscoveryProvider {
   extractCandidatesFromHtml(url: string, html: string, companyName: string, targetRoles?: string[]): ContactCandidate[] {
     const text = this.stripHtml(html);
     const candidates: ContactCandidate[] = [];
-    for (const pair of this.extractor.extractNameTitlePairs(text, targetRoles)) {
+    for (const pair of this.extractor.extractNameTitlePairs(text, targetRoles, companyName)) {
       if (!pair.title) continue;
+      if (!isPlausiblePersonName(pair.fullName, companyName)) continue;
       if (targetRoles?.length && !roleMatches(pair.originalTitle ?? pair.title, targetRoles) && !roleMatches(pair.title, targetRoles)) continue;
       const nameIndex = text.toLowerCase().indexOf(pair.fullName.toLowerCase());
       if (nameIndex < 0) continue;

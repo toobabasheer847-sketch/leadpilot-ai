@@ -1,21 +1,29 @@
 import { createHash } from 'node:crypto';
-import { classifyOfficialWebsiteHost } from '../../../enrichment/website/official-website.validator';
-import { assessCategoryEvidence } from '../../../search/category-evidence';
 import { discoveryQueryBudget, discoveryTarget } from '../../../search/search-plan.limits';
+import { assessCategoryEvidence } from '../../../search/category-evidence';
 import { assessPlanExclusions } from '../../../search/exclusion-evidence';
 import { expansionCities, placeMentioned } from '../../../search/search-plan.places';
 import { toCountryCode } from '../../location/location-evidence';
 import type { SearchLocation, SearchPlan } from '../../../search/types/search-plan.types';
+import { rejectDiscoveryUrl } from '../../services/discovery-candidate.gate';
 import { discoveryIdentityKeys } from '../../services/discovery-fallback';
 import type { NormalizedSourceResult } from '../../types/source.types';
 import type { WebSearchResult } from '../../../enrichment/website/web-search.types';
 
 const JOB_BOARDS = ['indeed.com', 'ziprecruiter.com', 'monster.com', 'simplyhired.com', 'careerbuilder.com'];
-const LISTING = /\b(top\s+\d+|best\s+\d+|list of|companies to watch|ranking of|directory of)\b/i;
+const LISTING = /\b(top\s+\d+|best\s+\d+|list of|companies to watch|ranking of|directory of|reviewed on|agencies? (?:in|for)|freelancers? (?:in|for))\b/i;
 const CONTRADICTION = /\b(restaurant|dentist|church|school|hotel|cafe|bar & grill|auto repair|salon)\b/i;
-const REAL_ESTATE_SIGNAL = /\b(real[\s-]?estate|realty|propert(?:y|ies)|acquisition|multifamily|apartment buildings?)\b/i;
-const INVESTOR_SIGNAL = /\b(real[\s-]?estate|realty|propert(?:y|ies)|investors?|investments?|acquisition|holdings|multifamily)\b/i;
-const QUERY_TAILS = ['official website', 'headquarters', 'contact', 'about', 'team', 'founder'];
+const REAL_ESTATE_SIGNAL = /\b(real[\s-]?estate|realty|propert(?:y|ies)|acquisition|multifamily|apartment buildings?|wholesal(?:e|er|ing)|cash\s+home\s+buy|fix(?:\s|-)?and(?:\s|-)?flip)\b/i;
+const INVESTOR_SIGNAL = /\b(real[\s-]?estate|realty|propert(?:y|ies)|investors?|investments?|acquisition|holdings|multifamily|wholesal(?:e|er|ing)|cash\s+home\s+buy|fix(?:\s|-)?and(?:\s|-)?flip|we\s+buy\s+houses?)\b/i;
+const QUERY_TAILS = ['official website', 'headquarters', 'contact', 'about', 'team', 'founder', 'LLC', 'Inc', '-site:clutch.co -site:goodfirms.co'];
+const US_STATE_NAMES = [
+  'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware', 'Florida', 'Georgia',
+  'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland',
+  'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire',
+  'New Jersey', 'New Mexico', 'New York', 'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania',
+  'Rhode Island', 'South Carolina', 'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington',
+  'West Virginia', 'Wisconsin', 'Wyoming', 'District of Columbia',
+];
 
 export interface WebCompanyCollection {
   results: NormalizedSourceResult[];
@@ -24,8 +32,8 @@ export interface WebCompanyCollection {
   queriesRun: number;
 }
 
-export function companyDiscoveryQueries(plan: SearchPlan, maxQueries: number): string[] {
-  const phrases = searchPhrases(plan);
+export function companyDiscoveryQueries(plan: SearchPlan, maxQueries: number, round = 0): string[] {
+  const phrases = [...searchPhrases(plan), ...roundPhrases(plan, round)];
   const places = searchPlaces(plan);
   const queries: string[] = [];
   const seen = new Set<string>();
@@ -36,6 +44,9 @@ export function companyDiscoveryQueries(plan: SearchPlan, maxQueries: number): s
     seen.add(key);
     queries.push(query);
   };
+  const tails = round === 0
+    ? QUERY_TAILS
+    : [...QUERY_TAILS, `round${round}`, 'owner operator', 'buying houses', 'residential investor'];
   for (const phrase of phrases) {
     for (const place of places) {
       push([phrase, place]);
@@ -48,7 +59,13 @@ export function companyDiscoveryQueries(plan: SearchPlan, maxQueries: number): s
       if (queries.length >= maxQueries) return queries;
     }
   }
-  for (const tail of QUERY_TAILS) {
+  for (const phrase of phrases) {
+    for (const place of places) {
+      if (place) push([`"${phrase}"`, place, 'company OR LLC OR Inc']);
+      if (queries.length >= maxQueries) return queries;
+    }
+  }
+  for (const tail of tails) {
     for (const phrase of phrases) {
       for (const place of places) {
         push([phrase, place, tail]);
@@ -69,11 +86,11 @@ export async function collectWebCompanyCandidates(
   plan: SearchPlan,
   target: number,
   search: (query: string) => Promise<WebSearchResult[]>,
-  options: { maxQueries?: number; delayMs?: number; sleep?: (ms: number) => Promise<void>; exclude?: NormalizedSourceResult[] } = {},
+  options: { maxQueries?: number; delayMs?: number; sleep?: (ms: number) => Promise<void>; exclude?: NormalizedSourceResult[]; round?: number } = {},
 ): Promise<WebCompanyCollection> {
   const wanted = Math.max(0, Math.trunc(target));
   if (wanted === 0) return { results: [], rejected: 0, providerError: null, queriesRun: 0 };
-  const queries = companyDiscoveryQueries(plan, options.maxQueries ?? queryBudgetForPlan(plan, wanted));
+  const queries = companyDiscoveryQueries(plan, options.maxQueries ?? queryBudgetForPlan(plan, wanted), options.round ?? 0);
   const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const delayMs = options.delayMs ?? 0;
   const results: NormalizedSourceResult[] = [];
@@ -128,14 +145,31 @@ export function assessWebCompanyCandidate(
     return { accepted: false, reason: 'INVALID_URL' };
   }
   if (JOB_BOARDS.some((host) => hostname === host || hostname.endsWith(`.${host}`))) return { accepted: false, reason: 'JOB_BOARD' };
-  const hostReason = classifyOfficialWebsiteHost(hostname);
-  if (hostReason) return { accepted: false, reason: hostReason };
+  const rejectedUrl = rejectDiscoveryUrl(hit.url);
+  if (rejectedUrl) return { accepted: false, reason: rejectedUrl };
   const text = `${hit.title} ${hit.snippet}`.replace(/\s+/g, ' ').trim();
   if (LISTING.test(text)) return { accepted: false, reason: 'GENERIC_LIST' };
   const name = companyNameFromTitle(hit.title);
   if (!name) return { accepted: false, reason: 'UNUSABLE_NAME' };
   const requested = plan.locations.find((location) => location.city || location.state || location.region || location.country || location.originalText);
-  const location = requested ? locationEvidence(text, name, requested) : null;
+  let location = requested ? locationEvidence(text, name, requested) : null;
+  // State-only investor plans: SERP snippets often omit the state when the query already scoped it.
+  // Accept plan-state context only when the snippet does not assert a different state (never invent a city).
+  if (
+    requested
+    && !location
+    && requested.state
+    && !requested.city?.trim()
+    && isInvestorPlan(plan)
+    && !mentionsForeignState(text, requested.state)
+  ) {
+    const country = toCountryCode(requested.country) ?? (requested.country === 'US' ? 'US' : undefined);
+    location = {
+      state: requested.state,
+      ...(country ? { country } : {}),
+      evidence: 'plan_state_query_context',
+    };
+  }
   if (requested && !location) return { accepted: false, reason: 'OUTSIDE_REQUESTED_LOCATION' };
   const category = categoryDecision(text, plan, name);
   if (!category.matched) return { accepted: false, reason: category.reason };
@@ -173,10 +207,28 @@ export function assessWebCompanyCandidate(
 
 function searchPhrases(plan: SearchPlan): string[] {
   const investor = isInvestorPlan(plan);
-  if (investor) return ['real estate investment company', 'real estate investor', 'property investment firm'];
+  if (investor) {
+    const specific: string[] = [];
+    const types = plan.leadTypes.map((type) => type.toLowerCase());
+    if (types.some((type) => /cash_home_buyer/.test(type))) specific.push('cash home buyer', 'we buy houses');
+    if (types.some((type) => /fix_and_flip|house_flipper/.test(type))) specific.push('fix and flip', 'house flipper');
+    if (types.some((type) => /wholesaler|wholesaling/.test(type))) specific.push('real estate wholesaler', 'house wholesaler');
+    return [...new Set([...specific, 'real estate investment company', 'real estate investor', 'property investment firm'])];
+  }
   const phrases = [...plan.industry, ...plan.leadTypes].map((term) => term.replace(/_/g, ' ').trim()).filter(Boolean);
   const base = phrases.length ? phrases : ['company'];
   return [...new Set(base.flatMap((phrase) => [phrase, `${phrase} company`]))];
+}
+
+function roundPhrases(plan: SearchPlan, round: number): string[] {
+  if (round <= 0 || !isInvestorPlan(plan)) return [];
+  const batches = [
+    ['we buy houses', 'cash buyers', 'fix flip investors'],
+    ['residential wholesale', 'creative finance buyer', 'distressed property buyer'],
+    ['turnkey rental investor', 'BRRRR investor', 'multifamily acquisition'],
+    ['off market buyer', 'novation wholesaler', 'subject to buyer'],
+  ];
+  return batches[Math.min(round, batches.length) - 1] ?? [];
 }
 
 function searchPlaces(plan: SearchPlan): string[] {
@@ -196,14 +248,14 @@ function placeLabel(location: SearchLocation): string {
 
 function isInvestorPlan(plan: SearchPlan): boolean {
   const joined = [...plan.leadTypes, ...plan.industry].join(' ');
-  return /real_estate_investor|house_flipper|fix_and_flip|buy_and_hold|brrrr|land_investor|commercial_real_estate_investor|cash_home_buyer/.test(joined);
+  return /real_estate_investor|house_flipper|fix_and_flip|buy_and_hold|brrrr|land_investor|commercial_real_estate_investor|cash_home_buyer|wholesaler/.test(joined);
 }
 
 function categoryDecision(text: string, plan: SearchPlan, companyName: string): { matched: true; label: string } | { matched: false; reason: string } {
   if (isInvestorPlan(plan)) {
     if (CONTRADICTION.test(text) && !REAL_ESTATE_SIGNAL.test(text)) return { matched: false, reason: 'NOT_REAL_ESTATE_INVESTOR' };
     if (!INVESTOR_SIGNAL.test(text)) return { matched: false, reason: 'NOT_REAL_ESTATE_INVESTOR' };
-    return { matched: true, label: plan.leadTypes.find((type) => /investor|flip|hold|brrrr|buyer/.test(type)) ?? 'real_estate_investor' };
+    return { matched: true, label: plan.leadTypes.find((type) => /investor|flip|hold|brrrr|buyer|wholesaler/.test(type)) ?? 'real_estate_investor' };
   }
   const assessment = assessCategoryEvidence({
     requested: [...plan.industry, ...plan.leadTypes],
@@ -220,6 +272,7 @@ function companyNameFromTitle(title: string): string | null {
     if (part.length < 3 || part.length > 80) continue;
     if (/^(home|about|contact|linkedin|facebook|instagram|youtube|twitter|news|blog)$/i.test(part)) continue;
     if (LISTING.test(part)) continue;
+    if (/\b(how to|what is|why |guide to|tips for|answered|quora|best agencies|top agencies)\b/i.test(part)) continue;
     return part;
   }
   return null;
@@ -241,6 +294,14 @@ function locationEvidence(text: string, companyName: string, requested: SearchLo
     ...(country ? { country } : {}),
     evidence: cityName ?? evidence ?? originalHit ?? '',
   };
+}
+
+function mentionsForeignState(text: string, requestedState: string): boolean {
+  const requested = requestedState.trim().toLowerCase();
+  return US_STATE_NAMES.some((state) => {
+    if (state.toLowerCase() === requested) return false;
+    return new RegExp(`\\b${escapeRegExp(state)}\\b`, 'i').test(text);
+  });
 }
 
 function canonicalWebsite(url: string): string {

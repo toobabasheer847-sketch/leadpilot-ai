@@ -50,6 +50,8 @@ describe('web company discovery', () => {
     ['https://www.facebook.com/oakstream', 'SOCIAL_PROFILE'],
     ['https://www.instagram.com/oakstream', 'SOCIAL_PROFILE'],
     ['https://www.glassdoor.com/oak-stream', 'REVIEW_SITE'],
+    ['https://clutch.co/profile/oak-stream', 'REVIEW_SITE'],
+    ['https://www.goodfirms.co/company/oak-stream', 'REVIEW_SITE'],
     ['https://www.rocketreach.co/oak-stream', 'DIRECTORY'],
     ['https://startupintros.com/oak-stream', 'DIRECTORY'],
     ['https://www.indeed.com/cmp/oak-stream', 'JOB_BOARD'],
@@ -59,14 +61,36 @@ describe('web company discovery', () => {
     expect(assessWebCompanyCandidate(hit({ url }), plan)).toEqual({ accepted: false, reason });
   });
 
-  it('rejects list pages, companies outside Texas, unrelated businesses, and a Texas name with no location evidence', () => {
+  it('rejects list pages, companies outside Texas, unrelated businesses, and directories/blogs', () => {
     expect(assessWebCompanyCandidate(hit({ title: 'Top 10 real estate investors in Texas' }), plan).accepted).toBe(false);
     expect(assessWebCompanyCandidate(hit({ snippet: 'Oak Stream Investors is a real estate investor in Denver, Colorado.' }), plan)).toMatchObject({ accepted: false, reason: 'OUTSIDE_REQUESTED_LOCATION' });
     expect(assessWebCompanyCandidate(hit({ snippet: 'Oak Stream Investors is a dentist in Austin, Texas.' }), plan)).toMatchObject({ accepted: false, reason: 'NOT_REAL_ESTATE_INVESTOR' });
     expect(assessWebCompanyCandidate(hit({
+      title: 'Best Agencies in Texas',
+      url: 'https://clutch.co/agencies/texas',
+      snippet: 'Top real estate investment companies in Texas reviewed on Clutch.',
+    }), plan)).toMatchObject({ accepted: false, reason: 'REVIEW_SITE' });
+    expect(assessWebCompanyCandidate(hit({
+      title: 'How to find cash home buyers | Blog',
+      url: 'https://tips.example/blog/cash-buyers',
+      snippet: 'A guide to cash home buyers and wholesalers in Texas.',
+    }), plan)).toMatchObject({ accepted: false, reason: 'GENERIC_LIST' });
+    expect(assessWebCompanyCandidate(hit({
+      title: 'Why invest in Texas real estate? | Quora',
+      url: 'https://www.quora.com/Why-invest-in-Texas',
+      snippet: 'Answers about real estate investors in Texas.',
+    }), plan)).toMatchObject({ accepted: false, reason: 'GENERIC_THIRD_PARTY_PAGE' });
+  });
+
+  it('accepts a first-party investor page when the snippet omits Texas on a state-only plan', () => {
+    const decision = assessWebCompanyCandidate(hit({
       title: 'Texas Oak Holdings | Home',
-      snippet: 'Texas Oak Holdings buys apartment buildings.',
-    }), plan)).toMatchObject({ accepted: false, reason: 'OUTSIDE_REQUESTED_LOCATION' });
+      snippet: 'Texas Oak Holdings buys apartment buildings and flips houses.',
+    }), plan);
+    expect(decision.accepted).toBe(true);
+    if (!decision.accepted) return;
+    expect(decision.result.address).toMatchObject({ state: 'Texas', country: 'US' });
+    expect(decision.result.rawData).toMatchObject({ locationEvidence: 'plan_state_query_context' });
   });
 
   it('keeps separate offices and collapses the same company on one host', () => {

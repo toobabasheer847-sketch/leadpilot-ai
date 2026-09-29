@@ -10,10 +10,10 @@ const SAFE_TERM = /^[a-z0-9_ ]{1,40}$/i;
 const SINGLE_QUERY_DEGREES = 4;
 /** Hard cap on geographic partitions for one location. The tiles still cover the whole box. */
 export const MAX_DISCOVERY_PARTITIONS = 12;
-const INVESTOR_NAME_PATTERN = 'investor|investment|acquisition|holdings|buy and hold|fix and flip';
+const INVESTOR_NAME_PATTERN = 'investor|investment|acquisition|holdings|buy and hold|fix and flip|home buyer|wholesaler|we buy houses';
 const INVESTOR_SELECTOR = `["office"]["office"!="estate_agent"]["office"!="property_management"]["office"!="insurance"]["name"~"${INVESTOR_NAME_PATTERN}",i]`;
 
-const INVESTOR_POSITIVE = /\b(investors?|investments?|acquisitions?|holdings)\b|\bbuy and hold\b|\bfix and flip\b/i;
+const INVESTOR_POSITIVE = /\b(investors?|investments?|acquisitions?|holdings|wholesalers?)\b|\bbuy and hold\b|\bfix and flip\b|\bcash home buy|\bwe buy houses?\b/i;
 const INVESTOR_NAME_EXCLUSIONS = [
   /\breal estate agents?\b/i,
   /\brealtors?\b/i,
@@ -33,11 +33,12 @@ const INVESTOR_CATEGORY_EXCLUSIONS = [/estate agent/i, /property management/i, /
 const CATEGORY_SELECTORS: Record<string, readonly string[]> = {
   real_estate: ['["office"="estate_agent"]', '["shop"="estate_agent"]'],
   real_estate_investor: [INVESTOR_SELECTOR],
-  cash_home_buyer: ['["office"]["name"~"investor|investments|acquisition|home buyer",i]'],
+  cash_home_buyer: ['["office"]["name"~"investor|investments|acquisition|home buyer|we buy houses",i]'],
   house_flipper: [INVESTOR_SELECTOR],
   fix_and_flip: [INVESTOR_SELECTOR],
   buy_and_hold: [INVESTOR_SELECTOR],
   brrrr: [INVESTOR_SELECTOR],
+  wholesaler: ['["office"]["name"~"wholesaler|wholesale|investor|investments|acquisition",i]'],
   commercial_real_estate_investor: [INVESTOR_SELECTOR],
   land_investor: [INVESTOR_SELECTOR],
   construction: ['["office"="construction_company"]', '["craft"="builder"]'],
@@ -143,7 +144,9 @@ export function isRealEstateInvestorDiscovery(plan: SearchPlan): boolean {
       || key === 'house_flipper'
       || key === 'fix_and_flip'
       || key === 'buy_and_hold'
-      || key === 'brrrr';
+      || key === 'brrrr'
+      || key === 'cash_home_buyer'
+      || key === 'wholesaler';
   });
 }
 
@@ -207,7 +210,7 @@ function coordinate(value: number, limit: number): string {
 
 const INVESTOR_DISCOVERY_KEYS = new Set([
   'real_estate_investor', 'cash_home_buyer', 'house_flipper', 'fix_and_flip', 'buy_and_hold', 'brrrr',
-  'commercial_real_estate_investor', 'land_investor',
+  'commercial_real_estate_investor', 'land_investor', 'wholesaler',
 ]);
 
 function categorySelectors(plan: SearchPlan): string[] {

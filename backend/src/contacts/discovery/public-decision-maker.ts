@@ -1,4 +1,5 @@
 import { publicPersonEmail } from '../extraction/contact-extractor.service';
+import { isPlausiblePersonName } from '../extraction/person-name';
 import type { ContactCandidate } from '../types/contact.types';
 import { publicHitEstablishesRelationship } from './person-company-relationship';
 
@@ -21,7 +22,7 @@ const TITLES: Array<[RegExp, string]> = [
 ];
 
 const NAME = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g;
-const BLOCKED_NAMES = /^(real estate|texas|linkedin|facebook|instagram|youtube|twitter|managing partner|managing director|general manager|investment manager|chief executive|private equity)$/i;
+const BLOCKED_NAMES = /^(real estate|texas|linkedin|facebook|instagram|youtube|twitter|managing partner|managing director|general manager|investment manager|chief executive|private equity|share article|related posts)$/i;
 
 export function decisionMakerQueries(companyName: string, roles?: string[]): string[] {
   const name = companyName.trim();
@@ -30,10 +31,16 @@ export function decisionMakerQueries(companyName: string, roles?: string[]): str
     .map((role) => role.trim())
     .filter(Boolean)
     .slice(0, 8);
-  return roleTerms.map((role) => {
+  const roleQueries = roleTerms.map((role) => {
     const term = /\s/.test(role) ? `"${role}"` : role;
     return `"${name}" ${term}`;
   });
+  return [
+    ...roleQueries,
+    `"${name}" (founder OR CEO OR owner OR president) (email OR contact OR phone)`,
+    `"${name}" founder OR CEO linkedin`,
+    `"${name}" "about us" OR team OR leadership`,
+  ];
 }
 
 export function assessPublicDecisionMaker(
@@ -46,13 +53,14 @@ export function assessPublicDecisionMaker(
   if (!title) return null;
   if (options?.allowedRoles?.length && !roleMatches(title, options.allowedRoles)) return null;
   const fullName = personName(text, title, companyName);
-  if (!fullName) return null;
+  if (!fullName || !isPlausiblePersonName(fullName, companyName)) return null;
   const clause = personWindows(text, fullName);
   if (!companyAssociated(companyName, clause)) return null;
   if (otherCompanyAffiliation(clause, companyName)) return null;
   // Random "Name, Title" snippets without company affiliation / official source are rejected.
   if (!publicHitEstablishesRelationship(companyName, hit, fullName, title, options?.companyWebsite)) return null;
   const email = publicPersonEmail(clause);
+  const phone = publicPersonPhone(clause);
   const profiles = personProfiles(hit.url);
   const retrievedAt = hit.retrievedAt ?? new Date().toISOString();
   const evidence = [
@@ -61,6 +69,7 @@ export function assessPublicDecisionMaker(
     evidenceEntry('companyRelationship', companyName, hit.url, text, retrievedAt),
   ];
   if (email) evidence.push(evidenceEntry('email', email, hit.url, text, retrievedAt));
+  if (phone) evidence.push(evidenceEntry('phone', phone, hit.url, text, retrievedAt));
   for (const url of Object.values(profiles)) {
     if (url) evidence.push(evidenceEntry('profileUrl', url, hit.url, text, retrievedAt));
   }
@@ -74,8 +83,8 @@ export function assessPublicDecisionMaker(
     companyRelationship: companyName,
     email,
     emailStatus: email ? 'UNVERIFIED' : 'NOT_FOUND',
-    phone: null,
-    phoneStatus: 'NOT_FOUND',
+    phone,
+    phoneStatus: phone ? 'UNVERIFIED' : 'NOT_FOUND',
     ...profiles,
     companyName,
     sourceUrl: hit.url,
@@ -176,6 +185,7 @@ function personName(text: string, title: string, companyName: string): string | 
   for (const match of window.matchAll(NAME)) {
     const candidate = match[1].trim();
     if (BLOCKED_NAMES.test(candidate)) continue;
+    if (!isPlausiblePersonName(candidate, companyName)) continue;
     if (candidate.toLowerCase() === title.toLowerCase()) continue;
     if (TITLES.some(([, label]) => label.toLowerCase() === candidate.toLowerCase())) continue;
     if (company.includes(candidate.toLowerCase())) continue;
@@ -238,6 +248,11 @@ export function isCompanyProfileUrl(url: string): boolean {
 
 function evidenceEntry(field: string, value: string, sourceUrl: string, excerpt: string, retrievedAt: string) {
   return { field, value, sourceUrl, evidenceExcerpt: excerpt, retrievedAt, evidenceType: 'PUBLIC_WEB_SEARCH' };
+}
+
+function publicPersonPhone(text: string): string | null {
+  const match = text.match(/(?:\+?\d{1,3}[-.\s])?(?:\(?\d{3}\)?[-.\s])\d{3}[-.\s]\d{4}/);
+  return match?.[0]?.trim() ?? null;
 }
 
 export function companyDomainFromWebsite(website?: string | null): string | null {

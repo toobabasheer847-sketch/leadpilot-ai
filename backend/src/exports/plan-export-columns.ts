@@ -18,7 +18,7 @@ export const EXPORT_FIELD_HEADERS: Record<ExportField, string> = {
   companySizeStatus: 'Company Size Status',
   contactName: 'Decision Maker Name',
   contactTitle: 'Title',
-  contactEmail: 'Verified Email',
+  contactEmail: 'Contact Email',
   contactPhone: 'Direct Phone',
   linkedin: 'LinkedIn',
   facebook: 'Facebook',

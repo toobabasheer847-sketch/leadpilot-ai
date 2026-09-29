@@ -8,9 +8,10 @@ const LEAD_PHRASES: Array<[RegExp, string, string?]> = [
   [/\bland investors?\b/i, 'land_investor', 'real_estate'],
   [/\bcash home buyers?\b/i, 'cash_home_buyer', 'real_estate'],
   [/\bhouse flippers?\b/i, 'house_flipper', 'real_estate'],
-  [/\bfix(?:\s|-)?and(?:\s|-)?flip\b/i, 'fix_and_flip', 'real_estate'],
+  [/\bfix(?:(?:\s|-)?and(?:\s|-)?|\s*&\s*)flip\b/i, 'fix_and_flip', 'real_estate'],
   [/\bbuy(?:\s|-)?and(?:\s|-)?hold\b/i, 'buy_and_hold', 'real_estate'],
   [/\bbrrrr?\b/i, 'brrrr', 'real_estate'],
+  [/\b(?:real\s+estate\s+)?wholesalers?\b/i, 'wholesaler', 'real_estate'],
   [/\bproperty investors?\b/i, 'real_estate_investor', 'real_estate'],
   [/\breal estate investors?\b/i, 'real_estate_investor', 'real_estate'],
   [/\breal estate investment(?:\s+compan(?:y|ies)|\s+firms?)?\b/i, 'real_estate_investor', 'real_estate'],
@@ -79,14 +80,18 @@ export class SearchPlanParser {
     const socialPlatforms = this.parseSocialPlatforms(criteriaPrompt);
     const preferredFields = this.parsePreferredFields(criteriaPrompt, companyFields, contactFields, requiredFields);
     const emailRequested = /\be-?mails?\b/i.test(criteriaPrompt);
-    const emailVerified = /\bverified\s+(?:decision[- ]makers?\s+|person(?:'s)?\s+)?e-?mails?\b|\be-?mails?\s+(?:must be\s+)?verified\b/i.test(criteriaPrompt);
+    const verificationNegated = verificationIntentNegated(criteriaPrompt);
+    const emailVerified = !verificationNegated && /\bverified\s+(?:decision[- ]makers?\s+|person(?:'s)?\s+)?e-?mails?\b|\be-?mails?\s+(?:must be\s+)?verified\b/i.test(criteriaPrompt);
     const emailRequired = emailVerified || /\b(?:must|required|need)\b[^.]{0,60}\be-?mails?\b/i.test(criteriaPrompt);
     const websiteRequested = /\bwebsite\b/i.test(criteriaPrompt);
     const websiteRequired = requiredFields.includes('website')
       || /\b(?:must|required|need)\b[^.]{0,40}\bwebsite\b/i.test(criteriaPrompt)
       || /\b(?:with|including|and)\b[^.]{0,120}\b(?:company\s+)?website\b/i.test(criteriaPrompt);
-    const verificationRequested = /\bverified\b|\bverification\b/i.test(criteriaPrompt);
-    const verificationFields = this.parseVerificationFields(criteriaPrompt, emailVerified, requiredFields);
+    const mentionsVerification = /\bverified\b|\bverification\b/i.test(criteriaPrompt);
+    const verificationRequested = mentionsVerification && !verificationNegated;
+    const verificationFields = verificationRequested
+      ? this.parseVerificationFields(criteriaPrompt, emailVerified, requiredFields)
+      : [];
     return {
       targetType: /\bqualified\s+leads?\b/i.test(criteriaPrompt) ? 'QUALIFIED_LEADS' : 'COMPANIES',
       industry,
@@ -159,14 +164,16 @@ export class SearchPlanParser {
   }
 
   private takeLocations(prompt: string): { index: number; locations: SearchLocation[] } | null {
-    const pattern = /\b(in|near|within)\s+(.+?)(?=\s+(?:that|who|which|with|without|preferably)\b|$)/gi;
+    const pattern = /\b(in|near|within)\s+(.+?)(?=\s+(?:that|who|which|with|without|preferably|excluding|exclude)\b|$)/gi;
     let match: RegExpExecArray | null;
     let found: { index: number; text: string } | null = null;
     while ((match = pattern.exec(prompt))) {
       found = { index: match.index, text: match[2].trim() };
     }
     if (!found?.text) return null;
-    const locations = found.text
+    const placeText = this.truncateLocationText(found.text);
+    if (!placeText) return null;
+    const locations = placeText
       .split(/\s+and\s+/i)
       .map((part) => {
         const place = interpretPlace(part);
@@ -176,6 +183,23 @@ export class SearchPlanParser {
       .slice(0, 3);
     if (!locations.length) return null;
     return { index: found.index, locations };
+  }
+
+  /**
+   * After size/count clauses are stripped, "in California , CEO or Founder…" can leave the
+   * location regex without a "with" stopper. Truncate at role/field/score boundaries so
+   * SearchPlan location does not swallow unrelated criteria.
+   */
+  private truncateLocationText(text: string): string {
+    const criteriaBoundary = text.search(
+      /,\s*(?:CEO|CFOs?|CTOs?|COOs?|Founders?|Presidents?|Owners?|Managing\s+Directors?|company\s+(?:LinkedIn|Facebook|Instagram|YouTube|Twitter|X)|person\s+LinkedIn|verified|websites?|e-?mails?|phones?|minimum\s+score|min\s+score|decision[- ]makers?|social\s+profiles?)\b/i,
+    );
+    if (criteriaBoundary >= 0) return text.slice(0, criteriaBoundary).replace(/[,\s]+$/g, '').trim();
+    const andBoundary = text.search(
+      /\s+and\s+(?:CEO|Founders?|Presidents?|Owners?|company\s+(?:LinkedIn|Facebook|Instagram)|person\s+LinkedIn|verified|websites?|e-?mails?|LinkedIn|Facebook|Instagram|minimum\s+score)\b/i,
+    );
+    if (andBoundary >= 0) return text.slice(0, andBoundary).trim();
+    return text.replace(/[,\s]+$/g, '').trim();
   }
 
   private countryFallback(prompt: string): SearchLocation[] {
@@ -462,4 +486,9 @@ function slugIndustry(phrase: string): string {
   if (last.length > 4 && last.endsWith('s') && !last.endsWith('ss')) words[words.length - 1] = last.endsWith('ies') ? `${last.slice(0, -3)}y` : last.slice(0, -1);
   const slug = words.join('_').replace(/[^a-z0-9_]+/g, '').replace(/^_+|_+$/g, '');
   return slug.length >= 2 ? slug : '';
+}
+
+/** True when the prompt mentions verification only to disable it (e.g. "emails do NOT need to be verified"). */
+export function verificationIntentNegated(prompt: string): boolean {
+  return /\b(?:do\s+not|don't|dont|need\s+not|no\s+need(?:\s+to)?|without|not)\b[^.]{0,48}\b(?:verified|verification)\b|\b(?:verified|verification)\b[^.]{0,48}\b(?:not\s+(?:required|needed|necessary)|is\s+not\s+(?:required|needed)|optional|unnecessary|disabled)\b/i.test(prompt);
 }

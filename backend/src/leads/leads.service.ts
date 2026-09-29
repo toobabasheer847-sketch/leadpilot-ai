@@ -157,9 +157,9 @@ export class LeadsService {
         filters.contactTitle ? ilike(companyContacts.title, `%${filters.contactTitle}%`) : undefined,
         filters.hasDecisionMaker === true ? sql`${companyContacts.fullName} is not null` : filters.hasDecisionMaker === false ? sql`${companyContacts.fullName} is null` : undefined,
         filters.hasVerifiedContact === true
-          ? sql`(${companyContacts.verificationStatus} = 'VERIFIED' or ${companyContacts.emailStatus} = 'VERIFIED')`
+          ? sql`(${companyContacts.verificationStatus} in ('VERIFIED', 'PERSON_OWNERSHIP_VERIFIED', 'EVIDENCE_VERIFIED', 'DELIVERABILITY_VERIFIED') or ${companyContacts.emailStatus} in ('VERIFIED', 'PERSON_OWNERSHIP_VERIFIED', 'EVIDENCE_VERIFIED', 'DELIVERABILITY_VERIFIED'))`
           : filters.hasVerifiedContact === false
-            ? sql`(${companyContacts.verificationStatus} is distinct from 'VERIFIED' and ${companyContacts.emailStatus} is distinct from 'VERIFIED')`
+            ? sql`(coalesce(${companyContacts.verificationStatus}, '') not in ('VERIFIED', 'PERSON_OWNERSHIP_VERIFIED', 'EVIDENCE_VERIFIED', 'DELIVERABILITY_VERIFIED') and coalesce(${companyContacts.emailStatus}, '') not in ('VERIFIED', 'PERSON_OWNERSHIP_VERIFIED', 'EVIDENCE_VERIFIED', 'DELIVERABILITY_VERIFIED'))`
             : undefined,
         filters.hasLinkedIn === true ? sql`${companyContacts.linkedinUrl} is not null` : filters.hasLinkedIn === false ? sql`${companyContacts.linkedinUrl} is null` : undefined,
         filters.hasFacebook === true ? sql`${companyContacts.facebookUrl} is not null` : filters.hasFacebook === false ? sql`${companyContacts.facebookUrl} is null` : undefined,

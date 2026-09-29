@@ -20,6 +20,8 @@ export interface UsageLimits {
   requestsPerMinute: number;
   requestsPerHour: number;
   requestsPerDay: number;
+  /** Minute window for VERIFICATION enqueue (pipeline batch); defaults from RATE_LIMIT_VERIFICATION_PER_MINUTE. */
+  verificationRequestsPerMinute?: number;
   aiRequestsPerMinute: number;
   aiRequestsPerDay: number;
   dailySearchLimit: number;

@@ -122,6 +122,8 @@ export default () => ({
     requestsPerMinute: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS_PER_MINUTE ?? '100', 10),
     requestsPerHour: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS_PER_HOUR ?? '1000', 10),
     requestsPerDay: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS_PER_DAY ?? '5000', 10),
+    /** Pipeline verification batch-enqueues company+contact jobs; default 500 so large DM sets do not trip the global 100/min API limit. */
+    verificationRequestsPerMinute: parseInt(process.env.RATE_LIMIT_VERIFICATION_PER_MINUTE ?? '500', 10),
     aiRequestsPerMinute: parseInt(process.env.AI_REQUESTS_PER_MINUTE ?? '20', 10),
     aiRequestsPerDay: parseInt(process.env.AI_REQUESTS_PER_DAY ?? '500', 10),
     dailySearchLimit: parseInt(process.env.DEFAULT_DAILY_SEARCH_LIMIT ?? '100', 10),

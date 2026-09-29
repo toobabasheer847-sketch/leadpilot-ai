@@ -12,6 +12,10 @@ describe('Phase C plan-driven enrichment', () => {
     expect(classifyOfficialWebsiteHost('x.com')).toBe('SOCIAL_PROFILE');
     expect(classifyOfficialWebsiteHost('indeed.com')).toBe('DIRECTORY');
     expect(classifyOfficialWebsiteHost('rocketreach.co')).toBe('DIRECTORY');
+    expect(classifyOfficialWebsiteHost('clutch.co')).toBe('REVIEW_SITE');
+    expect(classifyOfficialWebsiteHost('goodfirms.co')).toBe('REVIEW_SITE');
+    expect(classifyOfficialWebsiteHost('quora.com')).toBe('GENERIC_THIRD_PARTY_PAGE');
+    expect(classifyOfficialWebsiteHost('homelight.com')).toBe('GENERIC_THIRD_PARTY_PAGE');
     expect(classifyOfficialWebsiteHost('forbes.com')).toBe('NEWS_ARTICLE');
   });
 

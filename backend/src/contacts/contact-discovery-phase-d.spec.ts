@@ -47,9 +47,15 @@ describe('Phase D plan-driven contact discovery', () => {
     expect(decisionMakerQueries('Oak Stream Investors', ['CEO', 'Founder'])).toEqual([
       '"Oak Stream Investors" CEO',
       '"Oak Stream Investors" Founder',
+      '"Oak Stream Investors" (founder OR CEO OR owner OR president) (email OR contact OR phone)',
+      '"Oak Stream Investors" founder OR CEO linkedin',
+      '"Oak Stream Investors" "about us" OR team OR leadership',
     ]);
     expect(decisionMakerQueries('Oak Stream Investors', ['Managing Director'])).toEqual([
       '"Oak Stream Investors" "Managing Director"',
+      '"Oak Stream Investors" (founder OR CEO OR owner OR president) (email OR contact OR phone)',
+      '"Oak Stream Investors" founder OR CEO linkedin',
+      '"Oak Stream Investors" "about us" OR team OR leadership',
     ]);
   });
 
