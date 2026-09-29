@@ -15,6 +15,7 @@ import { QualificationService } from '../qualification/qualification.service';
 import { ResearchService } from '../research/research.service';
 import { ContactQualityService } from '../contacts/quality/contact-quality.service';
 import { EmployeeSizeQueue } from '../enrichment/employee-size/employee-size.queue';
+import { CompletenessRetryService } from '../enrichment/completeness/completeness-retry.service';
 import { TRACKED_QUEUES, type PipelineErrorCode, type StageProgressKey, type StageState, type WorkStage } from './pipeline.constants';
 import {
   AFTER_POST_ENRICHMENT,
@@ -77,6 +78,7 @@ export class PipelineStageRunner {
     private readonly employeeSize: EmployeeSizeQueue,
     private readonly jobs: PipelineJobInspector,
     private readonly metrics: MetricsService,
+    private readonly completeness: CompletenessRetryService,
     config: ConfigService,
   ) {
     this.dispatchConcurrency = clampConcurrency(
@@ -200,12 +202,42 @@ export class PipelineStageRunner {
       if (deepIds.length === 0 && sizeIds.length === 0 && dmIds.length === 0) {
         let done = next;
         for (const key of POST_ENRICHMENT_PARALLEL) done = markStageCompleted(done, key);
-        return this.advanceTo(done, AFTER_POST_ENRICHMENT);
+        return this.afterPostEnrichment(row, done);
       }
       return { type: 'wait', progress: next };
     }
 
-    return this.settleParallelGroup(next, POST_ENRICHMENT_PARALLEL, 'DEEP_RESEARCH', AFTER_POST_ENRICHMENT);
+    const settled = await this.settleParallelGroup(next, POST_ENRICHMENT_PARALLEL, 'DEEP_RESEARCH', AFTER_POST_ENRICHMENT);
+    if (settled.type !== 'advance') return settled;
+    return this.afterPostEnrichment(row, settled.progress);
+  }
+
+  /** Phase O: bounded missing-field pass before contact quality, without a new UI stage. */
+  private async afterPostEnrichment(row: PipelineExecutionRow, progress: PipelineProgressState): Promise<StageTick> {
+    let next = progress;
+    if (!next.metrics?.completenessPassDone && row.searchExecutionId) {
+      try {
+        const stats = await this.completeness.runForExecution(row.organizationId, row.searchExecutionId);
+        next = {
+          ...next,
+          metrics: {
+            ...(next.metrics ?? emptyStageMetrics(this.dispatchConcurrency)),
+            completenessPassDone: true,
+            completenessFieldsFilled: stats.fieldsFilled,
+            completenessCompaniesRetried: stats.companiesRetried,
+          },
+        };
+      } catch {
+        next = {
+          ...next,
+          metrics: {
+            ...(next.metrics ?? emptyStageMetrics(this.dispatchConcurrency)),
+            completenessPassDone: true,
+          },
+        };
+      }
+    }
+    return this.advanceTo(next, AFTER_POST_ENRICHMENT);
   }
 
   /**

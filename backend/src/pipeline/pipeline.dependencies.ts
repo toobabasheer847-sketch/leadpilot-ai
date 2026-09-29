@@ -5,6 +5,7 @@
  *   SEARCH → SOURCE_DISCOVERY → COMPANY_PERSISTENCE
  *     → WEBSITE_DISCOVERY / ENRICHMENT (same enrichment jobs)
  *     → [POST_ENRICHMENT_PARALLEL]
+ *     → COMPLETENESS_RETRY (Phase O; in-runner bounded pass, not a UI stage)
  *     → CONTACT_QUALITY (needs contacts from decision-maker discovery)
  *     → EVIDENCE (barrier: all evidence writers finished)
  *     → [POST_EVIDENCE_PARALLEL]

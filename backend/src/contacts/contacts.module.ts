@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from '../auth/auth.module';
@@ -24,7 +24,7 @@ import { UsageModule } from '../usage/usage.module';
 import { CommonModule } from '../common/common.module';
 
 @Module({
-  imports: [ConfigModule, AuthModule, UsersModule, EnrichmentModule, UsageModule, ScoringModule, CommonModule, BullModule.registerQueue({ name: 'contact-discovery-queue' }), BullModule.registerQueue({ name: 'contact-quality-queue' })],
+  imports: [ConfigModule, AuthModule, UsersModule, forwardRef(() => EnrichmentModule), UsageModule, ScoringModule, CommonModule, BullModule.registerQueue({ name: 'contact-discovery-queue' }), BullModule.registerQueue({ name: 'contact-quality-queue' })],
   controllers: [ContactsController],
   providers: [
     ContactsService,

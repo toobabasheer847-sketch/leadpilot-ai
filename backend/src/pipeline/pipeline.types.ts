@@ -31,6 +31,10 @@ export interface PipelineStageMetrics {
   concurrencyLimit: number | null;
   dispatchBatches: number;
   providerRequestCount: number;
+  /** Phase O: one bounded completeness pass after post-enrichment parallel. */
+  completenessPassDone?: boolean;
+  completenessFieldsFilled?: number;
+  completenessCompaniesRetried?: number;
 }
 
 export interface PipelineProgressState {

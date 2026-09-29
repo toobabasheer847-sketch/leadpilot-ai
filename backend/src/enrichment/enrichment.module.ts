@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from '../auth/auth.module';
@@ -22,9 +22,19 @@ import { EMPLOYEE_SIZE_QUEUE, EmployeeSizeQueue } from './employee-size/employee
 import { EmployeeSizeService } from './employee-size/employee-size.service';
 import { UsageModule } from '../usage/usage.module';
 import { CompanyResearchContextService } from './research-context/company-research-context.service';
+import { CompletenessRetryService } from './completeness/completeness-retry.service';
+import { ContactsModule } from '../contacts/contacts.module';
 
 @Module({
-  imports: [ConfigModule, AuthModule, UsersModule, OrganizationsModule, UsageModule, BullModule.registerQueue({ name: 'company-enrichment-queue' }, { name: EMPLOYEE_SIZE_QUEUE })],
+  imports: [
+    ConfigModule,
+    AuthModule,
+    UsersModule,
+    OrganizationsModule,
+    UsageModule,
+    forwardRef(() => ContactsModule),
+    BullModule.registerQueue({ name: 'company-enrichment-queue' }, { name: EMPLOYEE_SIZE_QUEUE }),
+  ],
   controllers: [CompanyController],
   providers: [
     WebsiteNormalizerService,
@@ -43,7 +53,8 @@ import { CompanyResearchContextService } from './research-context/company-resear
     EmployeeSizeQueue,
     EmployeeSizeProcessor,
     CompanyResearchContextService,
+    CompletenessRetryService,
   ],
-  exports: [EnrichmentService, CompanyEnrichmentQueue, EmployeeSizeQueue, WebsiteNormalizerService, WebsiteFetchService, WebsiteDiscoveryService, WebsiteParserService, EvidenceRepository, WEB_SEARCH_PROVIDER, CompanyResearchContextService, BullModule],
+  exports: [EnrichmentService, CompanyEnrichmentQueue, EmployeeSizeQueue, WebsiteNormalizerService, WebsiteFetchService, WebsiteDiscoveryService, WebsiteParserService, EvidenceRepository, WEB_SEARCH_PROVIDER, CompanyResearchContextService, CompletenessRetryService, BullModule],
 })
 export class EnrichmentModule {}

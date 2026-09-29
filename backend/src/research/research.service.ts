@@ -158,6 +158,13 @@ export class ResearchService {
       'deep_research',
       { name: company.name, website },
     );
+    // Dual-write under org+company so completeness/DM can find pages regardless of execution id keying.
+    await this.researchContext.mergePages(
+      { organizationId: data.organizationId, companyId: company.id, searchExecutionId: data.researchExecutionId },
+      pages.map((page) => ({ url: page.url, finalUrl: page.url, content: page.html, title: null })),
+      'deep_research',
+      { name: company.name, website },
+    );
     await this.researchContext.addPersonHints(
       { organizationId: data.organizationId, companyId: company.id, searchExecutionId: null },
       collected.people.map((person) => ({

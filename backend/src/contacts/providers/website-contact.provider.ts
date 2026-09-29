@@ -24,11 +24,14 @@ export class WebsiteContactProvider implements ContactDiscoveryProvider {
       searchExecutionId: context.searchExecutionId ?? null,
     };
 
-    // Phase N: reuse pages already fetched by enrichment / deep research before crawling again.
+    // Phase N/O: reuse pages already fetched by enrichment / deep research / completeness before crawling again.
     const reusedPages = await this.researchContext.getPages(contextKey);
-    if (reusedPages.length > 0) {
+    const fallbackPages = reusedPages.length
+      ? reusedPages
+      : await this.researchContext.getPages({ ...contextKey, searchExecutionId: null });
+    if (fallbackPages.length > 0) {
       const fromReuse = this.candidatesFromPages(
-        reusedPages.map((page) => ({ url: page.finalUrl || page.url, content: page.content })),
+        fallbackPages.map((page) => ({ url: page.finalUrl || page.url, content: page.content })),
         company.name,
         roles,
       );

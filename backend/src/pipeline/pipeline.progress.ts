@@ -97,6 +97,9 @@ function parseStageMetrics(value: unknown): PipelineStageMetrics {
     concurrencyLimit: typeof record.concurrencyLimit === 'number' ? record.concurrencyLimit : null,
     dispatchBatches: typeof record.dispatchBatches === 'number' ? record.dispatchBatches : 0,
     providerRequestCount: typeof record.providerRequestCount === 'number' ? record.providerRequestCount : 0,
+    ...(typeof record.completenessPassDone === 'boolean' ? { completenessPassDone: record.completenessPassDone } : {}),
+    ...(typeof record.completenessFieldsFilled === 'number' ? { completenessFieldsFilled: record.completenessFieldsFilled } : {}),
+    ...(typeof record.completenessCompaniesRetried === 'number' ? { completenessCompaniesRetried: record.completenessCompaniesRetried } : {}),
   };
 }
 

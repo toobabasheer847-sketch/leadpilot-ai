@@ -114,6 +114,7 @@ describe('Phase M pipeline stage dependency graph', () => {
       employeeSize as never,
       jobs as never,
       metrics as never,
+      { runForExecution: jest.fn().mockResolvedValue({ companiesAssessed: 0, companiesRetried: 0, fieldsFilled: 0, searchesSkipped: 0, providerFailures: 0, durationMs: 0 }) } as never,
       { get: () => 8 } as ConfigService,
     );
 
@@ -197,6 +198,7 @@ describe('Phase M pipeline stage dependency graph', () => {
       employeeSize as never,
       { settle: jest.fn() } as never,
       metricsStub() as never,
+      { runForExecution: jest.fn().mockResolvedValue({ companiesAssessed: 0, companiesRetried: 0, fieldsFilled: 0, searchesSkipped: 0, providerFailures: 0, durationMs: 0 }) } as never,
       { get: () => 4 } as ConfigService,
     );
 
@@ -239,6 +241,7 @@ describe('Phase M pipeline stage dependency graph', () => {
       {} as never,
       jobs as never,
       metricsStub() as never,
+      { runForExecution: jest.fn().mockResolvedValue({ companiesAssessed: 0, companiesRetried: 0, fieldsFilled: 0, searchesSkipped: 0, providerFailures: 0, durationMs: 0 }) } as never,
       { get: () => 8 } as ConfigService,
     );
 

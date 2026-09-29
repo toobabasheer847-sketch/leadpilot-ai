@@ -173,6 +173,7 @@ describe('Phase L post-discovery throughput', () => {
       employeeSize as never,
       jobs as never,
       { increment: jest.fn(), observe: jest.fn() } as never,
+      { runForExecution: jest.fn().mockResolvedValue({ companiesAssessed: 0, companiesRetried: 0, fieldsFilled: 0, searchesSkipped: 0, providerFailures: 0, durationMs: 0 }) } as never,
       { get: () => 4 } as ConfigService,
     );
 
