@@ -33,6 +33,7 @@ export class OsmSourceProvider implements SourceProvider {
   private readonly retries: number;
   private readonly retryDelayMs: number;
   private readonly retainRawData: boolean;
+  private readonly partitionConcurrency: number;
   private tail: Promise<void> = Promise.resolve();
 
   constructor(
@@ -47,6 +48,13 @@ export class OsmSourceProvider implements SourceProvider {
     this.retries = Math.min(2, nonNegativeInt(configService.get<number>('sourceProvider.retries'), 2));
     this.retryDelayMs = nonNegativeInt(configService.get<number>('sourceProvider.retryDelayMs'), 250);
     this.retainRawData = configService.get<boolean>('sourceProvider.retainRawData') !== false;
+    this.partitionConcurrency = Math.max(1, Math.min(4, clamp(
+      configService.get<number>('sourceProvider.discoveryQueryConcurrency')
+        ?? configService.get<number>('sourceProvider.concurrency'),
+      1,
+      8,
+      2,
+    )));
   }
 
   providerName() { return this.name; }
@@ -77,14 +85,45 @@ export class OsmSourceProvider implements SourceProvider {
       let rejectedCandidates = 0;
       let partitions = 0;
       let timedOutPartitions = 0;
+      let queriesRun = 0;
       let providerError: string | undefined;
       let halt = false;
+
+      const acceptElements = (payload: OverpassResponse, place: GeocodedPlace) => {
+        for (const element of payload.elements ?? []) {
+          try {
+            const candidate = applyGeocodedLocation(this.normalizeResult(element), place);
+            if (!investorSearch && categoryRejected(plan, candidate)) {
+              rejectedCandidates += 1;
+              continue;
+            }
+            if (investorSearch && !investorCandidateAllowed(candidate.name, candidate.category)) {
+              rejectedCandidates += 1;
+              continue;
+            }
+            if (!matchesRequestedState(requestedState, candidate.address?.state)) {
+              rejectedCandidates += 1;
+              continue;
+            }
+            if (!coordinateWithinRequestedState(requestedState, candidate.address?.latitude, candidate.address?.longitude)) {
+              rejectedCandidates += 1;
+              continue;
+            }
+            normalized.push(candidate);
+          } catch (error) {
+            if (!(error instanceof SourceProviderError)) throw error;
+          }
+        }
+      };
+
       for (const location of locations) {
         if (halt || dedupeResults(normalized).length >= resultLimit) break;
         let place: GeocodedPlace;
         try {
           place = await this.geocode(locationLabel(location));
+          queriesRun += 1;
         } catch (error) {
+          queriesRun += 1;
           if (isRecoverableDiscoveryError(error) || (error instanceof SourceProviderError && error.code === 'PROVIDER_INVALID_REQUEST')) {
             providerError = error.message;
             // Do not invent another location. Skip this unresolved place and keep any other SearchPlan locations.
@@ -97,54 +136,44 @@ export class OsmSourceProvider implements SourceProvider {
           throw error;
         }
         const windows = searchWindows(place.bbox);
-        for (let index = 0; index < windows.length; index += 1) {
+        for (let index = 0; index < windows.length && !halt; index += this.partitionConcurrency) {
           const accepted = dedupeResults(normalized);
-          if (halt || accepted.length >= resultLimit) break;
+          if (accepted.length >= resultLimit) break;
           if (index > 0 && this.retryDelayMs > 0) await delay(this.retryDelayMs);
-          const query = buildOverpassQuery(plan, {
-            timeoutSeconds,
-            maxResults: Math.min(perQueryMax, Math.max(1, resultLimit - accepted.length)),
-            bbox: windows[index],
-          });
-          let payload: OverpassResponse;
-          partitions += 1;
-          try {
-            payload = await this.requestWithRetry(query);
-          } catch (error) {
-            if (error instanceof SourceProviderError && error.code === 'PROVIDER_TIMEOUT') {
+          const batch = windows.slice(index, index + this.partitionConcurrency);
+          const outcomes = await Promise.all(batch.map(async (bbox) => {
+            const query = buildOverpassQuery(plan, {
+              timeoutSeconds,
+              maxResults: Math.min(perQueryMax, Math.max(1, resultLimit - accepted.length)),
+              bbox,
+            });
+            try {
+              const payload = await this.requestWithRetry(query);
+              return { ok: true as const, payload };
+            } catch (error) {
+              if (error instanceof SourceProviderError && error.code === 'PROVIDER_TIMEOUT') {
+                return { ok: false as const, timedOut: true as const };
+              }
+              if (isRecoverableDiscoveryError(error)) {
+                return { ok: false as const, timedOut: false as const, message: error.message, halt: true as const };
+              }
+              throw error;
+            }
+          }));
+          for (const outcome of outcomes) {
+            partitions += 1;
+            queriesRun += 1;
+            if (outcome.ok) {
+              acceptElements(outcome.payload, place);
+              continue;
+            }
+            if (outcome.timedOut) {
               timedOutPartitions += 1;
               continue;
             }
-            if (isRecoverableDiscoveryError(error)) {
-              providerError = error.message;
-              halt = true;
-              break;
-            }
-            throw error;
-          }
-          for (const element of payload.elements ?? []) {
-            try {
-              const candidate = applyGeocodedLocation(this.normalizeResult(element), place);
-              if (!investorSearch && categoryRejected(plan, candidate)) {
-                rejectedCandidates += 1;
-                continue;
-              }
-              if (investorSearch && !investorCandidateAllowed(candidate.name, candidate.category)) {
-                rejectedCandidates += 1;
-                continue;
-              }
-              if (!matchesRequestedState(requestedState, candidate.address?.state)) {
-                rejectedCandidates += 1;
-                continue;
-              }
-              if (!coordinateWithinRequestedState(requestedState, candidate.address?.latitude, candidate.address?.longitude)) {
-                rejectedCandidates += 1;
-                continue;
-              }
-              normalized.push(candidate);
-            } catch (error) {
-              if (!(error instanceof SourceProviderError)) throw error;
-            }
+            providerError = outcome.message;
+            halt = Boolean(outcome.halt);
+            if (halt) break;
           }
         }
       }
@@ -157,6 +186,7 @@ export class OsmSourceProvider implements SourceProvider {
         results: unique.slice(0, resultLimit),
         duplicatesRemoved: normalized.length - unique.length,
         rejectedCandidates,
+        queriesRun,
         ...(providerError ? { providerError } : {}),
       };
     });

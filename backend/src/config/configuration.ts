@@ -38,6 +38,11 @@ export default () => ({
     nominatimApiUrl: process.env.NOMINATIM_API_URL ?? 'https://nominatim.openstreetmap.org/search',
     overpassTimeoutMs: parseInt(process.env.OVERPASS_TIMEOUT_MS ?? process.env.SOURCE_PROVIDER_TIMEOUT_MS ?? '30000', 10),
     overpassMaxResults: parseInt(process.env.OVERPASS_MAX_RESULTS ?? process.env.DISCOVERY_MAX_RESULTS ?? '100', 10),
+    discoveryQueryConcurrency: parseInt(process.env.DISCOVERY_QUERY_CONCURRENCY ?? process.env.SOURCE_PROVIDER_CONCURRENCY ?? '2', 10),
+    discoveryQueryTimeoutMs: parseInt(process.env.DISCOVERY_QUERY_TIMEOUT_MS ?? process.env.WEB_SEARCH_TIMEOUT_MS ?? '10000', 10),
+    discoveryPersistChunkSize: parseInt(process.env.DISCOVERY_PERSIST_CHUNK_SIZE ?? process.env.DISCOVERY_PAGE_SIZE ?? '20', 10),
+    discoveryRefillRounds: parseInt(process.env.DISCOVERY_REFILL_ROUNDS ?? '4', 10),
+    discoveryMaxConsecutiveFailures: parseInt(process.env.DISCOVERY_MAX_CONSECUTIVE_FAILURES ?? '3', 10),
   },
 
   database: {

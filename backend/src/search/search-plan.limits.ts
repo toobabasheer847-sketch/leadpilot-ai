@@ -83,10 +83,11 @@ export function qualifiedShortfall(
   return countShortfall(plan, qualifiedCount);
 }
 
-/** Distinct web queries allowed for a requested count. Scales so large targets can keep searching. */
+/** Distinct web queries allowed for a requested count. Scales with target; never invents results. */
 export function discoveryQueryBudget(requestedCount: number): number {
   const count = Math.max(1, Math.trunc(requestedCount));
-  return Math.min(400, Math.max(8, count));
+  // Allow enough geographic/category variants for large exact targets without unbounded spend.
+  return Math.min(RESULT_SAFETY_CAP, Math.max(8, count * 2));
 }
 
 /** True only when the SearchPlan asked for a numeric employee-size bound. Qualitative "small" alone does not qualify. */

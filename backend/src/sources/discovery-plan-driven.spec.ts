@@ -110,7 +110,8 @@ describe('Phase B SearchPlan-driven discovery', () => {
     });
     expect(discoveryTarget(searchPlan)).toBe(count);
     expect(queryBudgetForPlan(searchPlan, count)).toBe(discoveryQueryBudget(count));
-    expect(queryBudgetForPlan(searchPlan, count)).not.toBe(100);
+    expect(queryBudgetForPlan(searchPlan, count)).toBe(Math.min(1000, Math.max(8, count * 2)));
+    expect(queryBudgetForPlan(searchPlan, count)).toBeGreaterThanOrEqual(count);
     const collected = await collectWebCompanyCandidates(searchPlan, count, async () => [], { maxQueries: 3, delayMs: 0 });
     expect(collected.results).toEqual([]);
     expect(collected.results).not.toHaveLength(count);

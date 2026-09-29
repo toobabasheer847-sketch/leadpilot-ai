@@ -45,7 +45,7 @@ describe('buildOverpassQuery', () => {
       locations: [{ country: 'US', state: 'New York' }],
     }), { timeoutSeconds: 25, maxResults: 15, bbox });
 
-    expect(query).toContain('["name"~"investor|investment|acquisition|holdings|buy and hold|fix and flip",i]');
+    expect(query).toContain('["name"~"investor|investment|acquisition|holdings|buy and hold|fix and flip|home buyer|wholesaler|we buy houses",i]');
     expect(query).toContain('["office"!="estate_agent"]');
     expect(query).not.toContain('["name"!~');
     expect(query).not.toContain('["office"="estate_agent"]');
@@ -58,7 +58,7 @@ describe('buildOverpassQuery', () => {
       leadTypes: ['real_estate_investor'],
     }), { timeoutSeconds: 25, maxResults: 50, bbox });
 
-    expect(query).toContain('["name"~"investor|investment|acquisition|holdings|buy and hold|fix and flip",i]');
+    expect(query).toContain('["name"~"investor|investment|acquisition|holdings|buy and hold|fix and flip|home buyer|wholesaler|we buy houses",i]');
     expect(query).not.toContain('["office"="estate_agent"]');
     expect(query).not.toContain('["shop"="estate_agent"]');
     expect(query).toContain('out center 50;');

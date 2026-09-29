@@ -23,6 +23,11 @@ export class OutboundRequestService {
 
     for (let attempt = 0; attempt <= this.retries; attempt += 1) {
       const controller = new AbortController();
+      const onExternalAbort = () => controller.abort();
+      if (init.signal) {
+        if (init.signal.aborted) controller.abort();
+        else init.signal.addEventListener('abort', onExternalAbort, { once: true });
+      }
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
       try {
@@ -31,6 +36,7 @@ export class OutboundRequestService {
         lastError = error;
       } finally {
         clearTimeout(timeout);
+        init.signal?.removeEventListener('abort', onExternalAbort);
       }
     }
 

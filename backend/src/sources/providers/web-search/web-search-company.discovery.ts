@@ -3,7 +3,12 @@ import { ConfigService } from '@nestjs/config';
 import { WEB_SEARCH_PROVIDER, type WebSearchProvider } from '../../../enrichment/website/web-search.types';
 import type { SearchPlan } from '../../../search/types/search-plan.types';
 import type { NormalizedSourceResult } from '../../types/source.types';
-import { collectWebCompanyCandidates, queryBudgetForPlan, type WebCompanyCollection } from './company-discovery.assess';
+import {
+  collectWebCompanyCandidates,
+  queryBudgetForPlan,
+  type CollectWebCompanyOptions,
+  type WebCompanyCollection,
+} from './company-discovery.assess';
 
 @Injectable()
 export class WebSearchCompanyDiscovery {
@@ -12,7 +17,13 @@ export class WebSearchCompanyDiscovery {
     private readonly config: ConfigService,
   ) {}
 
-  collect(plan: SearchPlan, remaining: number, exclude: NormalizedSourceResult[] = [], round = 0): Promise<WebCompanyCollection> {
+  collect(
+    plan: SearchPlan,
+    remaining: number,
+    exclude: NormalizedSourceResult[] = [],
+    round = 0,
+    stream?: Pick<CollectWebCompanyOptions, 'onBatch'>,
+  ): Promise<WebCompanyCollection> {
     if (typeof this.search.searchText !== 'function') {
       return Promise.resolve({
         results: [],
@@ -22,12 +33,34 @@ export class WebSearchCompanyDiscovery {
       });
     }
     const searchText = this.search.searchText.bind(this.search);
-    const delayMs = Math.min(2000, Math.max(0, this.config.get<number>('sourceProvider.retryDelayMs') ?? 250));
-    return collectWebCompanyCandidates(plan, remaining, (query) => searchText(query, { maxResults: 20 }), {
-      maxQueries: queryBudgetForPlan(plan, remaining),
-      delayMs,
-      exclude,
-      round,
-    });
+    const delayMs = Math.max(0, this.config.get<number>('sourceProvider.retryDelayMs') ?? 0);
+    const concurrency = Math.max(1, this.config.get<number>('sourceProvider.discoveryQueryConcurrency')
+      ?? this.config.get<number>('sourceProvider.concurrency')
+      ?? 1);
+    const queryTimeoutMs = Math.max(1, this.config.get<number>('sourceProvider.discoveryQueryTimeoutMs')
+      ?? this.config.get<number>('webSearch.timeoutMs')
+      ?? 1);
+    const persistChunkSize = Math.max(1, this.config.get<number>('sourceProvider.discoveryPersistChunkSize')
+      ?? this.config.get<number>('sourceProvider.pageSize')
+      ?? 1);
+    const maxConsecutiveFailures = Math.max(1, this.config.get<number>('sourceProvider.discoveryMaxConsecutiveFailures') ?? 1);
+    const maxResults = Math.max(1, this.config.get<number>('webSearch.maxResults') ?? 1);
+
+    return collectWebCompanyCandidates(
+      plan,
+      remaining,
+      (query, options) => searchText(query, { maxResults, signal: options?.signal }),
+      {
+        maxQueries: queryBudgetForPlan(plan, remaining),
+        delayMs,
+        concurrency,
+        queryTimeoutMs,
+        persistChunkSize,
+        maxConsecutiveFailures,
+        exclude,
+        round,
+        onBatch: stream?.onBatch,
+      },
+    );
   }
 }

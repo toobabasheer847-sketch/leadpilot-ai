@@ -63,6 +63,7 @@ function providerWith(response: unknown, status = 200, overrides: Record<string,
     'sourceProvider.retries': 0,
     'sourceProvider.retryDelayMs': 0,
     'sourceProvider.retainRawData': true,
+    'sourceProvider.discoveryQueryConcurrency': 1,
     ...overrides,
   };
   const config = { get: (key: string) => values[key] } as ConfigService;
@@ -143,7 +144,13 @@ describe('OsmSourceProvider', () => {
 
   it('returns an empty result for an empty Overpass response', async () => {
     const { provider } = providerWith({ elements: [] });
-    await expect(provider.searchBusinesses(plan, context)).resolves.toEqual({ provider: 'osm', results: [], duplicatesRemoved: 0, rejectedCandidates: 0 });
+    await expect(provider.searchBusinesses(plan, context)).resolves.toEqual({
+      provider: 'osm',
+      results: [],
+      duplicatesRemoved: 0,
+      rejectedCandidates: 0,
+      queriesRun: 2,
+    });
   });
 
   it('rejects a malformed Overpass response', async () => {
@@ -194,7 +201,13 @@ describe('OsmSourceProvider', () => {
       .mockResolvedValueOnce(httpResponse({ remark: 'bad gateway' }, 502))
       .mockResolvedValueOnce(httpResponse({ elements: [] }, 200));
     const recovered = providerWith({}, 502, { 'sourceProvider.retries': 1 }, unavailable);
-    await expect(recovered.provider.searchBusinesses(plan, context)).resolves.toEqual({ provider: 'osm', results: [], duplicatesRemoved: 0, rejectedCandidates: 0 });
+    await expect(recovered.provider.searchBusinesses(plan, context)).resolves.toEqual({
+      provider: 'osm',
+      results: [],
+      duplicatesRemoved: 0,
+      rejectedCandidates: 0,
+      queriesRun: 2,
+    });
     expect(unavailable).toHaveBeenCalledTimes(3);
 
     const down = await providerWith({ remark: 'server error' }, 503).provider.searchBusinesses(plan, context);
@@ -263,7 +276,7 @@ describe('OsmSourceProvider', () => {
     const fetch = jest.fn()
       .mockResolvedValueOnce(httpResponse([{ boundingbox: [String(texasBox.south), String(texasBox.north), String(texasBox.west), String(texasBox.east)] }]))
       .mockResolvedValue(httpResponse({ elements }));
-    const { provider } = providerWith({ elements: [] }, 200, { 'sourceProvider.overpassMaxResults': 50, 'sourceProvider.retryDelayMs': 0 }, fetch);
+    const { provider } = providerWith({ elements: [] }, 200, { 'sourceProvider.overpassMaxResults': 50, 'sourceProvider.retryDelayMs': 0, 'sourceProvider.discoveryQueryConcurrency': 2 }, fetch);
 
     const result = await provider.searchBusinesses({
       industry: ['real_estate'],

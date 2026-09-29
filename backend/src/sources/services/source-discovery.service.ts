@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { and, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { DRIZZLE } from '../../database/database.constants';
 import type { Database } from '../../database/database.types';
@@ -60,6 +61,7 @@ export class SourceDiscoveryService {
     private readonly providerObservability: ProviderObservabilityService,
     private readonly requestContext: RequestContextService,
     private readonly webDiscovery: WebSearchCompanyDiscovery,
+    private readonly config: ConfigService,
   ) {}
 
   async discover(executionId: string, organizationId: string, plan: SearchPlan, trace: Pick<SourceSearchContext, 'requestId' | 'correlationId'> = {}) {
@@ -72,6 +74,7 @@ export class SourceDiscoveryService {
     const acceptanceCap = discoveryAcceptanceCap(plan);
     const countIntent = resolveCountIntent(plan) ?? null;
     const synthetic = this.provider.metadata().synthetic;
+    const refillRounds = Math.max(0, this.config.get<number>('sourceProvider.discoveryRefillRounds') ?? 0);
     let rejected = 0;
     let duplicates = 0;
     let providerQueries = 0;
@@ -86,6 +89,7 @@ export class SourceDiscoveryService {
       primaryError = result.providerError ?? null;
       rejected += result.rejectedCandidates ?? 0;
       duplicates += result.duplicatesRemoved ?? 0;
+      providerQueries += result.queriesRun ?? 0;
     } catch (error) {
       if (!isRecoverableDiscoveryError(error)) throw error;
       primaryError = error.message;
@@ -97,60 +101,72 @@ export class SourceDiscoveryService {
       });
     }
 
-    let webResults: NormalizedSourceResult[] = [];
-    let webError: string | null = null;
-    const remainingSlots = Math.max(0, Math.min(target, acceptanceCap) - primaryResults.length);
-    if (!synthetic && remainingSlots > 0) {
-      try {
-        const extra = await this.webDiscovery.collect(plan, remainingSlots, primaryResults);
-        webResults = extra.results.slice(0, remainingSlots);
-        webError = extra.providerError;
-        rejected += extra.rejected;
-        providerQueries += extra.queriesRun;
-      } catch (error) {
-        webError = error instanceof Error ? error.message : 'Web company discovery failed.';
-      }
-      if (webError) {
-        await this.audit(organizationId, executionId, 'SOURCE_PROVIDER_PARTIAL', undefined, { provider: 'web_search', error: webError });
-      }
-    }
-
     const resolved = resolveDiscoveryFallback({
       primary: { results: primaryResults, error: primaryError },
-      web: { results: webResults, error: webError },
+      web: { results: [], error: null },
     });
     duplicates += resolved.duplicatesRemoved;
     const cappedPrimary = resolved.primary.slice(0, acceptanceCap);
-    const cappedWeb = resolved.web.slice(0, Math.max(0, acceptanceCap - cappedPrimary.length));
-    let candidates = 0;
-    candidates += await this.persistResults(organizationId, executionId, this.provider.getSourceType(), cappedPrimary, synthetic, context);
-    if (!synthetic) candidates += await this.persistResults(organizationId, executionId, 'web_search', cappedWeb, false, context);
+    let candidates = await this.persistResults(organizationId, executionId, this.provider.getSourceType(), cappedPrimary, synthetic, context);
+    await this.auditProgress(organizationId, executionId, {
+      candidates,
+      target: Math.min(target, acceptanceCap),
+      requested: explicit ?? null,
+      discovered: primaryResults.length,
+      accepted: candidates,
+      rejected,
+      duplicates,
+      shortfall: countShortfall(plan, candidates),
+      providerQueries,
+      phase: 'PRIMARY_PERSISTED',
+    });
 
-    // Keep searching until the acceptance cap is filled or query/provider bounds are exhausted.
-    // Persist-time directory rejection must not permanently stop short of the requested target.
-    const excludePool: NormalizedSourceResult[] = [...cappedPrimary, ...cappedWeb];
-    let refillRounds = 0;
-    while (!synthetic && candidates < Math.min(target, acceptanceCap) && !webError && refillRounds < 4) {
-      refillRounds += 1;
-      const need = Math.min(target, acceptanceCap) - candidates;
-      try {
-        const refill = await this.webDiscovery.collect(plan, need, excludePool, refillRounds);
-        providerQueries += refill.queriesRun;
-        rejected += refill.rejected;
-        if (refill.providerError) {
-          webError = refill.providerError;
-          await this.audit(organizationId, executionId, 'SOURCE_PROVIDER_PARTIAL', undefined, { provider: 'web_search', error: webError });
-        }
-        if (!refill.results.length) break;
-        excludePool.push(...refill.results);
+    let webError: string | null = null;
+    let webDiscovered = 0;
+    const excludePool: NormalizedSourceResult[] = [...cappedPrimary];
+
+    // Stream web discovery + refill: persist each accepted chunk immediately so hanging SERP
+    // queries cannot block COMPANIES_SAVED / WEBSITE_DISCOVERY forever.
+    if (!synthetic) {
+      let round = 0;
+      while (candidates < Math.min(target, acceptanceCap) && round <= refillRounds && !webError) {
+        const need = Math.min(target, acceptanceCap) - candidates;
         const before = candidates;
-        candidates += await this.persistResults(organizationId, executionId, 'web_search', refill.results, false, context);
-        if (candidates <= before) break;
-        if (refill.queriesRun === 0) break;
-      } catch (error) {
-        webError = error instanceof Error ? error.message : 'Web company discovery failed.';
-        await this.audit(organizationId, executionId, 'SOURCE_PROVIDER_PARTIAL', undefined, { provider: 'web_search', error: webError });
-        break;
+        try {
+          const extra = await this.webDiscovery.collect(plan, need, [...excludePool], round, {
+            onBatch: async (batch) => {
+              const added = await this.persistResults(organizationId, executionId, 'web_search', batch, false, context);
+              candidates += added;
+              webDiscovered += batch.length;
+              await this.auditProgress(organizationId, executionId, {
+                candidates,
+                target: Math.min(target, acceptanceCap),
+                requested: explicit ?? null,
+                discovered: primaryResults.length + webDiscovered,
+                accepted: candidates,
+                rejected,
+                duplicates,
+                shortfall: countShortfall(plan, candidates),
+                providerQueries,
+                phase: 'WEB_STREAM_PERSISTED',
+                round: String(round),
+              });
+            },
+          });
+          excludePool.push(...extra.results);
+          providerQueries += extra.queriesRun ?? 0;
+          rejected += extra.rejected;
+          if (extra.providerError) {
+            webError = extra.providerError;
+            await this.audit(organizationId, executionId, 'SOURCE_PROVIDER_PARTIAL', undefined, { provider: 'web_search', error: webError });
+          }
+          if (candidates <= before) break;
+        } catch (error) {
+          webError = error instanceof Error ? error.message : 'Web company discovery failed.';
+          await this.audit(organizationId, executionId, 'SOURCE_PROVIDER_PARTIAL', undefined, { provider: 'web_search', error: webError });
+          break;
+        }
+        round += 1;
       }
     }
 
@@ -167,7 +183,7 @@ export class SourceDiscoveryService {
 
     const shortfall = countShortfall(plan, candidates);
     const remaining = Math.max(0, (explicit ?? target) - candidates);
-    const discovered = primaryResults.length + webResults.length;
+    const discovered = primaryResults.length + webDiscovered;
     const unresolved = (plan.unresolvedRequirements ?? plan.unresolvedCriteria ?? [])
       .map((item) => item.text)
       .filter(Boolean)
@@ -194,6 +210,7 @@ export class SourceDiscoveryService {
       exclusions: (plan.exclusions ?? []).slice(0, 8).join(' | '),
       status: shortfall > 0 ? 'SHORTFALL' : 'COMPLETE',
     });
+    await this.audit(organizationId, executionId, 'COMPANIES_SAVED', undefined, { count: String(candidates), provider: this.provider.providerName() });
     await this.audit(organizationId, executionId, 'SOURCE_SEARCH_COMPLETED', undefined, { count: String(candidates), provider: this.provider.providerName(), countIntent: countIntent ?? '' });
     return {
       candidates,
@@ -395,6 +412,39 @@ export class SourceDiscoveryService {
     if (!facts) return;
     const locationEvidence = result.rawData?.locationEvidence;
     await this.db.insert(leadEvidence).values({ companyId, sourceRecordId, evidenceType: 'PROVIDER_RESULT', sourceUrl: result.sourceUrl, evidenceText: facts, evidenceTimestamp: new Date(), provider, metadata: { externalId: result.externalId, verified: false, ...(locationEvidence ? { locationEvidence } : {}) } });
+  }
+
+  private async auditProgress(
+    organizationId: string,
+    executionId: string,
+    state: {
+      candidates: number;
+      target: number;
+      requested: number | null;
+      discovered: number;
+      accepted: number;
+      rejected: number;
+      duplicates: number;
+      shortfall: number;
+      providerQueries: number;
+      phase: string;
+      round?: string;
+    },
+  ) {
+    await this.audit(organizationId, executionId, 'DISCOVERY_PROGRESS', undefined, {
+      requested: state.requested === null ? '' : String(state.requested),
+      discovered: String(state.discovered),
+      accepted: String(state.accepted),
+      persisted: String(state.candidates),
+      target: String(state.target),
+      remainingTarget: String(Math.max(0, state.target - state.candidates)),
+      rejected: String(state.rejected),
+      duplicates: String(state.duplicates),
+      shortfall: String(state.shortfall),
+      providerQueries: String(state.providerQueries),
+      phase: state.phase,
+      ...(state.round ? { round: state.round } : {}),
+    });
   }
 
   private async audit(organizationId: string, entityId: string, action: string, userId?: string, metadata?: Record<string, string>) {

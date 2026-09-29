@@ -28,7 +28,7 @@ export class TavilyWebSearchProvider implements WebSearchProvider {
     return this.searchText(text);
   }
 
-  async searchText(text: string, options?: { maxResults?: number }): Promise<WebSearchResult[]> {
+  async searchText(text: string, options?: { maxResults?: number; signal?: AbortSignal }): Promise<WebSearchResult[]> {
     const query = text.trim();
     if (!query) return [];
     const selected = (this.config.get<string>('webSearch.provider') || 'tavily').trim().toLowerCase();
@@ -60,6 +60,7 @@ export class TavilyWebSearchProvider implements WebSearchProvider {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify(body),
+        ...(options?.signal ? { signal: options.signal } : {}),
       }, timeoutMs);
     } catch (error) {
       if (error instanceof OutboundRequestError && /timed out/i.test(error.message)) {

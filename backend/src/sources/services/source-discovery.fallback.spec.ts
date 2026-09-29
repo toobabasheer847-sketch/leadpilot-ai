@@ -47,6 +47,9 @@ function buildService(input: {
   const webDiscovery = {
     collect: input.collect ?? jest.fn().mockResolvedValue({ results: [], rejected: 0, providerError: null }),
   };
+  const config = {
+    get: (_key: string, fallback?: unknown) => fallback ?? 4,
+  };
   const service = new SourceDiscoveryService(
     {} as never,
     provider,
@@ -55,6 +58,7 @@ function buildService(input: {
     providerObservability as never,
     requestContext as never,
     webDiscovery as never,
+    config as never,
   );
   jest.spyOn(service as never as { audit: (...args: unknown[]) => Promise<void> }, 'audit').mockResolvedValue(undefined);
   jest.spyOn(service as never as { persistResults: (...args: unknown[]) => Promise<number> }, 'persistResults')
@@ -65,9 +69,14 @@ function buildService(input: {
 describe('SourceDiscoveryService OSM web fallback', () => {
   it('continues with web discovery when OpenStreetMap returns a rate-limit providerError', async () => {
     const webCompany = company('Bay Soft Labs', 'https://baysoft.example');
+    let calls = 0;
     const collect = jest.fn()
-      .mockResolvedValueOnce({ results: [webCompany], rejected: 0, providerError: null })
-      .mockResolvedValue({ results: [], rejected: 0, providerError: null });
+      .mockImplementation(async (_plan, _need, _exclude, _round, stream?: { onBatch?: (batch: NormalizedSourceResult[]) => Promise<void> }) => {
+        calls += 1;
+        if (calls > 1) return { results: [], rejected: 0, providerError: null, queriesRun: 0 };
+        if (stream?.onBatch) await stream.onBatch([webCompany]);
+        return { results: [webCompany], rejected: 0, providerError: null, queriesRun: 1 };
+      });
     const { service, webDiscovery } = buildService({
       searchBusinesses: jest.fn().mockResolvedValue({
         provider: 'osm',
@@ -78,14 +87,26 @@ describe('SourceDiscoveryService OSM web fallback', () => {
     });
 
     await expect(service.discover('exec-1', 'org-1', plan)).resolves.toMatchObject({ candidates: 1 });
-    expect(webDiscovery.collect).toHaveBeenCalledWith(plan, 10, []);
+    expect(webDiscovery.collect).toHaveBeenNthCalledWith(
+      1,
+      plan,
+      10,
+      [],
+      0,
+      expect.objectContaining({ onBatch: expect.any(Function) }),
+    );
   });
 
   it('continues with web discovery when OpenStreetMap throws a recoverable rate-limit error', async () => {
     const webCompany = company('Pacific Apps', 'https://pacificapps.example', 'Los Angeles');
+    let calls = 0;
     const collect = jest.fn()
-      .mockResolvedValueOnce({ results: [webCompany], rejected: 0, providerError: null })
-      .mockResolvedValue({ results: [], rejected: 0, providerError: null });
+      .mockImplementation(async (_plan, _need, _exclude, _round, stream?: { onBatch?: (batch: NormalizedSourceResult[]) => Promise<void> }) => {
+        calls += 1;
+        if (calls > 1) return { results: [], rejected: 0, providerError: null, queriesRun: 0 };
+        if (stream?.onBatch) await stream.onBatch([webCompany]);
+        return { results: [webCompany], rejected: 0, providerError: null, queriesRun: 1 };
+      });
     const { service, webDiscovery } = buildService({
       searchBusinesses: jest.fn().mockRejectedValue(
         new SourceProviderError('PROVIDER_RATE_LIMITED', 'OpenStreetMap provider rate limit reached.'),
@@ -94,15 +115,27 @@ describe('SourceDiscoveryService OSM web fallback', () => {
     });
 
     await expect(service.discover('exec-2', 'org-1', plan)).resolves.toMatchObject({ candidates: 1 });
-    expect(webDiscovery.collect).toHaveBeenCalledWith(plan, 10, []);
+    expect(webDiscovery.collect).toHaveBeenNthCalledWith(
+      1,
+      plan,
+      10,
+      [],
+      0,
+      expect.objectContaining({ onBatch: expect.any(Function) }),
+    );
   });
 
   it('keeps partial OpenStreetMap results and asks web discovery for the remaining count', async () => {
     const osmCompany = company('Coast Code', 'https://coastcode.example', 'San Diego');
     const webCompany = company('Valley Systems', 'https://valleysystems.example', 'San Jose');
+    let calls = 0;
     const collect = jest.fn()
-      .mockResolvedValueOnce({ results: [webCompany, osmCompany], rejected: 0, providerError: null })
-      .mockResolvedValue({ results: [], rejected: 0, providerError: null });
+      .mockImplementation(async (_plan, _need, _exclude, _round, stream?: { onBatch?: (batch: NormalizedSourceResult[]) => Promise<void> }) => {
+        calls += 1;
+        if (calls > 1) return { results: [], rejected: 0, providerError: null, queriesRun: 0 };
+        if (stream?.onBatch) await stream.onBatch([webCompany]);
+        return { results: [webCompany, osmCompany], rejected: 0, providerError: null, queriesRun: 1 };
+      });
     const { service, webDiscovery } = buildService({
       searchBusinesses: jest.fn().mockResolvedValue({
         provider: 'osm',
@@ -113,7 +146,14 @@ describe('SourceDiscoveryService OSM web fallback', () => {
     });
 
     await expect(service.discover('exec-3', 'org-1', plan)).resolves.toMatchObject({ candidates: 2 });
-    expect(webDiscovery.collect).toHaveBeenCalledWith(plan, 9, [osmCompany]);
+    expect(webDiscovery.collect).toHaveBeenNthCalledWith(
+      1,
+      plan,
+      9,
+      [osmCompany],
+      0,
+      expect.objectContaining({ onBatch: expect.any(Function) }),
+    );
   });
 
   it('fails with a clear provider failure when OSM and web both fail', async () => {

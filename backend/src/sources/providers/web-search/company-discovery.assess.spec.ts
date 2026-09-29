@@ -136,8 +136,9 @@ describe('web company discovery', () => {
     expect(search).toHaveBeenCalledTimes(2);
 
     const timeout = jest.fn().mockRejectedValue(new Error('Web search provider timed out.'));
-    const timed = await collectWebCompanyCandidates(plan, 500, timeout, { maxQueries: 4, delayMs: 0 });
+    const timed = await collectWebCompanyCandidates(plan, 500, timeout, { maxQueries: 4, delayMs: 0, maxConsecutiveFailures: 1 });
     expect(timed.results).toEqual([]);
+    // Per-query timeouts are non-fatal; a lone timeout with maxConsecutiveFailures=1 still surfaces.
     expect(timed.providerError).toMatch(/timed out/i);
     expect(timeout).toHaveBeenCalledTimes(1);
   });
@@ -218,6 +219,52 @@ describe('web company discovery', () => {
     expect(assessWebCompanyCandidate(page, plan).accepted).toBe(false);
   });
 
+  it('fails fast on a hung query and continues collecting later variants', async () => {
+    const search = jest.fn()
+      .mockImplementationOnce((_query: string, options?: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+      }))
+      .mockResolvedValueOnce([hit({
+        title: 'Firm Two Capital | Home',
+        url: 'https://firm2.example/',
+        snippet: 'Firm Two Capital is a real estate investment company in Austin, Texas.',
+      })]);
+    const collected = await collectWebCompanyCandidates(plan, 1, search, {
+      maxQueries: 4,
+      delayMs: 0,
+      concurrency: 1,
+      queryTimeoutMs: 20,
+      maxConsecutiveFailures: 5,
+      persistChunkSize: 1,
+    });
+    expect(collected.results).toHaveLength(1);
+    expect(collected.providerError).toBeNull();
+    expect(search).toHaveBeenCalledTimes(2);
+  });
+
+  it('streams accepted candidates through onBatch before the full target finishes', async () => {
+    const batches: number[] = [];
+    let n = 0;
+    const search = jest.fn(async () => {
+      n += 1;
+      return [hit({
+        title: `Stream ${n} Capital | Home`,
+        url: `https://stream-${n}.example/`,
+        snippet: `Stream ${n} Capital is a real estate investment company in Austin, Texas.`,
+      })];
+    });
+    const collected = await collectWebCompanyCandidates(plan, 2, search, {
+      maxQueries: 4,
+      delayMs: 0,
+      concurrency: 1,
+      queryTimeoutMs: 1000,
+      persistChunkSize: 1,
+      onBatch: async (batch) => { batches.push(batch.length); },
+    });
+    expect(collected.results).toHaveLength(2);
+    expect(batches.length).toBeGreaterThanOrEqual(1);
+  });
+
   it('returns a partial set when later queries fail and does not pad the requested count', async () => {
     const softwarePlan: SearchPlan = {
       ...plan,
@@ -235,7 +282,13 @@ describe('web company discovery', () => {
       })])
       .mockRejectedValueOnce(new Error('Web search provider returned HTTP 502.'))
       .mockResolvedValue([]);
-    const collected = await collectWebCompanyCandidates(softwarePlan, 10, async (query) => search(query), { maxQueries: 4, delayMs: 0 });
+    const collected = await collectWebCompanyCandidates(softwarePlan, 10, async (query) => search(query), {
+      maxQueries: 4,
+      delayMs: 0,
+      concurrency: 1,
+      queryTimeoutMs: 1000,
+      maxConsecutiveFailures: 3,
+    });
     expect(collected.results).toHaveLength(1);
     expect(collected.results).not.toHaveLength(10);
   });

@@ -28,6 +28,8 @@ export interface SourceSearchResult {
   results: NormalizedSourceResult[];
   duplicatesRemoved?: number;
   rejectedCandidates?: number;
+  /** Distinct provider API requests (pages/queries) issued for this search. */
+  queriesRun?: number;
   /** Set when a temporary provider error stopped the search after any results already collected. */
   providerError?: string;
 }

@@ -219,9 +219,9 @@ describe('SearchPlanParser', () => {
     expect(discoveryTarget(parser.parse('Find 300 companies'))).toBe(300);
     expect(discoveryTarget(parser.parse('Find 500 companies'))).toBe(500);
     expect(discoveryTarget(parser.parse('Find companies in Ohio'))).toBe(100);
-    expect(discoveryQueryBudget(50)).toBe(50);
-    expect(discoveryQueryBudget(300)).toBe(300);
-    expect(discoveryQueryBudget(500)).toBe(400);
+    expect(discoveryQueryBudget(50)).toBe(100);
+    expect(discoveryQueryBudget(300)).toBe(600);
+    expect(discoveryQueryBudget(500)).toBe(1000);
   });
 
   it('Phase C: expands generic social profile wording to supported company platforms', () => {
