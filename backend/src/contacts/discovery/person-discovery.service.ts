@@ -35,7 +35,7 @@ export class PersonDiscoveryService {
     }
 
     try {
-      candidates.push(...await this.publicCandidates(company.name, roles));
+      candidates.push(...await this.publicCandidates(company.name, roles, company.website ?? context.companyWebsite ?? null));
     } catch {
       // Continue with whatever evidence we already have.
     }
@@ -63,7 +63,7 @@ export class PersonDiscoveryService {
     return false;
   }
 
-  private async publicCandidates(companyName: string, roles: string[]): Promise<ContactCandidate[]> {
+  private async publicCandidates(companyName: string, roles: string[], companyWebsite: string | null): Promise<ContactCandidate[]> {
     if (!companyName.trim() || typeof this.webSearch?.searchText !== 'function') return [];
     const found: ContactCandidate[] = [];
     const seenQueries = new Set<string>();
@@ -74,7 +74,10 @@ export class PersonDiscoveryService {
       try {
         const hits = await this.webSearch.searchText(query, { maxResults: 10 });
         for (const hit of hits) {
-          const candidate = assessPublicDecisionMaker(companyName, hit, { allowedRoles: roles });
+          const candidate = assessPublicDecisionMaker(companyName, hit, {
+            allowedRoles: roles,
+            companyWebsite,
+          });
           if (candidate) found.push(this.candidates.normalizeCandidate(candidate));
         }
       } catch {

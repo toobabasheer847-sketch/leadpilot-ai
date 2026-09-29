@@ -210,6 +210,14 @@ export function LeadDetailPage() {
         <h2>Verification</h2>
         {verification.status === 'loading' ? <VerificationSkeleton /> : null}
         {verification.status === 'error' ? <ErrorState message={verification.message} /> : null}
+        {verification.status === 'ready' && verification.data.verificationSummary ? (
+          <p className="muted">
+            Aggregate <LeadStatusBadge status={verification.data.verificationSummary.aggregateStatus} />
+            {verification.data.verificationSummary.flags.personOwnershipVerified ? ' · Person ownership verified' : ''}
+            {verification.data.verificationSummary.flags.deliverabilityVerified && !verification.data.verificationSummary.flags.personOwnershipVerified ? ' · Deliverability verified (ownership not proven)' : ''}
+            {verification.data.verificationSummary.flags.needsReview ? ' · Needs review' : ''}
+          </p>
+        ) : null}
         {verification.status === 'ready' && verification.data.fields.length === 0 ? <EmptyState title="No verification data available" detail="Field verification appears after the verification job stores a result." /> : null}
         {verification.status === 'ready' && verification.data.fields.length > 0 ? (
           <div className="detail-grid">

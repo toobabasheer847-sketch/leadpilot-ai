@@ -1,5 +1,6 @@
 import { publicPersonEmail } from '../extraction/contact-extractor.service';
 import type { ContactCandidate } from '../types/contact.types';
+import { publicHitEstablishesRelationship } from './person-company-relationship';
 
 const TITLES: Array<[RegExp, string]> = [
   [/\bco-founder\b/i, 'Co-Founder'],
@@ -38,7 +39,7 @@ export function decisionMakerQueries(companyName: string, roles?: string[]): str
 export function assessPublicDecisionMaker(
   companyName: string,
   hit: { title: string; url: string; snippet: string; source?: string; retrievedAt?: string },
-  options?: { allowedRoles?: string[] },
+  options?: { allowedRoles?: string[]; companyWebsite?: string | null },
 ): ContactCandidate | null {
   const text = `${hit.title}. ${hit.snippet}`.replace(/\s+/g, ' ').trim();
   const title = extractDecisionMakerTitle(text);
@@ -49,6 +50,8 @@ export function assessPublicDecisionMaker(
   const clause = personWindows(text, fullName);
   if (!companyAssociated(companyName, clause)) return null;
   if (otherCompanyAffiliation(clause, companyName)) return null;
+  // Random "Name, Title" snippets without company affiliation / official source are rejected.
+  if (!publicHitEstablishesRelationship(companyName, hit, fullName, title, options?.companyWebsite)) return null;
   const email = publicPersonEmail(clause);
   const profiles = personProfiles(hit.url);
   const retrievedAt = hit.retrievedAt ?? new Date().toISOString();

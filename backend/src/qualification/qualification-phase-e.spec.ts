@@ -56,6 +56,9 @@ function baseContext(overrides: Partial<QualificationContext> = {}): Qualificati
       { field: 'companyName', status: 'SUPPORTED', fieldValue: 'Northwind Software', evidenceId: 'ev-1' },
       { field: 'website', status: 'SUPPORTED', fieldValue: 'https://northwind.example', evidenceId: 'ev-1' },
       { field: 'state', status: 'VERIFIED', fieldValue: 'California', evidenceId: 'ev-1' },
+      { field: 'fullName', status: 'SUPPORTED', fieldValue: 'Ada Founder', evidenceId: 'ev-1' },
+      { field: 'title', status: 'SUPPORTED', fieldValue: 'CEO', evidenceId: 'ev-1' },
+      { field: 'companyRelationship', status: 'SUPPORTED', fieldValue: 'Northwind Software', evidenceId: 'ev-1' },
       {
         field: 'email',
         status: 'VERIFIED',

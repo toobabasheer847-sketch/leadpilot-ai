@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import type { FieldClaim, VerificationConflictLog, VerificationEvidence, VerificationInput, VerificationSignal } from '../types/verification.types';
-import { independentSourceKey } from '../utils/email-ownership';
+import { independentSourceKey } from '../utils/source-independence';
 
 @Injectable()
 export class ConflictEngineService {

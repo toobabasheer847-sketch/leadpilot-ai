@@ -67,6 +67,8 @@ export function verificationStatusLabel(status: string | null | undefined): stri
       return 'Verified';
     case 'PARTIALLY_VERIFIED':
       return 'Partially Verified';
+    case 'EVIDENCE_SUPPORTED':
+      return 'Evidence Supported';
     case 'NEEDS_REVIEW':
       return 'Needs Review';
     case 'CONFLICT':

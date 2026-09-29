@@ -1,34 +1,8 @@
 import { isGenericBusinessEmail } from './generic-email';
+import { independentSourceKey } from './source-independence';
 import type { VerificationEvidence } from '../types/verification.types';
 
-/** Lowest private-ish label of a host (example.com from a.b.example.com). */
-export function registrableDomain(hostnameOrUrl: string | null | undefined): string | null {
-  if (!hostnameOrUrl?.trim()) return null;
-  let host = hostnameOrUrl.trim().toLowerCase();
-  try {
-    if (host.includes('://') || host.includes('/')) {
-      host = new URL(host.includes('://') ? host : `https://${host}`).hostname;
-    }
-  } catch {
-    return null;
-  }
-  host = host.replace(/^www\./, '');
-  const parts = host.split('.').filter(Boolean);
-  if (parts.length < 2) return host || null;
-  // Keep last two labels; handles example.co.uk imperfectly but avoids path-based inflation.
-  return parts.slice(-2).join('.');
-}
-
-/** Independent source identity: provider/sourceType + registrable domain (not path). */
-export function independentSourceKey(input: {
-  provider?: string | null;
-  sourceType?: string | null;
-  sourceUrl?: string | null;
-  canonicalUrl?: string | null;
-}): string {
-  const domain = registrableDomain(input.canonicalUrl ?? input.sourceUrl) ?? (input.canonicalUrl ?? input.sourceUrl ?? 'unknown');
-  return `${input.provider ?? input.sourceType ?? 'unknown'}|${domain}`;
-}
+export { independentSourceKey, registrableDomain } from './source-independence';
 
 export function excerptLinksPersonAndEmail(excerpt: string, email: string, personName: string | null | undefined): boolean {
   if (!excerpt?.trim() || !email?.trim()) return false;

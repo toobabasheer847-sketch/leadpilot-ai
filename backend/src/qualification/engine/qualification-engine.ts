@@ -1,7 +1,8 @@
 import { assessCategoryEvidence } from '../../search/category-evidence';
 import { assessPlanExclusions } from '../../search/exclusion-evidence';
 import type { SearchPlan } from '../../search/types/search-plan.types';
-import { roleMatches } from '../../contacts/discovery/public-decision-maker';
+import { isCompanyProfileUrl, isPersonProfileUrl, roleMatches } from '../../contacts/discovery/public-decision-maker';
+import { assessPersonCompanyRelationship } from '../../contacts/discovery/person-company-relationship';
 import { sameCountry } from '../../sources/location/location-evidence';
 import { isGenericBusinessEmail } from '../../verification/utils/generic-email';
 import type { CriterionEvidence, CriterionResultCode, QualificationContext, QualificationCriteria, QualificationDecision } from '../types/qualification.types';
@@ -345,6 +346,13 @@ function evaluateSpecificField(context: QualificationContext, field: string, req
       excerpt: value,
     }, verification ?? 'UNVERIFIED');
   }
+  if (person && key === 'linkedin' && isCompanyProfileUrl(value)) {
+    return evidence(field, 'NOT_FOUND', required, 'Company social URL cannot satisfy required person linkedin.', {
+      source: 'contact_record',
+      sourceUrl: value,
+      excerpt: value,
+    }, verification ?? 'UNVERIFIED');
+  }
   if (verification === 'INVALID') {
     return evidence(field, 'NO_MATCH', required, `${field} failed verification.`, { source: 'verification', sourceUrl: null, excerpt: value }, verification);
   }
@@ -374,6 +382,13 @@ function evaluateCompanySocial(context: QualificationContext, platform: string, 
   const profile = (context.socialProfiles ?? []).find((item) => aliases.includes(item.platform.toLowerCase()) && item.profileUrl);
   if (!profile?.profileUrl) {
     return evidence(`companySocial:${normalized}`, 'NOT_FOUND', required, `Company ${normalized} profile was not found.`, null, null);
+  }
+  if (normalized === 'linkedin' && isPersonProfileUrl(profile.profileUrl)) {
+    return evidence(`companySocial:${normalized}`, 'NOT_FOUND', required, 'Person social URL cannot satisfy company linkedin.', {
+      source: 'company_social_profiles',
+      sourceUrl: profile.profileUrl,
+      excerpt: profile.profileUrl,
+    }, fieldStatus(context, normalized));
   }
   return evidence(`companySocial:${normalized}`, 'MATCH', required, `Company ${normalized} profile is available.`, {
     source: 'company_social_profiles',
@@ -707,6 +722,36 @@ function evaluateDecisionMaker(context: QualificationContext, criteria: Qualific
       excerpt: contacts.map((contact) => `${contact.fullName} (${contact.title ?? 'no title'})`).join('; '),
     }, null);
   }
+  const relationshipStatus = context.verifications.find((item) => item.field === 'companyRelationship')?.status ?? null;
+  const relationship = assessPersonCompanyRelationship({
+    personName: roleMatch.fullName,
+    title: roleMatch.title,
+    companyName: context.company.name,
+    companyWebsite: context.company.website,
+    companyRelationship: roleMatch.companyRelationship,
+    evidence: context.evidence.map((item) => ({
+      sourceUrl: item.sourceUrl,
+      evidenceText: item.evidenceText,
+      field: typeof item.metadata === 'object' && item.metadata && typeof (item.metadata as { field?: unknown }).field === 'string'
+        ? (item.metadata as { field: string }).field
+        : null,
+    })),
+    relationshipVerificationStatus: relationshipStatus,
+  });
+  if (relationship.verdict === 'REJECTED') {
+    return evidence('decisionMaker', 'NO_MATCH', true, 'Decision-maker appears associated with a different company.', {
+      source: 'relationship_evidence',
+      sourceUrl: relationship.sourceUrl,
+      excerpt: relationship.excerpt ?? `${roleMatch.fullName} / ${roleMatch.title}`,
+    }, relationshipStatus);
+  }
+  if (relationship.verdict === 'MISSING' || relationship.verdict === 'WEAK' || relationship.verdict === 'AMBIGUOUS') {
+    return evidence('decisionMaker', 'NEEDS_REVIEW', true, 'Person-to-company relationship evidence is missing or too weak to qualify.', {
+      source: 'relationship_evidence',
+      sourceUrl: relationship.sourceUrl ?? roleMatch.linkedinUrl,
+      excerpt: relationship.excerpt ?? `${roleMatch.fullName} / ${roleMatch.title}`,
+    }, relationshipStatus ?? 'UNVERIFIED');
+  }
   const verification = context.verifications.find((item) => ['fullName', 'title', 'companyRelationship'].includes(item.field) && (item.status === 'VERIFIED' || item.status === 'SUPPORTED' || item.status === 'CONFLICT' || item.status === 'NEEDS_REVIEW'));
   if (verification?.status === 'CONFLICT' || verification?.status === 'NEEDS_REVIEW' || roleMatch.verificationStatus === 'NEEDS_REVIEW' || roleMatch.verificationStatus === 'CONFLICT') {
     return evidence('decisionMaker', 'NEEDS_REVIEW', true, 'Decision-maker relationship or identity requires review due to conflicts.', {
@@ -715,16 +760,9 @@ function evaluateDecisionMaker(context: QualificationContext, criteria: Qualific
       excerpt: `${roleMatch.fullName} / ${roleMatch.title}`,
     }, verification?.status ?? roleMatch.verificationStatus);
   }
-  if (!roleMatch.companyRelationship && verification?.status !== 'VERIFIED' && verification?.status !== 'SUPPORTED') {
-    return evidence('decisionMaker', 'NEEDS_REVIEW', true, 'Decision-maker was found but company relationship is not strongly verified.', {
-      source: 'company_contacts',
-      sourceUrl: roleMatch.linkedinUrl,
-      excerpt: `${roleMatch.fullName} / ${roleMatch.title}`,
-    }, verification?.status ?? 'UNVERIFIED');
-  }
-  return evidence('decisionMaker', 'MATCH', true, `Decision-maker ${roleMatch.fullName} matched required role and relationship evidence.`, {
+  return evidence('decisionMaker', 'MATCH', true, `Decision-maker ${roleMatch.fullName} matched required role and relationship evidence (${relationship.verdict}).`, {
     source: 'company_contacts',
-    sourceUrl: roleMatch.linkedinUrl,
+    sourceUrl: relationship.sourceUrl ?? roleMatch.linkedinUrl,
     excerpt: `${roleMatch.fullName} / ${roleMatch.title}`,
   }, verification?.status ?? roleMatch.verificationStatus);
 }

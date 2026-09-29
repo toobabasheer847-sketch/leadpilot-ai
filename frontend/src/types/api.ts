@@ -227,7 +227,22 @@ export interface LeadRecord {
   socialProfiles?: SocialProfileRow[];
   classification: { decision: string | null; confidence: number | string | null } | null;
   score: { value: number; band: string | null; breakdown?: unknown } | null;
-  verification: { status: string; field: string | null } | null;
+  verification: {
+    status: string;
+    field: string | null;
+    summary?: {
+      aggregateStatus: string;
+      fields: Array<{ field: string; status: string; displayStatus: string; ownershipVerified: boolean; deliverabilityVerified: boolean }>;
+      flags: {
+        needsReview: boolean;
+        conflict: boolean;
+        personOwnershipVerified: boolean;
+        deliverabilityVerified: boolean;
+        evidenceVerified: boolean;
+        evidenceSupported: boolean;
+      };
+    };
+  } | null;
   qualification: {
     status: string;
     score?: number | null;
@@ -316,6 +331,24 @@ export interface VerificationConflict {
 
 export interface VerificationSummary {
   verificationStatus: string | null;
+  verificationSummary?: {
+    aggregateStatus: string;
+    fields: Array<{
+      field: string;
+      status: string;
+      displayStatus: string;
+      ownershipVerified: boolean;
+      deliverabilityVerified: boolean;
+    }>;
+    flags: {
+      needsReview: boolean;
+      conflict: boolean;
+      personOwnershipVerified: boolean;
+      deliverabilityVerified: boolean;
+      evidenceVerified: boolean;
+      evidenceSupported: boolean;
+    };
+  } | null;
   fields: VerificationField[];
   evidenceCount: number;
   sourceCount: number;

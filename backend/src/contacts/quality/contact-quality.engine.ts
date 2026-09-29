@@ -1,5 +1,6 @@
 import { matchContacts } from '../../deduplication/matching/matching';
 import type { NormalizedContact } from '../../deduplication/types/deduplication.types';
+import { independentSourceKey } from '../../verification/utils/source-independence';
 
 export type ContactFieldStatus = 'VERIFIED' | 'SUPPORTED' | 'UNVERIFIED' | 'CONFLICT' | 'NOT_FOUND';
 export type PhoneKind = 'COMPANY_PHONE' | 'PERSONAL_PUBLIC_PHONE' | 'UNKNOWN';
@@ -400,7 +401,10 @@ function independentEvidence(items: ContactQualityEvidence[]) {
   const seen = new Set<string>();
   return items.filter((item) => {
     const excerpt = item.excerpt.trim().toLowerCase().replace(/\s+/g, ' ');
-    const key = excerpt.length >= 80 ? `copy|${excerpt}` : `${item.sourceType}|${canonicalSourceUrl(item.sourceUrl)}`;
+    // Same registrable domain (or identical long excerpt copy) collapses to one independent source.
+    const key = excerpt.length >= 80
+      ? `copy|${excerpt}`
+      : independentSourceKey({ sourceType: item.sourceType, sourceUrl: item.sourceUrl, provider: item.sourceType });
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

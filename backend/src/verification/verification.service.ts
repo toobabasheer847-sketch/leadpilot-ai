@@ -22,6 +22,8 @@ import type { SearchPlan } from '../search/types/search-plan.types';
 import { companyFieldsForVerification, fieldIsRequiredByPlan, personFieldsForVerification } from './plan-verification-fields';
 import { isGenericBusinessEmail } from './utils/generic-email';
 import { assessPersonEmailOwnership } from './utils/email-ownership';
+import { summarizeAggregateVerification } from './utils/aggregate-verification';
+import { countIndependentSources } from './utils/source-independence';
 
 @Injectable()
 export class VerificationService {
@@ -67,19 +69,28 @@ export class VerificationService {
     const contacts = await this.db.select().from(companyContacts).where(eq(companyContacts.companyId, companyId));
     const verifications = await this.db.select().from(leadVerifications).where(and(eq(leadVerifications.companyId, companyId), eq(leadVerifications.organizationId, organizationId))).orderBy(desc(leadVerifications.checkedAt));
     const evidence = await this.db.select().from(leadEvidence).where(eq(leadEvidence.companyId, companyId));
-    const sources = await this.db.select().from(sourceRecords).where(and(eq(sourceRecords.companyId, companyId), eq(sourceRecords.organizationId, organizationId)));
     const conflicts = await this.db.select().from(verificationConflicts).where(and(eq(verificationConflicts.companyId, companyId), eq(verificationConflicts.organizationId, organizationId), eq(verificationConflicts.requiresReview, true))).orderBy(desc(verificationConflicts.createdAt));
     const fields = this.latestFieldBreakdown(verifications);
+    const aggregate = summarizeAggregateVerification(fields.map((row) => ({
+      field: row.fieldName,
+      status: row.status,
+      metadata: typeof row.metadata === 'object' && row.metadata !== null ? row.metadata as Record<string, unknown> : null,
+    })));
     const now = new Date();
     return {
       company,
       people: contacts,
-      verificationStatus: this.aggregateStatus(verifications.map((row) => row.status)),
+      verificationStatus: aggregate.aggregateStatus,
+      verificationSummary: aggregate,
       fields,
       evidenceCount: evidence.length,
-      sourceCount: new Set([...evidence.map((row) => row.canonicalUrl ?? row.sourceUrl), ...sources.map((row) => row.sourceUrl)]).size,
+      sourceCount: countIndependentSources(evidence.map((row) => ({
+        sourceUrl: row.canonicalUrl ?? row.sourceUrl,
+        provider: row.provider,
+        sourceType: row.sourceType,
+      }))),
       conflicts,
-      requiresReview: conflicts.length > 0 || verifications.some((row) => row.status === 'CONFLICT' || row.status === 'NEEDS_REVIEW'),
+      requiresReview: conflicts.length > 0 || aggregate.flags.needsReview,
       lastVerifiedAt: company.lastVerifiedAt ?? verifications[0]?.checkedAt ?? null,
       nextReverificationAt: company.nextReverificationAt ?? null,
       reVerificationDue: company.nextReverificationAt ? company.nextReverificationAt <= now : false,
@@ -464,14 +475,6 @@ export class VerificationService {
     return Number.isFinite(Number(value)) ? Number(value) : 0;
   }
 
-  private aggregateStatus(statuses: string[]) {
-    if (!statuses.length || statuses.every((status) => status === 'NOT_FOUND')) return 'NOT_FOUND';
-    if (statuses.some((status) => status === 'CONFLICT' || status === 'NEEDS_REVIEW')) return 'NEEDS_REVIEW';
-    if (statuses.every((status) => status === 'VERIFIED')) return 'VERIFIED';
-    if (statuses.some((status) => status === 'VERIFIED' || status === 'SUPPORTED')) return 'SUPPORTED';
-    return 'UNVERIFIED';
-  }
-
   private latestFieldBreakdown(verifications: Array<typeof leadVerifications.$inferSelect>) {
     const latest = new Map<string, typeof leadVerifications.$inferSelect>();
     for (const row of verifications) {
@@ -500,9 +503,14 @@ export class VerificationService {
     const days = this.config.get<number>('verification.reVerifyAfterDays', 30);
     const now = new Date();
     const next = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
-    const status = this.aggregateStatus(statuses);
+    const aggregate = summarizeAggregateVerification(statuses.map((status) => ({ field: 'field', status })));
+    const status = aggregate.aggregateStatus;
     await this.db.update(companies).set({
-      verificationStatus: status === 'NEEDS_REVIEW' ? 'NEEDS_REVIEW' : status === 'VERIFIED' ? 'VERIFIED' : status === 'SUPPORTED' ? 'PARTIALLY_VERIFIED' : status === 'NOT_FOUND' ? 'NOT_FOUND' : 'UNVERIFIED',
+      verificationStatus: status === 'NEEDS_REVIEW' ? 'NEEDS_REVIEW'
+        : status === 'VERIFIED' ? 'VERIFIED'
+          : status === 'PARTIALLY_VERIFIED' || status === 'SUPPORTED' ? 'PARTIALLY_VERIFIED'
+            : status === 'NOT_FOUND' ? 'NOT_FOUND'
+              : 'UNVERIFIED',
       lastVerifiedAt: now,
       nextReverificationAt: next,
       updatedAt: now,
