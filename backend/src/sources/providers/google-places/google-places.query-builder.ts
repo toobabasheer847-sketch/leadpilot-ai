@@ -1,16 +1,14 @@
 import { SearchPlan } from '../../../search/types/search-plan.types';
 import { expansionCities } from '../../../search/search-plan.places';
+import { googlePlacesExpandedTerms } from '../../services/discovery-query-expansion';
 
 /**
  * Build Google Places text-search queries from SearchPlan.
  * State-only plans fan out across expansion cities; city plans stay single-query.
- * Phrases come from leadTypes/industry — no hard-coded geography.
+ * Phase S: phrases come from bounded semantic expansion (leadTypes/industry/searchIntent).
  */
 export function buildGooglePlacesQueries(plan: SearchPlan): string[] {
-  const terms = [...plan.leadTypes, ...plan.industry]
-    .map((term) => term.replaceAll('_', ' ').trim())
-    .filter(Boolean);
-  const baseTerms = terms.length ? terms : ['company'];
+  const baseTerms = googlePlacesExpandedTerms(plan);
   const location = plan.locations.find((item) => item.city || item.state || item.region || item.country);
   if (!location) {
     return [...new Set(baseTerms.map((term) => term.trim()).filter(Boolean))];

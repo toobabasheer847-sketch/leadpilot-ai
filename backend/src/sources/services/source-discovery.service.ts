@@ -105,6 +105,11 @@ export class SourceDiscoveryService {
     const excludePool: NormalizedSourceResult[] = [];
     const globalQueryBudget = discoveryQueryBudget(seek);
     let globalQueriesIssued = 0;
+    let queryFamiliesGenerated = 0;
+    let queriesGenerated = 0;
+    let duplicateQueriesSkipped = 0;
+    let queriesSkippedBudget = 0;
+    let queriesSkippedLowYield = 0;
 
     // Phase R — capability inventory at execution start (no secrets).
     const capabilities = detectDiscoveryProviderCapabilities({
@@ -320,6 +325,12 @@ export class SourceDiscoveryService {
           providerQueries += run;
           globalQueriesIssued += run;
           rejected += extra.rejected;
+          queryFamiliesGenerated = Math.max(queryFamiliesGenerated, extra.queryFamiliesGenerated ?? 0);
+          queriesGenerated += extra.queriesGenerated ?? 0;
+          duplicateQueriesSkipped += extra.queriesSkippedDuplicate ?? 0;
+          queriesSkippedBudget += extra.queriesSkippedBudget ?? 0;
+          queriesSkippedLowYield += extra.queriesSkippedLowYield ?? 0;
+          queriesSkipped += (extra.queriesSkippedDuplicate ?? 0) + (extra.queriesSkippedBudget ?? 0) + (extra.queriesSkippedLowYield ?? 0);
           if (extra.providerError) {
             webError = extra.providerError;
             const outcome = classifyDiscoveryProviderOutcome({ resultsCount: webResultsCount, error: webError });
@@ -401,6 +412,13 @@ export class SourceDiscoveryService {
       providerQueries: String(providerQueries),
       queriesIssued: String(globalQueriesIssued),
       queriesSkipped: String(queriesSkipped),
+      queryFamiliesGenerated: String(queryFamiliesGenerated),
+      queriesGenerated: String(queriesGenerated),
+      duplicateQueriesSkipped: String(duplicateQueriesSkipped),
+      queriesSkippedBudget: String(queriesSkippedBudget),
+      queriesSkippedLowYield: String(queriesSkippedLowYield),
+      uniqueCompaniesDiscovered: String(candidates),
+      acceptanceRate: discovered > 0 ? String(Number((candidates / Math.max(1, discovered)).toFixed(4))) : '0',
       providersAttempted: String(progress.providersAttempted),
       providersSucceeded: String(progress.providersSucceeded),
       providersEmpty: String(progress.providersEmpty),
@@ -436,6 +454,11 @@ export class SourceDiscoveryService {
       providerQueries,
       queriesIssued: globalQueriesIssued,
       queriesSkipped,
+      queryFamiliesGenerated,
+      queriesGenerated,
+      duplicateQueriesSkipped,
+      queriesSkippedBudget,
+      queriesSkippedLowYield,
       providersAttempted: progress.providersAttempted,
       providersSucceeded: progress.providersSucceeded,
       providersEmpty: progress.providersEmpty,

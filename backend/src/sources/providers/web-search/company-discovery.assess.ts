@@ -7,6 +7,13 @@ import { toCountryCode } from '../../location/location-evidence';
 import type { SearchLocation, SearchPlan } from '../../../search/types/search-plan.types';
 import { rejectDiscoveryUrl } from '../../services/discovery-candidate.gate';
 import { discoveryIdentityKeys } from '../../services/discovery-fallback';
+import {
+  buildExpandedDiscoveryQueries,
+  expandDiscoveryLocationVariants,
+  expandDiscoveryPhrases,
+  QueryFamilyYieldTracker,
+  type DiscoveryQueryExpansionMetrics,
+} from '../../services/discovery-query-expansion';
 import type { NormalizedSourceResult } from '../../types/source.types';
 import type { WebSearchResult } from '../../../enrichment/website/web-search.types';
 
@@ -15,7 +22,6 @@ const LISTING = /\b(top\s+\d+|best\s+\d+|list of|companies to watch|ranking of|d
 const CONTRADICTION = /\b(restaurant|dentist|church|school|hotel|cafe|bar & grill|auto repair|salon)\b/i;
 const REAL_ESTATE_SIGNAL = /\b(real[\s-]?estate|realty|propert(?:y|ies)|acquisition|multifamily|apartment buildings?|wholesal(?:e|er|ing)|cash\s+home\s+buy|fix(?:\s|-)?and(?:\s|-)?flip)\b/i;
 const INVESTOR_SIGNAL = /\b(real[\s-]?estate|realty|propert(?:y|ies)|investors?|investments?|acquisition|holdings|multifamily|wholesal(?:e|er|ing)|cash\s+home\s+buy|fix(?:\s|-)?and(?:\s|-)?flip|we\s+buy\s+houses?)\b/i;
-const QUERY_TAILS = ['official website', 'headquarters', 'contact', 'about', 'team', 'founder', 'LLC', 'Inc', '-site:clutch.co -site:goodfirms.co'];
 const US_STATE_NAMES = [
   'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware', 'Florida', 'Georgia',
   'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland',
@@ -30,6 +36,11 @@ export interface WebCompanyCollection {
   rejected: number;
   providerError: string | null;
   queriesRun: number;
+  queriesSkippedDuplicate?: number;
+  queriesSkippedBudget?: number;
+  queriesSkippedLowYield?: number;
+  queryFamiliesGenerated?: number;
+  queriesGenerated?: number;
 }
 
 export type WebCompanySearchFn = (
@@ -52,62 +63,27 @@ export interface CollectWebCompanyOptions {
 }
 
 export function companyDiscoveryQueries(plan: SearchPlan, maxQueries: number, round = 0): string[] {
-  const phrases = [...investorDiscoveryPhrases(plan), ...roundPhrases(plan, round)];
-  const places = discoverySearchPlaces(plan);
-  const queries: string[] = [];
-  const seen = new Set<string>();
-  const push = (parts: string[]) => {
-    const query = parts.map((part) => part.trim()).filter(Boolean).join(' ').replace(/\s+/g, ' ');
-    const key = query.toLowerCase();
-    if (!key || seen.has(key) || queries.length >= maxQueries) return false;
-    seen.add(key);
-    queries.push(query);
-    return true;
-  };
-  const tails = round === 0
-    ? QUERY_TAILS
-    : [...QUERY_TAILS, 'owner operator', 'buying houses', 'residential investor'];
-
-  // Interleave place × phrase so large state expansions cover cities AND categories early.
-  const tiers: Array<(phrase: string, place: string) => string[]> = [
-    (phrase, place) => [phrase, place],
-    (phrase, place) => (place ? [phrase, 'in', place] : [phrase]),
-    (phrase, place) => (place ? [`"${phrase}"`, place, 'company OR LLC OR Inc'] : [`"${phrase}"`, 'company OR LLC OR Inc']),
-  ];
-  for (const build of tiers) {
-    for (let offset = 0; offset < phrases.length && queries.length < maxQueries; offset += 1) {
-      for (let placeIndex = 0; placeIndex < places.length && queries.length < maxQueries; placeIndex += 1) {
-        const phrase = phrases[(placeIndex + offset) % phrases.length];
-        if (!phrase) continue;
-        push(build(phrase, places[placeIndex]));
-      }
-    }
-  }
-  for (const place of places) {
-    for (const phrase of phrases) {
-      for (const tail of tails) {
-        if (queries.length >= maxQueries) return queries;
-        push([phrase, place, tail]);
-      }
-    }
-  }
-  return queries;
+  return buildExpandedDiscoveryQueries(plan, maxQueries, { round, includeTails: true }).variants.map((variant) => variant.query);
 }
 
 /** Plan-derived search phrases for investor / RE lead types (no hard-coded geography). */
 export function investorDiscoveryPhrases(plan: SearchPlan): string[] {
-  return searchPhrases(plan);
+  return expandDiscoveryPhrases(plan);
 }
 
 /** Places used for web company discovery (city expansion for state-only plans). */
 export function discoverySearchPlaces(plan: SearchPlan): string[] {
-  return searchPlaces(plan);
+  return expandDiscoveryLocationVariants(plan);
 }
 
 export function queryBudgetForPlan(plan: SearchPlan, remaining: number): number {
   // Use discoveryTarget so minimum intents get a slightly larger query budget.
   const requested = discoveryTarget(plan);
   return discoveryQueryBudget(Math.max(remaining, requested));
+}
+
+export function expandDiscoveryQueryPlan(plan: SearchPlan, maxQueries: number, round = 0) {
+  return buildExpandedDiscoveryQueries(plan, maxQueries, { round, includeTails: true });
 }
 
 export async function collectWebCompanyCandidates(
@@ -117,8 +93,15 @@ export async function collectWebCompanyCandidates(
   options: CollectWebCompanyOptions = {},
 ): Promise<WebCompanyCollection> {
   const wanted = Math.max(0, Math.trunc(target));
-  if (wanted === 0) return { results: [], rejected: 0, providerError: null, queriesRun: 0 };
-  const queries = companyDiscoveryQueries(plan, options.maxQueries ?? queryBudgetForPlan(plan, wanted), options.round ?? 0);
+  if (wanted === 0) {
+    return emptyCollection();
+  }
+  const expansion = buildExpandedDiscoveryQueries(
+    plan,
+    options.maxQueries ?? queryBudgetForPlan(plan, wanted),
+    { round: options.round ?? 0, includeTails: true },
+  );
+  const queries = expansion.variants;
   const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const delayMs = Math.max(0, options.delayMs ?? 0);
   const concurrency = Math.max(1, Math.trunc(options.concurrency ?? 1));
@@ -135,8 +118,10 @@ export async function collectWebCompanyCandidates(
   for (const existing of options.exclude ?? []) discoveryIdentityKeys(existing).forEach((key) => seen.add(key));
   let rejected = 0;
   let queriesRun = 0;
+  let queriesSkippedLowYield = 0;
   let consecutiveFailures = 0;
   let providerError: string | null = null;
+  const yieldTracker = new QueryFamilyYieldTracker();
 
   const flushChunk = async (force = false) => {
     if (!options.onBatch) {
@@ -149,36 +134,49 @@ export async function collectWebCompanyCandidates(
     await options.onBatch(batch);
   };
 
-  const acceptHit = (hit: WebSearchResult) => {
+  const acceptHit = (hit: WebSearchResult): 'accepted' | 'rejected' | 'duplicate' => {
     const decision = assessWebCompanyCandidate(hit, plan);
     if (!decision.accepted) {
       rejected += 1;
-      return;
+      return 'rejected';
     }
     const keys = discoveryIdentityKeys(decision.result);
-    if (keys.some((key) => seen.has(key))) return;
+    if (keys.some((key) => seen.has(key))) return 'duplicate';
     keys.forEach((key) => seen.add(key));
     results.push(decision.result);
     pendingChunk.push(decision.result);
+    return 'accepted';
   };
 
   for (let offset = 0; offset < queries.length && results.length < wanted; offset += concurrency) {
     if (offset > 0 && delayMs > 0) await sleep(delayMs);
-    const batchQueries = queries.slice(offset, offset + concurrency);
-    queriesRun += batchQueries.length;
-    const outcomes = await Promise.all(batchQueries.map(async (query) => {
+    const batchVariants = queries.slice(offset, offset + concurrency).filter((variant) => {
+      if (yieldTracker.shouldSkip(variant.familyId)) {
+        queriesSkippedLowYield += 1;
+        return false;
+      }
+      return true;
+    });
+    if (!batchVariants.length) continue;
+    queriesRun += batchVariants.length;
+    const outcomes = await Promise.all(batchVariants.map(async (variant) => {
       const controller = new AbortController();
       const timer = queryTimeoutMs === undefined
         ? null
         : setTimeout(() => controller.abort(), queryTimeoutMs);
       try {
-        const hits = await search(query, { signal: controller.signal });
-        return { ok: true as const, hits };
+        const hits = await search(variant.query, { signal: controller.signal });
+        return { ok: true as const, hits, variant };
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Web company discovery failed.';
         const timedOut = controller.signal.aborted
           || (error instanceof Error && (error.name === 'AbortError' || /timed out|timeout/i.test(error.message)));
-        return { ok: false as const, message: timedOut ? 'Web search provider timed out.' : message, timedOut };
+        return {
+          ok: false as const,
+          message: timedOut ? 'Web search provider timed out.' : message,
+          timedOut,
+          variant,
+        };
       } finally {
         if (timer) clearTimeout(timer);
       }
@@ -188,28 +186,75 @@ export async function collectWebCompanyCandidates(
       if (results.length >= wanted) break;
       if (!outcome.ok) {
         consecutiveFailures += 1;
+        yieldTracker.record(outcome.variant.familyId, { raw: 0, acceptedNew: 0, duplicates: 0, rejected: 0 });
         if (
           /rate limit|429|plan limit|pay-as-you-go limit|quota|HTTP 432|HTTP 433/i.test(outcome.message)
           || consecutiveFailures >= maxConsecutiveFailures
         ) {
           providerError = outcome.message;
           await flushChunk(true);
-          return { results, rejected, providerError, queriesRun };
+          return withExpansionMetrics(results, rejected, providerError, queriesRun, expansion.metrics, queriesSkippedLowYield);
         }
-        // Soft failure / per-query timeout: continue with the next variant.
         continue;
       }
       consecutiveFailures = 0;
+      let acceptedNew = 0;
+      let duplicates = 0;
+      let rejectedHere = 0;
       for (const hit of outcome.hits) {
         if (results.length >= wanted) break;
-        acceptHit(hit);
+        const status = acceptHit(hit);
+        if (status === 'accepted') acceptedNew += 1;
+        else if (status === 'duplicate') duplicates += 1;
+        else rejectedHere += 1;
       }
+      yieldTracker.record(outcome.variant.familyId, {
+        raw: outcome.hits.length,
+        acceptedNew,
+        duplicates,
+        rejected: rejectedHere,
+      });
       await flushChunk(false);
     }
   }
 
   await flushChunk(true);
-  return { results, rejected, providerError, queriesRun };
+  return withExpansionMetrics(results, rejected, providerError, queriesRun, expansion.metrics, queriesSkippedLowYield);
+}
+
+function emptyCollection(): WebCompanyCollection {
+  return {
+    results: [],
+    rejected: 0,
+    providerError: null,
+    queriesRun: 0,
+    queriesSkippedDuplicate: 0,
+    queriesSkippedBudget: 0,
+    queriesSkippedLowYield: 0,
+    queryFamiliesGenerated: 0,
+    queriesGenerated: 0,
+  };
+}
+
+function withExpansionMetrics(
+  results: NormalizedSourceResult[],
+  rejected: number,
+  providerError: string | null,
+  queriesRun: number,
+  metrics: DiscoveryQueryExpansionMetrics,
+  queriesSkippedLowYield: number,
+): WebCompanyCollection {
+  return {
+    results,
+    rejected,
+    providerError,
+    queriesRun,
+    queriesSkippedDuplicate: metrics.duplicateQueriesSkipped,
+    queriesSkippedBudget: metrics.queriesSkippedBudget,
+    queriesSkippedLowYield,
+    queryFamiliesGenerated: metrics.queryFamiliesGenerated,
+    queriesGenerated: metrics.queriesGenerated,
+  };
 }
 
 export function assessWebCompanyCandidate(
@@ -283,67 +328,6 @@ export function assessWebCompanyCandidate(
       },
     },
   };
-}
-
-function searchPhrases(plan: SearchPlan): string[] {
-  const investor = isInvestorPlan(plan);
-  if (investor) {
-    const specific: string[] = [];
-    const types = plan.leadTypes.map((type) => type.toLowerCase());
-    const industry = plan.industry.map((item) => item.toLowerCase());
-    if (types.some((type) => /cash_home_buyer/.test(type))) {
-      specific.push('cash home buyer', 'cash buyer', 'we buy houses');
-    }
-    if (types.some((type) => /fix_and_flip|house_flipper/.test(type))) {
-      specific.push('fix and flip', 'house flipper', 'fix & flip investor');
-    }
-    if (types.some((type) => /wholesaler|wholesaling/.test(type))) {
-      specific.push('real estate wholesaler', 'house wholesaler', 'real estate wholesaling');
-    }
-    if (types.some((type) => /real_estate_investor/.test(type)) || industry.some((item) => /real_estate/.test(item))) {
-      specific.push('real estate investment company', 'real estate investor', 'property investment firm');
-    }
-    if (types.some((type) => /buy_and_hold|brrrr/.test(type))) {
-      specific.push('buy and hold investor', 'BRRRR investor');
-    }
-    if (types.some((type) => /land_investor/.test(type))) specific.push('land investor', 'land investment company');
-    if (types.some((type) => /commercial_real_estate_investor/.test(type))) {
-      specific.push('commercial real estate investor', 'commercial property investor');
-    }
-    if (!specific.length) {
-      specific.push('real estate investment company', 'real estate investor', 'property investment firm');
-    }
-    return [...new Set(specific)];
-  }
-  const phrases = [...plan.industry, ...plan.leadTypes].map((term) => term.replace(/_/g, ' ').trim()).filter(Boolean);
-  const base = phrases.length ? phrases : ['company'];
-  return [...new Set(base.flatMap((phrase) => [phrase, `${phrase} company`]))];
-}
-
-function roundPhrases(plan: SearchPlan, round: number): string[] {
-  if (round <= 0 || !isInvestorPlan(plan)) return [];
-  const batches = [
-    ['we buy houses', 'cash buyers', 'fix flip investors'],
-    ['residential wholesale', 'creative finance buyer', 'distressed property buyer'],
-    ['turnkey rental investor', 'BRRRR investor', 'multifamily acquisition'],
-    ['off market buyer', 'novation wholesaler', 'subject to buyer'],
-  ];
-  return batches[Math.min(round, batches.length) - 1] ?? [];
-}
-
-function searchPlaces(plan: SearchPlan): string[] {
-  const location = plan.locations.find((item) => item.city || item.state || item.region || item.country || item.originalText);
-  if (!location) return [''];
-  if (location.city?.trim()) return [placeLabel(location)];
-  const cities = expansionCities(location);
-  if (!cities.length) return [placeLabel(location)];
-  return cities.map((city) => [city, location.state, location.country && location.country !== 'US' ? location.country : ''].filter(Boolean).join(' '));
-}
-
-function placeLabel(location: SearchLocation): string {
-  const structured = [location.city, location.state, location.region, location.country].filter((part) => Boolean(part?.trim()));
-  if (structured.length) return structured.join(' ');
-  return location.originalText?.trim() ?? '';
 }
 
 function isInvestorPlan(plan: SearchPlan): boolean {
