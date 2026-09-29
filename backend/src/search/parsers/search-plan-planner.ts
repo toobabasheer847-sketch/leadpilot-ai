@@ -8,8 +8,10 @@ import type { CompanySize, SearchLocation, SearchPlan, UnresolvedCriterion } fro
 import { SearchPlanParser } from './search-plan.parser';
 
 const PLAN_FIELDS = [
-  'companyWebsite', 'companyEmail', 'companyPhone', 'employeeCount', 'location', 'industry',
-  'personName', 'personTitle', 'personEmail', 'personPhone', 'website', 'email', 'phone', 'name', 'title', 'linkedin', 'facebook', 'instagram', 'x', 'youtube',
+  'companyWebsite', 'companyEmail', 'companyPhone', 'companyLinkedin', 'companyFacebook', 'companyInstagram', 'companyYoutube', 'companyX',
+  'employeeCount', 'location', 'industry',
+  'personName', 'personTitle', 'personEmail', 'personPhone', 'personLinkedin', 'personFacebook', 'personInstagram', 'personYoutube', 'personX',
+  'website', 'email', 'phone', 'name', 'title', 'linkedin', 'facebook', 'instagram', 'x', 'youtube',
 ] as const;
 
 const SOCIAL_PLATFORMS = ['linkedin', 'facebook', 'instagram', 'x', 'youtube'] as const;
@@ -44,8 +46,8 @@ const SEARCH_PLAN_SCHEMA: Record<string, unknown> = {
     decisionMakerRoles: stringArray(),
     requiredFields: enumArray(PLAN_FIELDS),
     preferredFields: enumArray(PLAN_FIELDS),
-    companyFields: enumArray(['companyWebsite', 'companyEmail', 'companyPhone', 'employeeCount', 'location', 'industry', 'website', 'email', 'phone', ...SOCIAL_PLATFORMS]),
-    personFields: enumArray(['personName', 'personTitle', 'personEmail', 'personPhone', 'name', 'title', 'email', 'phone', ...SOCIAL_PLATFORMS]),
+    companyFields: enumArray(['companyWebsite', 'companyEmail', 'companyPhone', 'companyLinkedin', 'companyFacebook', 'companyInstagram', 'companyYoutube', 'companyX', 'employeeCount', 'location', 'industry', 'website', 'email', 'phone', ...SOCIAL_PLATFORMS]),
+    personFields: enumArray(['personName', 'personTitle', 'personEmail', 'personPhone', 'personLinkedin', 'personFacebook', 'personInstagram', 'personYoutube', 'personX', 'name', 'title', 'email', 'phone', ...SOCIAL_PLATFORMS]),
     socialPlatforms: enumArray(SOCIAL_PLATFORMS),
     emailRequirement: strictObject({ requested: { type: 'boolean' }, required: { type: 'boolean' }, verified: { type: 'boolean' } }),
     websiteRequirement: strictObject({ requested: { type: 'boolean' }, required: { type: 'boolean' } }),
@@ -277,12 +279,12 @@ function validateDraft(value: unknown, prompt: string, fallback: SearchPlan): Pl
   const emailMentioned = /\be-?mails?\b/i.test(prompt);
   const emailModal = /\b(?:must|required|need|only)\b[^.]{0,60}\be-?mails?\b/i.test(prompt);
   if (draft.emailRequirement.requested && !emailMentioned) throw new Error('Planner invented an email requirement.');
-  if (draft.emailRequirement.verified && !/verified\s+(?:decision[- ]makers?\s+)?e-?mails?|e-?mails?\s+(?:must be\s+)?verified/i.test(prompt)) throw new Error('Planner invented email verification intent.');
+  if (draft.emailRequirement.verified && !/verified\s+(?:decision[- ]makers?\s+|person(?:'s)?\s+)?e-?mails?|e-?mails?\s+(?:must be\s+)?verified/i.test(prompt)) throw new Error('Planner invented email verification intent.');
   if (draft.emailRequirement.required && !draft.emailRequirement.requested) throw new Error('Planner marked an unrequested email as required.');
   if (draft.emailRequirement.required && !draft.emailRequirement.verified && !emailModal) throw new Error('Planner made a plain email request mandatory.');
   if (draft.websiteRequirement.requested && !/website/i.test(prompt)) throw new Error('Planner invented a website requirement.');
   if (draft.websiteRequirement.required && !draft.websiteRequirement.requested) throw new Error('Planner marked an unrequested website as required.');
-  if (draft.websiteRequirement.required && !/\b(?:must|required|need|only)\b[^.]{0,40}\bwebsite\b/i.test(prompt)) throw new Error('Planner made a plain website request mandatory.');
+  if (draft.websiteRequirement.required && !/\b(?:must|required|need|only|with|including|and)\b[^.]{0,120}\b(?:company\s+)?website\b/i.test(prompt)) throw new Error('Planner made a plain website request mandatory.');
   if (draft.verificationRequirement.requested && !/\bverified\b|\bverification\b/i.test(prompt)) throw new Error('Planner invented a verification requirement.');
   if (draft.verificationRequirement.required && !draft.verificationRequirement.requested) throw new Error('Planner marked verification as required without a request.');
   if (draft.verificationRequirement.fields.some((field) => !fieldMentioned(prompt, field))) throw new Error('Planner assigned verification to an unrequested field.');
@@ -327,8 +329,21 @@ function assertFallbackCoverage(draft: PlannerDraft, fallback: SearchPlan) {
   }
   for (const expected of fallback.requiredFields ?? []) {
     const aliases: Record<string, string[]> = {
-      website: ['website', 'companyWebsite'], email: ['email', 'companyEmail', 'personEmail'], phone: ['phone', 'companyPhone', 'personPhone'],
-      linkedin: ['linkedin', 'personLinkedin'], facebook: ['facebook', 'personFacebook'], instagram: ['instagram', 'personInstagram'],
+      website: ['website', 'companyWebsite'],
+      email: ['email', 'companyEmail', 'personEmail'],
+      phone: ['phone', 'companyPhone', 'personPhone'],
+      linkedin: ['linkedin', 'personLinkedin', 'companyLinkedin'],
+      facebook: ['facebook', 'personFacebook', 'companyFacebook'],
+      instagram: ['instagram', 'personInstagram', 'companyInstagram'],
+      companyLinkedin: ['companyLinkedin', 'linkedin'],
+      companyFacebook: ['companyFacebook', 'facebook'],
+      companyInstagram: ['companyInstagram', 'instagram'],
+      companyYoutube: ['companyYoutube', 'youtube'],
+      companyX: ['companyX', 'x', 'twitter'],
+      personLinkedin: ['personLinkedin', 'linkedin'],
+      personFacebook: ['personFacebook', 'facebook'],
+      personInstagram: ['personInstagram', 'instagram'],
+      personEmail: ['personEmail', 'email'],
     };
     const candidates = aliases[expected] ?? [expected];
     if (![...draft.requiredFields, ...draft.preferredFields, ...draft.companyFields, ...draft.personFields].some((field) => candidates.includes(field))) {
@@ -533,16 +548,24 @@ function locationComponentAllowed(
 }
 
 function fieldMentioned(text: string, field: string): boolean {
-  const normalized = field.toLowerCase();
+  const normalized = field.toLowerCase().replace(/[^a-z0-9]/g, '');
   const aliases: Record<string, RegExp> = {
     companywebsite: /website|web site/i, companyemail: /company(?:'s)?\s+e-?mail/i, companyphone: /company(?:'s)?\s+phone/i,
-    employeeCount: /employee|staff|headcount|company size/i, location: /location|address|city|state|country|region|postal code|zip/i,
+    companylinkedin: /company\s+linkedin|linkedin/i, companyfacebook: /company\s+facebook|facebook/i,
+    companyinstagram: /company\s+instagram|instagram/i, companyyoutube: /company\s+youtube|youtube/i,
+    companyx: /company\s+(?:x|twitter)|(?:x\/twitter|twitter|x account)/i,
+    employeecount: /employee|staff|headcount|company size/i, location: /location|address|city|state|country|region|postal code|zip/i,
     industry: /industry|category/i, personname: /name|ceo|founder|owner|president|manager|partner/i,
     persontitle: /title|role|ceo|founder|owner|president|manager|partner/i,
-    personemail: /person(?:'s)?\s+e-?mail|decision[- ]maker(?:'s)?\s+e-?mail|contact e-?mail/i,
+    personemail: /person(?:'s)?\s+e-?mail|decision[- ]maker(?:'s)?\s+e-?mail|contact e-?mail|verified\s+(?:person(?:'s)?\s+|decision[- ]makers?\s+)?e-?mails?/i,
     personphone: /person(?:'s)?\s+phone|decision[- ]maker(?:'s)?\s+phone|contact phone/i,
+    personlinkedin: /(?:their|person(?:'s)?|decision[- ]maker(?:'s)?|ceo(?:'s)?|founder(?:'s)?)\s+linkedin|linkedin/i,
+    personfacebook: /(?:their|person(?:'s)?)\s+facebook|facebook/i,
+    personinstagram: /(?:their|person(?:'s)?)\s+instagram|instagram/i,
+    personyoutube: /(?:their|person(?:'s)?)\s+youtube|youtube/i,
+    personx: /(?:their|person(?:'s)?)\s+(?:x|twitter)|(?:x\/twitter|twitter)/i,
     email: /e-?mail/i, phone: /phone/i, linkedin: /linkedin/i, facebook: /facebook/i, instagram: /instagram/i,
-    x: /x\/twitter|twitter|x account/i, youtube: /youtube/i,
+    x: /x\/twitter|twitter|x account/i, youtube: /youtube/i, website: /website|web site/i,
   };
   return aliases[normalized]?.test(text) ?? new RegExp(`\\b${escapeRegExp(field)}\\b`, 'i').test(text);
 }

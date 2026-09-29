@@ -124,7 +124,26 @@ export class LeadsService {
       sets.push(this.uniqueIds(rows.map((row) => row.companyId)));
     }
     if (filters.minScore !== undefined || filters.maxScore !== undefined || filters.scoreBand) {
-      const rows = await this.db.select({ companyId: leadScores.companyId }).from(leadScores).where(and(eq(leadScores.organizationId, organizationId), filters.minScore !== undefined ? gte(leadScores.score, filters.minScore) : undefined, filters.maxScore !== undefined ? lte(leadScores.score, filters.maxScore) : undefined, filters.scoreBand ? eq(leadScores.band, filters.scoreBand) : undefined));
+      // Use each company's latest company-level score (not historical rows) within this organization.
+      const latest = this.db
+        .select({
+          companyId: leadScores.companyId,
+          score: leadScores.score,
+          band: leadScores.band,
+          rn: sql<number>`row_number() over (partition by ${leadScores.companyId} order by ${leadScores.calculatedAt} desc)`.as('rn'),
+        })
+        .from(leadScores)
+        .where(and(eq(leadScores.organizationId, organizationId), sql`${leadScores.contactId} is null`))
+        .as('latest_scores');
+      const rows = await this.db
+        .select({ companyId: latest.companyId })
+        .from(latest)
+        .where(and(
+          eq(latest.rn, 1),
+          filters.minScore !== undefined ? gte(latest.score, filters.minScore) : undefined,
+          filters.maxScore !== undefined ? lte(latest.score, filters.maxScore) : undefined,
+          filters.scoreBand ? eq(latest.band, filters.scoreBand) : undefined,
+        ));
       sets.push(this.uniqueIds(rows.map((row) => row.companyId)));
     }
     if (filters.verificationStatus || filters.lastVerifiedFrom || filters.lastVerifiedTo) {

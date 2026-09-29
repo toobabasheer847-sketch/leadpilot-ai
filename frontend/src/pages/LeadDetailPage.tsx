@@ -147,6 +147,28 @@ export function LeadDetailPage() {
         <EmployeeSizeCard company={lead.data.company} evidence={storedEvidence} conflicts={summary?.conflicts ?? []} />
       </MotionPanel>
       <MotionPanel>
+        <h2>Qualification</h2>
+        <dl className="kv">
+          <div><dt>Status</dt><dd><LeadStatusBadge status={lead.data.qualification?.status} /></dd></div>
+          <div><dt>Score</dt><dd>{lead.data.score ? `${lead.data.score.value}${lead.data.score.band ? ` · ${lead.data.score.band}` : ''}` : 'Not available'}</dd></div>
+        </dl>
+        {Array.isArray(lead.data.qualification?.criterionResults) && lead.data.qualification.criterionResults.length > 0 ? (
+          <ul className="stack">
+            {lead.data.qualification.criterionResults.map((item) => (
+              <li key={`${item.criterion}-${item.result}`}>
+                <strong>{item.criterion}</strong> · <LeadStatusBadge status={item.result} />
+                {item.message ? <span className="muted"> — {item.message}</span> : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {(lead.data.qualification?.needsReviewReasons?.length || lead.data.qualification?.disqualifiedReasons?.length) ? (
+          <p className="muted">
+            {[...(lead.data.qualification.disqualifiedReasons ?? []), ...(lead.data.qualification.needsReviewReasons ?? [])].slice(0, 6).join(' · ')}
+          </p>
+        ) : null}
+      </MotionPanel>
+      <MotionPanel>
         <h2>Investor information</h2>
         {classification.status === 'loading' ? <CompanySkeleton /> : null}
         {classification.status === 'error' ? <ErrorState message={classification.message} /> : null}

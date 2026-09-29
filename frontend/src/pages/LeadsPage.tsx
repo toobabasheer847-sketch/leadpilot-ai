@@ -230,7 +230,11 @@ export function LeadsPage() {
     setExportMessage(null);
     setExportRecord(null);
     try {
-      const created = await createExport(format, queryFrom(params));
+      const created = await createExport(
+        format,
+        queryFrom(params),
+        params.get('qualificationStatus') === 'QUALIFIED' ? { exportMode: 'QUALIFIED' } : undefined,
+      );
       const record = await exportApi.get(created.exportId);
       setExportRecord(record);
       if (record.status === 'COMPLETED') setExportPhase('ready');

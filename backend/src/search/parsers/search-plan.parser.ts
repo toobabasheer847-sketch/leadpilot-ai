@@ -79,11 +79,14 @@ export class SearchPlanParser {
     const socialPlatforms = this.parseSocialPlatforms(criteriaPrompt);
     const preferredFields = this.parsePreferredFields(criteriaPrompt, companyFields, contactFields, requiredFields);
     const emailRequested = /\be-?mails?\b/i.test(criteriaPrompt);
-    const emailVerified = /\bverified\s+(?:decision[- ]makers?\s+)?e-?mails?\b|\be-?mails?\s+(?:must be\s+)?verified\b/i.test(criteriaPrompt);
+    const emailVerified = /\bverified\s+(?:decision[- ]makers?\s+|person(?:'s)?\s+)?e-?mails?\b|\be-?mails?\s+(?:must be\s+)?verified\b/i.test(criteriaPrompt);
     const emailRequired = emailVerified || /\b(?:must|required|need)\b[^.]{0,60}\be-?mails?\b/i.test(criteriaPrompt);
     const websiteRequested = /\bwebsite\b/i.test(criteriaPrompt);
-    const websiteRequired = /\b(?:must|required|need)\b[^.]{0,40}\bwebsite\b/i.test(criteriaPrompt);
+    const websiteRequired = requiredFields.includes('website')
+      || /\b(?:must|required|need)\b[^.]{0,40}\bwebsite\b/i.test(criteriaPrompt)
+      || /\b(?:with|including|and)\b[^.]{0,120}\b(?:company\s+)?website\b/i.test(criteriaPrompt);
     const verificationRequested = /\bverified\b|\bverification\b/i.test(criteriaPrompt);
+    const verificationFields = this.parseVerificationFields(criteriaPrompt, emailVerified, requiredFields);
     return {
       targetType: /\bqualified\s+leads?\b/i.test(criteriaPrompt) ? 'QUALIFIED_LEADS' : 'COMPANIES',
       industry,
@@ -108,7 +111,7 @@ export class SearchPlanParser {
       decisionMakerRoles: titles,
       emailRequirement: { requested: emailRequested, required: emailRequired, verified: emailVerified },
       websiteRequirement: { requested: websiteRequested, required: websiteRequired },
-      verificationRequirement: { requested: verificationRequested, required: verificationRequested, fields: emailVerified ? ['email'] : [] },
+      verificationRequirement: { requested: verificationRequested, required: verificationRequested, fields: verificationFields },
       ...(minimumScore !== undefined ? { minimumScore } : {}),
       ...(count ? { requestedCount: count.requested, maxResults: count.count, countIntent: count.intent } : {}),
       ...(exclusions.length ? { exclusions } : {}),
@@ -243,13 +246,14 @@ export class SearchPlanParser {
   private parsePersonFields(prompt: string): string[] {
     const fields: Array<[RegExp, string]> = [
       [/\b(?:person|decision[- ]maker|contact)(?:'s)?\s+(?:full\s+)?name\b|\b(?:find|identify)\s+(?:the\s+)?(?:ceo|founder|owner|president|manager)\b/i, 'name'],
-      [/\b(?:person|decision[- ]maker|contact)(?:'s)?\s+(?:business\s+)?e-?mails?\b|\b(?:verified\s+)?decision[- ]maker\s+e-?mails?\b|\btheir\s+e-?mails?\b|\bpublic contact information\b|\bcontact details\b/i, 'email'],
+      [/\b(?:person|decision[- ]maker|contact)(?:'s)?\s+(?:business\s+)?e-?mails?\b|\b(?:verified\s+)?(?:decision[- ]maker|person)(?:'s)?\s+e-?mails?\b|\btheir\s+e-?mails?\b|\bpublic contact information\b|\bcontact details\b/i, 'email'],
       [/\b(?:person|decision[- ]maker|contact)(?:'s)?\s+phone\b|\bpublic contact information\b|\bcontact details\b/i, 'phone'],
-      [/\blinkedin\b/i, 'linkedin'],
-      [/\bfacebook\b/i, 'facebook'],
-      [/\binstagram\b/i, 'instagram'],
-      [/\b(?:x\/twitter|twitter|x account)\b/i, 'x'],
-      [/\byoutube\b/i, 'youtube'],
+      // Person socials require a person cue — bare LinkedIn alone is company-level via socialPlatforms.
+      [/\b(?:their|person(?:'s)?|decision[- ]maker(?:'s)?|ceo(?:'s)?|founder(?:'s)?|contact(?:'s)?)\s+linkedin\b|\bpersonlinkedin\b/i, 'linkedin'],
+      [/\b(?:their|person(?:'s)?|decision[- ]maker(?:'s)?|ceo(?:'s)?|founder(?:'s)?|contact(?:'s)?)\s+facebook\b/i, 'facebook'],
+      [/\b(?:their|person(?:'s)?|decision[- ]maker(?:'s)?|ceo(?:'s)?|founder(?:'s)?|contact(?:'s)?)\s+instagram\b/i, 'instagram'],
+      [/\b(?:their|person(?:'s)?|decision[- ]maker(?:'s)?|ceo(?:'s)?|founder(?:'s)?|contact(?:'s)?)\s+(?:x|twitter)\b/i, 'x'],
+      [/\b(?:their|person(?:'s)?|decision[- ]maker(?:'s)?|ceo(?:'s)?|founder(?:'s)?|contact(?:'s)?)\s+youtube\b/i, 'youtube'],
     ];
     return [...new Set(fields.filter(([pattern]) => pattern.test(prompt)).map(([, field]) => field))];
   }
@@ -273,7 +277,7 @@ export class SearchPlanParser {
   }
 
   private parsePreferredFields(prompt: string, companyFields: string[], contactFields: string[], requiredFields: string[]) {
-    if (!/\b(?:preferably|prefer|ideally)\b/i.test(prompt)) return [];
+    if (!/\b(?:preferably|prefer|ideally|if available|nice to have|where possible)\b/i.test(prompt)) return [];
     return [...new Set([...companyFields, ...contactFields].filter((field) => !requiredFields.includes(field)))];
   }
 
@@ -319,27 +323,117 @@ export class SearchPlanParser {
     const required = new Set<string>();
     const mentioned = [...companyFields, ...contactFields];
     for (const field of mentioned) {
-      if (new RegExp(`\\b(only|must|require[sd]?|with verified|verified)\\b[^.]{0,40}\\b${this.escape(field)}\\b`, 'i').test(prompt)
-        || new RegExp(`\\b${this.escape(field)}\\b[^.]{0,40}\\b(required|only|must|verified)\\b`, 'i').test(prompt)) {
+      if (new RegExp(`\\b(only|must|require[sd]?|need|with verified|verified)\\b[^.]{0,40}\\b${this.escape(field)}\\b`, 'i').test(prompt)
+        || new RegExp(`\\b${this.escape(field)}\\b[^.]{0,40}\\b(required|only|must|need|verified)\\b`, 'i').test(prompt)) {
         required.add(field);
       }
     }
-    if (/\bonly leads with verified email\b|\bverified email(?:s)? only\b|\bmust have (?:a )?verified email\b/i.test(prompt)) {
+    if (/\bonly leads with verified email\b|\bverified email(?:s)? only\b|\bmust have (?:a )?verified email\b|\bverified\s+person(?:'s)?\s+e-?mails?\b/i.test(prompt)) {
       required.add('email');
+      required.add('personEmail');
     }
-    if (/\b(require[sd]?|must have|with)\b[^.]{0,40}\b(website)\b/i.test(prompt)) required.add('website');
+    if (/\b(require[sd]?|must have|need|with|including|and)\b[^.]{0,120}\b(website)\b/i.test(prompt)) required.add('website');
+
+    // Mandatory clauses: need / must / required / with / including / whose / I need …
+    const softOnly = /\b(?:prefer(?:ably)?|ideally|if available|nice to have|where possible)\b/i;
+    for (const match of prompt.matchAll(/\b(?:i\s+need|need(?:s)?|must\s+have|must|required|require[sd]?|including|whose|with)\b([^.!?;]*)/gi)) {
+      const cue = match[0];
+      const clause = match[1] ?? '';
+      if (softOnly.test(`${cue} ${clause}`) && !/\b(?:must|required|need)\b/i.test(cue)) continue;
+      this.collectRequiredFromClause(clause, required);
+    }
+    // Explicit company / person social phrasing anywhere in a mandatory sentence context.
+    this.collectCompanySocialRequirements(prompt, required);
+    this.collectPersonSocialRequirements(prompt, required);
     return [...required];
+  }
+
+  private collectRequiredFromClause(clause: string, required: Set<string>) {
+    if (/\bwebsite\b/i.test(clause)) required.add('website');
+    if (/\be-?mails?\b/i.test(clause)) {
+      if (/\b(?:person|their|decision[- ]maker|verified\s+person)\b/i.test(clause) || /\bverified\b/i.test(clause)) {
+        required.add('personEmail');
+        required.add('email');
+      } else if (!/\bcompany\b/i.test(clause)) {
+        required.add('email');
+      } else {
+        required.add('companyEmail');
+      }
+    }
+    this.collectCompanySocialRequirements(clause, required);
+    this.collectPersonSocialRequirements(clause, required);
+    if (/\b(?:company\s+)?social\s+(?:profiles?|media|accounts?)\b|\bsocials\b/i.test(clause)) {
+      for (const platform of ['linkedin', 'facebook', 'instagram', 'youtube', 'x'] as const) {
+        required.add(this.companySocialField(platform));
+      }
+    }
+    // Bare platforms in a mandatory clause default to company socials unless a person cue precedes them.
+    for (const match of clause.matchAll(/\b(linkedin|facebook|instagram|youtube|twitter|x)\b/gi)) {
+      const at = match.index ?? 0;
+      const prefix = clause.slice(Math.max(0, at - 28), at);
+      if (/\b(?:their|person(?:'s)?|decision[- ]maker(?:'s)?|ceo(?:'s)?|founder(?:'s)?|contact(?:'s)?)\s*$/i.test(prefix)) {
+        required.add(this.personSocialField(match[1]));
+      } else {
+        required.add(this.companySocialField(match[1]));
+      }
+    }
+  }
+
+  private collectCompanySocialRequirements(text: string, required: Set<string>) {
+    // "company LinkedIn, Facebook and Instagram" / "company LinkedIn Facebook Instagram" / slashes
+    const list = text.match(/\bcompany\s+((?:linkedin|facebook|instagram|youtube|twitter|x)(?:[\s,/&]+(?:and\s+)?(?:linkedin|facebook|instagram|youtube|twitter|x))*)/i);
+    if (list) {
+      for (const platform of list[1].match(/linkedin|facebook|instagram|youtube|twitter|\bx\b/gi) ?? []) {
+        required.add(this.companySocialField(platform));
+      }
+    }
+    for (const match of text.matchAll(/\bcompany\s+(linkedin|facebook|instagram|youtube|twitter|x)\b/gi)) {
+      required.add(this.companySocialField(match[1]));
+    }
+  }
+
+  private collectPersonSocialRequirements(text: string, required: Set<string>) {
+    for (const match of text.matchAll(/\b(?:their|person(?:'s)?|decision[- ]maker(?:'s)?|ceo(?:'s)?|founder(?:'s)?|contact(?:'s)?)\s+(linkedin|facebook|instagram|youtube|twitter|x)\b/gi)) {
+      required.add(this.personSocialField(match[1]));
+    }
+    for (const match of text.matchAll(/\bperson(linkedin|facebook|instagram|youtube|x)\b/gi)) {
+      required.add(this.personSocialField(match[1]));
+    }
+  }
+
+  private companySocialField(platform: string): string {
+    const key = platform.toLowerCase() === 'twitter' ? 'x' : platform.toLowerCase();
+    return `company${key[0].toUpperCase()}${key.slice(1)}`;
+  }
+
+  private personSocialField(platform: string): string {
+    const key = platform.toLowerCase() === 'twitter' ? 'x' : platform.toLowerCase();
+    return `person${key[0].toUpperCase()}${key.slice(1)}`;
+  }
+
+  private parseVerificationFields(prompt: string, emailVerified: boolean, requiredFields: string[]): string[] {
+    const fields = new Set<string>();
+    if (emailVerified || requiredFields.includes('personEmail') || requiredFields.includes('email')) fields.add('email');
+    if (/\bverified\b[^.]{0,40}\bwebsite\b|\bwebsite\b[^.]{0,40}\bverified\b/i.test(prompt)) fields.add('website');
+    if (/\bverified\b[^.]{0,40}\bphone\b|\bphone\b[^.]{0,40}\bverified\b/i.test(prompt)) fields.add('phone');
+    for (const field of requiredFields) {
+      if (/^person(linkedin|facebook|instagram|youtube|x)$/i.test(field)) fields.add(field.replace(/^person/i, '').toLowerCase());
+      if (/^company(linkedin|facebook|instagram|youtube|x)$/i.test(field)) fields.add(field.replace(/^company/i, '').toLowerCase());
+    }
+    return [...fields];
   }
 
   private parseOptionalFields(prompt: string, companyFields: string[], contactFields: string[], requiredFields: string[]) {
     const optional = new Set<string>();
+    const soft = /\b(?:optional|prefer(?:ably)?|ideally|if available|nice to have|where possible)\b/i;
     for (const field of [...companyFields, ...contactFields]) {
-      if (requiredFields.includes(field)) continue;
-      if (new RegExp(`\\boptional\\b[^.]{0,30}\\b${this.escape(field)}\\b`, 'i').test(prompt)
-        || new RegExp(`\\b${this.escape(field)}\\b[^.]{0,30}\\boptional\\b`, 'i').test(prompt)
-        || prompt.toLowerCase().includes(field)) {
+      if (requiredFields.includes(field) || requiredFields.includes(`company${field[0].toUpperCase()}${field.slice(1)}`) || requiredFields.includes(`person${field[0].toUpperCase()}${field.slice(1)}`)) continue;
+      if (soft.test(prompt) && (new RegExp(`\\b${this.escape(field)}\\b`, 'i').test(prompt))) {
         optional.add(field);
+        continue;
       }
+      // Mentioned but not required and not soft → keep as optional for backward compatibility.
+      if (prompt.toLowerCase().includes(field)) optional.add(field);
     }
     return [...optional];
   }

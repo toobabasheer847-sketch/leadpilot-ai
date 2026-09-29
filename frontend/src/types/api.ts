@@ -228,7 +228,16 @@ export interface LeadRecord {
   classification: { decision: string | null; confidence: number | string | null } | null;
   score: { value: number; band: string | null; breakdown?: unknown } | null;
   verification: { status: string; field: string | null } | null;
-  qualification: { status: string; score?: number | null; scoreBand?: string | null } | null;
+  qualification: {
+    status: string;
+    score?: number | null;
+    scoreBand?: string | null;
+    criterionResults?: Array<{ criterion: string; result: string; message?: string; required?: boolean }>;
+    qualifiedReasons?: string[];
+    disqualifiedReasons?: string[];
+    needsReviewReasons?: string[];
+    missingOptional?: string[];
+  } | null;
   duplicate?: { status: string; matchType?: string | null; confidence?: number | null } | null;
   evidence: EvidenceItem[];
   sourceUrls?: string[];

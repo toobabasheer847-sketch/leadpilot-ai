@@ -176,7 +176,13 @@ describe('SearchPlanParser', () => {
 
     const socials = parser.parse('Find companies with LinkedIn and Facebook');
     expect(socials.socialPlatforms).toEqual(['linkedin', 'facebook']);
-    expect(socials.personFields).toEqual(expect.arrayContaining(['linkedin', 'facebook']));
+    // Bare LinkedIn/Facebook without a person cue are company platforms, not personFields.
+    expect(socials.personFields ?? []).not.toEqual(expect.arrayContaining(['linkedin', 'facebook']));
+    expect(socials.requiredFields).toEqual(expect.arrayContaining(['companyLinkedin', 'companyFacebook']));
+
+    const personSocial = parser.parse('Find companies and I need their LinkedIn');
+    expect(personSocial.personFields).toContain('linkedin');
+    expect(personSocial.requiredFields).toEqual(expect.arrayContaining(['personLinkedin']));
   });
 
   it('extracts partner alongside other decision-maker roles', () => {
