@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { WebsiteDiscoveryService } from '../../enrichment/website/website-discovery.service';
 import { WebsiteNormalizerService } from '../../enrichment/website/website-normalizer.service';
+import { CompanyResearchContextService } from '../../enrichment/research-context/company-research-context.service';
 import { isPersonProfileUrl, roleMatches } from '../discovery/public-decision-maker';
 import { ContactExtractorService, isPlausiblePersonName } from '../extraction/contact-extractor.service';
 import { ContactCandidate, ContactDiscoveryContext, ContactDiscoveryResult } from '../types/contact.types';
@@ -12,21 +13,41 @@ export class WebsiteContactProvider implements ContactDiscoveryProvider {
     private readonly extractor: ContactExtractorService,
     private readonly websiteDiscovery: WebsiteDiscoveryService,
     private readonly normalizer: WebsiteNormalizerService,
+    private readonly researchContext: CompanyResearchContextService,
   ) {}
 
   async discover(company: { id: string; name: string; website?: string | null }, context: ContactDiscoveryContext): Promise<ContactDiscoveryResult> {
+    const roles = context.decisionMakerRoles;
+    const contextKey = {
+      organizationId: context.organizationId,
+      companyId: context.companyId || company.id,
+      searchExecutionId: context.searchExecutionId ?? null,
+    };
+
+    // Phase N: reuse pages already fetched by enrichment / deep research before crawling again.
+    const reusedPages = await this.researchContext.getPages(contextKey);
+    if (reusedPages.length > 0) {
+      const fromReuse = this.candidatesFromPages(
+        reusedPages.map((page) => ({ url: page.finalUrl || page.url, content: page.content })),
+        company.name,
+        roles,
+      );
+      if (fromReuse.length > 0) {
+        return { candidates: fromReuse };
+      }
+      // Pages reused but no decision makers found — fall through to crawl for additional team pages.
+    }
+
     // Prefer the known official website so Phase D does not re-run web-search website discovery.
     const result = await this.websiteDiscovery.discover(company.website ?? context.companyWebsite, company.name);
-    const roles = context.decisionMakerRoles;
-    const candidates = (result.pages ?? (result.page ? [result.page] : [])).flatMap((page) => this.extractCandidatesFromHtml(page.finalUrl, page.content, company.name, roles));
-    const unique = new Map<string, ContactCandidate>();
-    for (const candidate of candidates) {
-      const key = `${candidate.fullName.toLowerCase()}|${candidate.normalizedRole ?? candidate.title ?? ''}`;
-      const existing = unique.get(key);
-      if (existing) existing.evidence.push(...candidate.evidence);
-      else unique.set(key, candidate);
+    const pages = result.pages ?? (result.page ? [result.page] : []);
+    if (pages.length) {
+      await this.researchContext.mergePages(contextKey, pages, 'decision_maker', {
+        name: company.name,
+        website: company.website ?? context.companyWebsite ?? null,
+      });
     }
-    return { candidates: [...unique.values()] };
+    return { candidates: this.candidatesFromPages(pages.map((page) => ({ url: page.finalUrl, content: page.content })), company.name, roles) };
   }
 
   extractCandidatesFromHtml(url: string, html: string, companyName: string, targetRoles?: string[]): ContactCandidate[] {
@@ -72,6 +93,18 @@ export class WebsiteContactProvider implements ContactDiscoveryProvider {
       });
     }
     return candidates;
+  }
+
+  private candidatesFromPages(pages: Array<{ url: string; content: string }>, companyName: string, roles?: string[]): ContactCandidate[] {
+    const candidates = pages.flatMap((page) => this.extractCandidatesFromHtml(page.url, page.content, companyName, roles));
+    const unique = new Map<string, ContactCandidate>();
+    for (const candidate of candidates) {
+      const key = `${candidate.fullName.toLowerCase()}|${candidate.normalizedRole ?? candidate.title ?? ''}`;
+      const existing = unique.get(key);
+      if (existing) existing.evidence.push(...candidate.evidence);
+      else unique.set(key, candidate);
+    }
+    return [...unique.values()];
   }
 
   private companyRelationshipSupported(excerpt: string, companyName: string): boolean {

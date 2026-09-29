@@ -26,7 +26,10 @@ function plan(partial: Partial<SearchPlan>): SearchPlan {
 describe('Phase D plan-driven contact discovery', () => {
   it('extracts CEO and Founder from an official team page with evidence', () => {
     const extractor = new ContactExtractorService({ get: () => [] } as ConfigService);
-    const provider = new WebsiteContactProvider(extractor, {} as WebsiteDiscoveryService, new WebsiteNormalizerService());
+    const provider = new WebsiteContactProvider(extractor, {} as WebsiteDiscoveryService, new WebsiteNormalizerService(), {
+      getPages: async () => [],
+      mergePages: async () => ({ pages: [] }),
+    } as never);
     const html = `
       <html><body>
         <h1>Our Team</h1>
@@ -175,10 +178,21 @@ describe('Phase D plan-driven contact discovery', () => {
         } satisfies ContactCandidate],
       }),
     } as unknown as SnovContactProvider;
+    const researchContextStub = {
+      getPages: async () => [],
+      getPersonHints: async () => [],
+      shouldSkipQuery: async () => false,
+      markQueryIssued: async () => undefined,
+      recordSearchHits: async () => undefined,
+      getSearchHits: async () => [],
+      observeDuration: () => undefined,
+    } as never;
+
     const service = new PersonDiscoveryService(
       websiteProvider,
       new PersonIdentityMatcherService(),
       new PersonCandidateService(new ContactExtractorService({ get: () => [] } as ConfigService)),
+      researchContextStub,
       snov,
     );
     const result = await service.discover(
@@ -209,10 +223,21 @@ describe('Phase D plan-driven contact discovery', () => {
       configured: () => true,
       discover: jest.fn(),
     } as unknown as SnovContactProvider;
+    const researchContextStub = {
+      getPages: async () => [],
+      getPersonHints: async () => [],
+      shouldSkipQuery: async () => false,
+      markQueryIssued: async () => undefined,
+      recordSearchHits: async () => undefined,
+      getSearchHits: async () => [],
+      observeDuration: () => undefined,
+    } as never;
+
     const service = new PersonDiscoveryService(
       websiteProvider,
       new PersonIdentityMatcherService(),
       new PersonCandidateService(new ContactExtractorService({ get: () => [] } as ConfigService)),
+      researchContextStub,
       snov,
     );
     await service.discover(
@@ -227,7 +252,15 @@ describe('Phase D plan-driven contact discovery', () => {
     );
     // Website returned people, so provider still not needed; explicitly disallowed path:
     const emptyWebsite = { discover: jest.fn().mockResolvedValue({ candidates: [] }) } as unknown as WebsiteContactProvider;
-    const blocked = new PersonDiscoveryService(emptyWebsite, new PersonIdentityMatcherService(), new PersonCandidateService(new ContactExtractorService({ get: () => [] } as ConfigService)), snov);
+    const blocked = new PersonDiscoveryService(emptyWebsite, new PersonIdentityMatcherService(), new PersonCandidateService(new ContactExtractorService({ get: () => [] } as ConfigService)), {
+      getPages: async () => [],
+      getPersonHints: async () => [],
+      shouldSkipQuery: async () => false,
+      markQueryIssued: async () => undefined,
+      recordSearchHits: async () => undefined,
+      getSearchHits: async () => [],
+      observeDuration: () => undefined,
+    } as never, snov);
     await blocked.discover(
       { id: 'c1', name: 'Oak', website: 'https://oak.example' },
       { companyId: 'c1', organizationId: 'o1', decisionMakerRoles: ['CEO'], allowProviderEnrichment: false },
@@ -243,6 +276,15 @@ describe('Phase D plan-driven contact discovery', () => {
       websiteProvider,
       new PersonIdentityMatcherService(),
       new PersonCandidateService(new ContactExtractorService({ get: () => [] } as ConfigService)),
+      {
+        getPages: async () => [],
+        getPersonHints: async () => [],
+        shouldSkipQuery: async () => false,
+        markQueryIssued: async () => undefined,
+        recordSearchHits: async () => undefined,
+        getSearchHits: async () => [],
+        observeDuration: () => undefined,
+      } as never,
     );
     const result = await service.discover(
       { id: 'c1', name: 'Oak', website: 'https://oak.example' },
@@ -276,7 +318,10 @@ describe('Phase D plan-driven contact discovery', () => {
 
   it('does not invent missing person fields when evidence is absent', () => {
     const extractor = new ContactExtractorService({ get: () => ['CEO'] } as ConfigService);
-    const provider = new WebsiteContactProvider(extractor, {} as WebsiteDiscoveryService, new WebsiteNormalizerService());
+    const provider = new WebsiteContactProvider(extractor, {} as WebsiteDiscoveryService, new WebsiteNormalizerService(), {
+      getPages: async () => [],
+      mergePages: async () => ({ pages: [] }),
+    } as never);
     expect(provider.extractCandidatesFromHtml('https://oak.example/about', '<html><body><p>About Oak Stream Investors</p></body></html>', 'Oak Stream Investors', ['CEO'])).toEqual([]);
   });
 });

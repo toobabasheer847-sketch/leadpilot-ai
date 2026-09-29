@@ -21,6 +21,7 @@ import { EmployeeSizeProcessor } from './employee-size/employee-size.processor';
 import { EMPLOYEE_SIZE_QUEUE, EmployeeSizeQueue } from './employee-size/employee-size.queue';
 import { EmployeeSizeService } from './employee-size/employee-size.service';
 import { UsageModule } from '../usage/usage.module';
+import { CompanyResearchContextService } from './research-context/company-research-context.service';
 
 @Module({
   imports: [ConfigModule, AuthModule, UsersModule, OrganizationsModule, UsageModule, BullModule.registerQueue({ name: 'company-enrichment-queue' }, { name: EMPLOYEE_SIZE_QUEUE })],
@@ -41,7 +42,8 @@ import { UsageModule } from '../usage/usage.module';
     EmployeeSizeService,
     EmployeeSizeQueue,
     EmployeeSizeProcessor,
+    CompanyResearchContextService,
   ],
-  exports: [EnrichmentService, CompanyEnrichmentQueue, EmployeeSizeQueue, WebsiteNormalizerService, WebsiteFetchService, WebsiteDiscoveryService, WebsiteParserService, EvidenceRepository, WEB_SEARCH_PROVIDER, BullModule],
+  exports: [EnrichmentService, CompanyEnrichmentQueue, EmployeeSizeQueue, WebsiteNormalizerService, WebsiteFetchService, WebsiteDiscoveryService, WebsiteParserService, EvidenceRepository, WEB_SEARCH_PROVIDER, CompanyResearchContextService, BullModule],
 })
 export class EnrichmentModule {}

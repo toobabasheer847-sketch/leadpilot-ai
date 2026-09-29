@@ -16,6 +16,7 @@ import { CompanyEnrichmentJobData, EnrichmentStatus } from './website/website.ty
 import { UsageService } from '../usage/usage.service';
 import { ProviderObservabilityService } from '../common/observability/provider-observability.service';
 import { createHash } from 'node:crypto';
+import { CompanyResearchContextService } from './research-context/company-research-context.service';
 
 @Injectable()
 export class EnrichmentService {
@@ -31,6 +32,7 @@ export class EnrichmentService {
     private readonly evidenceRepository: EvidenceRepository,
     private readonly usage: UsageService,
     private readonly providerObservability: ProviderObservabilityService,
+    private readonly researchContext: CompanyResearchContextService,
     config: ConfigService,
   ) {
     this.dispatchConcurrency = clampConcurrency(
@@ -100,7 +102,7 @@ export class EnrichmentService {
     await this.usage.checkRequestRate(organizationId, undefined, 'WEBSITE_FETCH');
     try {
       const plan = await this.loadPlan(data.searchExecutionId, organizationId);
-      const result = await this.providerObservability.track('website', 'ENRICHMENT', async () => ({ value: await this.enrichPages(company, plan) }));
+      const result = await this.providerObservability.track('website', 'ENRICHMENT', async () => ({ value: await this.enrichPages(company, plan, data.searchExecutionId ?? null) }));
       await this.usage.recordUsage({ organizationId, operation: 'WEBSITE_FETCH', provider: 'website', resourceType: 'company', resourceId: company.id, units: Math.max(1, result.pagesFetched), status: 'COMPLETED', metadata: { pagesFetched: result.pagesFetched, fieldsExtracted: result.fieldsExtracted, websiteStatus: result.websiteStatus, ...(result.message ? { message: result.message } : {}) } });
       await this.db.insert(auditLogs).values({ organizationId, entityId: company.id, action: 'COMPANY_ENRICHMENT_COMPLETED', entityType: 'company', metadata: { companyId: company.id, pagesFetched: result.pagesFetched, fieldsExtracted: result.fieldsExtracted, websiteStatus: result.websiteStatus, ...(result.message ? { message: result.message } : {}) } });
       return { companyId, organizationId, website: result.website, websiteStatus: result.websiteStatus, message: result.message, socialProfiles: result.socialProfiles, fieldsExtracted: result.fieldsExtracted };
@@ -110,7 +112,7 @@ export class EnrichmentService {
     }
   }
 
-  private async enrichPages(company: typeof companies.$inferSelect, plan: SearchPlan | null) {
+  private async enrichPages(company: typeof companies.$inferSelect, plan: SearchPlan | null, searchExecutionId: string | null) {
     const located = await this.companyRepository.findCompanyWithLocation(company.id, company.organizationId);
     const location = located?.location ?? null;
     const sources = await this.db.select({
@@ -136,6 +138,24 @@ export class EnrichmentService {
     if (websiteResult.status === 'FOUND' && websiteResult.website && (!company.website || replacingRejectedWebsite)) updates.website = websiteResult.website;
     if (websiteResult.status !== 'FOUND' && replacingRejectedWebsite) updates.website = null;
     const pages = websiteResult.pages ?? (websiteResult.page ? [websiteResult.page] : []);
+    const contextKey = { organizationId: company.organizationId, companyId: company.id, searchExecutionId };
+    if (pages.length) {
+      await this.researchContext.mergePages(contextKey, pages, 'enrichment', {
+        name: company.name,
+        website: websiteResult.website ?? company.website,
+        phone: company.phone,
+        email: company.email,
+        city: location?.city ?? null,
+        state: location?.state ?? null,
+        discoverySourceUrls: sources.flatMap((row) => (row.sourceUrl ? [row.sourceUrl] : [])),
+      });
+    }
+    if (websiteResult.searchHit) {
+      await this.researchContext.recordSearchHits(contextKey, `${company.name} website`, [websiteResult.searchHit]);
+    }
+    for (const rejected of websiteResult.rejectedSearchHits ?? []) {
+      await this.researchContext.recordSearchHits(contextKey, `${company.name} website`, [rejected.hit]);
+    }
     const discoveredSocial = new Set<string>();
     let fieldsExtracted = 0;
     const wantsEmail = fieldRequested(plan, 'email') || Boolean(plan?.emailRequirement?.requested);
@@ -220,6 +240,15 @@ export class EnrichmentService {
       if (platform !== 'other') await this.companyRepository.upsertSocialProfile(company.id, platform, socialUrl, null);
     }
     if (Object.keys(updates).length > 0) await this.companyRepository.updateCompany(company.id, updates);
+    await this.researchContext.mergePages(contextKey, [], 'enrichment', {
+      name: company.name,
+      website: replacingRejectedWebsite ? websiteResult.website : (company.website || websiteResult.website),
+      phone: updates.phone ?? company.phone,
+      email: updates.email ?? company.email,
+      city: location?.city ?? null,
+      state: location?.state ?? null,
+      socialUrls: [...discoveredSocial],
+    });
     const retainedWebsite = replacingRejectedWebsite ? null : company.website;
     const officialWebsite = retainedWebsite || (websiteResult.status === 'FOUND' ? websiteResult.website : null);
     const nothingNew = Object.keys(updates).length === 0 && fieldsExtracted === 0 && discoveredSocial.size === 0;

@@ -15,6 +15,7 @@ import type { SourceEvidence } from '../enrichment/website/website.types';
 import { ContactQualityService } from '../contacts/quality/contact-quality.service';
 import { UsageService } from '../usage/usage.service';
 import { VerificationService } from '../verification/verification.service';
+import { CompanyResearchContextService } from '../enrichment/research-context/company-research-context.service';
 import { DeepResearchJobData, ResearchQueue, deepResearchJobId } from './research.queue';
 import {
   acceptAiClaim,
@@ -46,6 +47,7 @@ export class ResearchService {
     private readonly contactQuality: ContactQualityService,
     private readonly usage: UsageService,
     private readonly logger: StructuredLoggerService,
+    private readonly researchContext: CompanyResearchContextService,
   ) {}
 
   async start(companyId: string, organizationId: string) {
@@ -150,6 +152,22 @@ export class ResearchService {
     const collected = this.collect(company.name, pages);
     const aiClaims = await this.aiClaims(pages, limits.maxContentChars);
     const evidence = this.dedupeEvidence([...collected.evidence, ...aiClaims]);
+    await this.researchContext.mergePages(
+      { organizationId: data.organizationId, companyId: company.id, searchExecutionId: null },
+      pages.map((page) => ({ url: page.url, finalUrl: page.url, content: page.html, title: null })),
+      'deep_research',
+      { name: company.name, website },
+    );
+    await this.researchContext.addPersonHints(
+      { organizationId: data.organizationId, companyId: company.id, searchExecutionId: null },
+      collected.people.map((person) => ({
+        fullName: person.name,
+        title: person.title,
+        sourceUrl: person.sourceUrl,
+        excerpt: person.excerpt,
+      })),
+    );
+    this.researchContext.observeDuration(company.id, Date.now() - started);
     const stored = await this.evidence.persistEvidence(company.id, website, evidence, website);
     await this.applyCompanyFields(company, collected);
     await this.persistSocialProfiles(company.id, collected.socials);

@@ -75,6 +75,12 @@ function enrichment(options: {
     { persistEvidence } as never,
     { checkRequestRate: jest.fn(), recordUsage: jest.fn() } as never,
     { track: async (_provider: string, _operation: string, callback: () => Promise<{ value: unknown }>) => (await callback()).value } as never,
+    {
+      mergePages: async () => ({ pages: [] }),
+      recordSearchHits: async () => undefined,
+      getPages: async () => [],
+      observeDuration: () => undefined,
+    } as never,
     { get: () => undefined } as never,
   );
   return { service, updateCompany, persistEvidence, discover: options.discover };

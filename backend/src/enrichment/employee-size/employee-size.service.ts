@@ -5,8 +5,10 @@ import { DRIZZLE } from '../../database/database.constants';
 import type { Database } from '../../database/database.types';
 import { companies, companyLocations, leadEvidence, verificationConflicts } from '../../database/schema/schema';
 import { visibleText } from '../website/web-search.query';
+import { buildWebSearchQuery } from '../website/web-search.query';
 import { WEB_SEARCH_PROVIDER, type WebSearchProvider } from '../website/web-search.types';
 import { WebsiteFetchService } from '../website/website-fetch.service';
+import { CompanyResearchContextService } from '../research-context/company-research-context.service';
 import { collectEmployeeSizeEvidence, toEmployeeSizeEvidence, type EmployeeSizeAssessment, type EmployeeSizeFinding, type EmployeeSizePage } from './employee-size.collect';
 import type { EmployeeSizeSubject } from './employee-size.identity';
 
@@ -21,16 +23,39 @@ export class EmployeeSizeService {
     @Inject(DRIZZLE) private readonly db: Database,
     @Inject(WEB_SEARCH_PROVIDER) private readonly search: WebSearchProvider,
     private readonly fetch: WebsiteFetchService,
+    private readonly researchContext: CompanyResearchContextService,
   ) {}
 
   async collect(data: EmployeeSizeJobData): Promise<'FOUND' | 'NOT_FOUND' | 'CONFLICT'> {
+    const started = Date.now();
     const subject = await this.loadSubject(data.organizationId, data.companyId);
     if (!subject) return 'NOT_FOUND';
+    const contextKey = { organizationId: data.organizationId, companyId: data.companyId, searchExecutionId: null };
     const assessment = await collectEmployeeSizeEvidence(subject, {
-      search: (query) => this.search.search(query),
-      fetchPage: (url) => this.readPage(url),
+      search: async (query) => {
+        const rendered = buildWebSearchQuery(query) || `"${subject.name}" employees`;
+        if (await this.researchContext.shouldSkipQuery(contextKey, rendered)) {
+          const cached = await this.researchContext.getSearchHits(contextKey, rendered);
+          if (cached.length) {
+            return cached.map((hit) => ({
+              title: hit.title,
+              url: hit.url,
+              snippet: hit.snippet,
+              source: hit.provider,
+              retrievedAt: hit.retrievedAt,
+            }));
+          }
+          return [];
+        }
+        const hits = await this.search.search(query);
+        await this.researchContext.markQueryIssued(contextKey, rendered);
+        await this.researchContext.recordSearchHits(contextKey, rendered, hits);
+        return hits;
+      },
+      fetchPage: (url) => this.readPage(url, contextKey),
     });
     await this.persist(data.companyId, data.organizationId, assessment);
+    this.researchContext.observeDuration(data.companyId, Date.now() - started);
     if (assessment.outcome === 'conflict') return 'CONFLICT';
     return assessment.outcome === 'value' ? 'FOUND' : 'NOT_FOUND';
   }
@@ -50,11 +75,23 @@ export class EmployeeSizeService {
     return row;
   }
 
-  private async readPage(url: string): Promise<EmployeeSizePage | null> {
+  private async readPage(url: string, contextKey: { organizationId: string; companyId: string; searchExecutionId: string | null }): Promise<EmployeeSizePage | null> {
     try {
+      const reused = await this.researchContext.getPages(contextKey);
+      const match = reused.find((page) => (page.finalUrl || page.url).replace(/\/$/, '') === url.replace(/\/$/, ''));
+      if (match?.content) {
+        const text = visibleText(match.content);
+        if (text) return { url: match.finalUrl || match.url, title: match.title ?? '', text };
+      }
       const page = await this.fetch.fetchPage(url, { retries: 0 });
       const text = visibleText(page.body);
       if (!text) return null;
+      await this.researchContext.mergePages(contextKey, [{
+        url: page.url,
+        finalUrl: page.finalUrl || page.url,
+        content: page.body,
+        title: page.title ?? null,
+      }], 'employee_size');
       return { url: page.finalUrl || page.url, title: page.title ?? '', text };
     } catch {
       return null;

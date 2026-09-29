@@ -1,5 +1,6 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { WEB_SEARCH_PROVIDER, type WebSearchProvider } from '../../enrichment/website/web-search.types';
+import { CompanyResearchContextService } from '../../enrichment/research-context/company-research-context.service';
 import { WebsiteContactProvider } from '../providers/website-contact.provider';
 import { SnovContactProvider, prioritizeByRoles } from '../providers/snov-contact.provider';
 import { ContactCandidate, ContactDiscoveryContext, ContactDiscoveryResult, CompanyLike } from '../types/contact.types';
@@ -15,16 +16,23 @@ export class PersonDiscoveryService {
     private readonly websiteProvider: WebsiteContactProvider,
     private readonly matcher: PersonIdentityMatcherService,
     private readonly candidates: PersonCandidateService,
+    private readonly researchContext: CompanyResearchContextService,
     @Optional() private readonly snovProvider?: SnovContactProvider,
     @Optional() @Inject(WEB_SEARCH_PROVIDER) private readonly webSearch?: WebSearchProvider,
   ) {}
 
   async discover(company: CompanyLike, context: ContactDiscoveryContext): Promise<ContactDiscoveryResult> {
+    const started = Date.now();
     const roles = (context.decisionMakerRoles?.length ? context.decisionMakerRoles : [...DEFAULT_DECISION_MAKER_ROLES]);
     const enrichedContext: ContactDiscoveryContext = {
       ...context,
       decisionMakerRoles: roles,
       companyDomain: context.companyDomain ?? companyDomainFromWebsite(company.website ?? context.companyWebsite),
+    };
+    const contextKey = {
+      organizationId: context.organizationId,
+      companyId: context.companyId || company.id,
+      searchExecutionId: context.searchExecutionId ?? null,
     };
 
     const candidates: ContactCandidate[] = [];
@@ -40,11 +48,38 @@ export class PersonDiscoveryService {
       // One website failure must not abort contact discovery for the company.
     }
 
+    // Seed person hints from research context (deep research / enrichment) without treating them as verified.
+    try {
+      const hints = await this.researchContext.getPersonHints(contextKey);
+      for (const hint of hints) {
+        if (!isPlausiblePersonName(hint.fullName, company.name)) continue;
+        candidates.push(this.candidates.normalizeCandidate({
+          fullName: hint.fullName,
+          title: hint.title ?? null,
+          companyName: company.name,
+          companyRelationship: company.name,
+          sourceUrl: hint.sourceUrl,
+          evidence: [{
+            field: 'fullName',
+            value: hint.fullName,
+            sourceUrl: hint.sourceUrl,
+            evidenceExcerpt: hint.excerpt,
+            retrievedAt: new Date().toISOString(),
+            evidenceType: 'ABOUT_PAGE',
+          }],
+          status: 'DISCOVERED',
+          verificationStatus: 'NOT_VERIFIED',
+        }));
+      }
+    } catch {
+      // Soft — continue with crawl/public search.
+    }
+
     // Always try public web when crawl returned no usable people; also when contact fields are still empty.
     const needsPublic = websiteCandidateCount === 0 || this.needsContactFallback(candidates, enrichedContext);
     if (needsPublic) {
       try {
-        candidates.push(...await this.publicCandidates(company.name, roles, company.website ?? context.companyWebsite ?? null));
+        candidates.push(...await this.publicCandidates(company.name, roles, company.website ?? context.companyWebsite ?? null, contextKey));
       } catch {
         // Continue with whatever evidence we already have.
       }
@@ -53,7 +88,7 @@ export class PersonDiscoveryService {
     // When crawl/public hits left gaps, run an extra contact-focused web pass before paid providers.
     if (this.needsContactFallback(candidates, enrichedContext)) {
       try {
-        candidates.push(...await this.publicContactFallback(company.name, roles, company.website ?? context.companyWebsite ?? null));
+        candidates.push(...await this.publicContactFallback(company.name, roles, company.website ?? context.companyWebsite ?? null, contextKey));
       } catch {
         // Soft failure — keep partial candidates.
       }
@@ -72,6 +107,7 @@ export class PersonDiscoveryService {
     }
 
     const deduped = this.dedupe(candidates);
+    this.researchContext.observeDuration(company.id, Date.now() - started);
     return { candidates: prioritizeByRoles(deduped, roles) };
   }
 
@@ -96,7 +132,12 @@ export class PersonDiscoveryService {
     return false;
   }
 
-  private async publicCandidates(companyName: string, roles: string[], companyWebsite: string | null): Promise<ContactCandidate[]> {
+  private async publicCandidates(
+    companyName: string,
+    roles: string[],
+    companyWebsite: string | null,
+    contextKey: { organizationId: string; companyId: string; searchExecutionId: string | null },
+  ): Promise<ContactCandidate[]> {
     if (!companyName.trim() || typeof this.webSearch?.searchText !== 'function') return [];
     const found: ContactCandidate[] = [];
     const seenQueries = new Set<string>();
@@ -104,23 +145,24 @@ export class PersonDiscoveryService {
       const key = query.toLowerCase();
       if (seenQueries.has(key)) continue;
       seenQueries.add(key);
-      try {
-        const hits = await this.webSearch.searchText(query, { maxResults: 10 });
-        for (const hit of hits) {
-          const candidate = assessPublicDecisionMaker(companyName, hit, {
-            allowedRoles: roles,
-            companyWebsite,
-          });
-          if (candidate) found.push(this.candidates.normalizeCandidate(candidate));
-        }
-      } catch {
-        continue;
+      const hits = await this.searchWithReuse(contextKey, query);
+      for (const hit of hits) {
+        const candidate = assessPublicDecisionMaker(companyName, hit, {
+          allowedRoles: roles,
+          companyWebsite,
+        });
+        if (candidate) found.push(this.candidates.normalizeCandidate(candidate));
       }
     }
     return found;
   }
 
-  private async publicContactFallback(companyName: string, roles: string[], companyWebsite: string | null): Promise<ContactCandidate[]> {
+  private async publicContactFallback(
+    companyName: string,
+    roles: string[],
+    companyWebsite: string | null,
+    contextKey: { organizationId: string; companyId: string; searchExecutionId: string | null },
+  ): Promise<ContactCandidate[]> {
     if (!companyName.trim() || typeof this.webSearch?.searchText !== 'function') return [];
     const queries = [
       `"${companyName}" contact email phone`,
@@ -129,20 +171,53 @@ export class PersonDiscoveryService {
     ];
     const found: ContactCandidate[] = [];
     for (const query of queries) {
-      try {
-        const hits = await this.webSearch.searchText(query, { maxResults: 10 });
-        for (const hit of hits) {
-          const candidate = assessPublicDecisionMaker(companyName, hit, {
-            allowedRoles: roles,
-            companyWebsite,
-          });
-          if (candidate) found.push(this.candidates.normalizeCandidate(candidate));
-        }
-      } catch {
-        continue;
+      const hits = await this.searchWithReuse(contextKey, query);
+      for (const hit of hits) {
+        const candidate = assessPublicDecisionMaker(companyName, hit, {
+          allowedRoles: roles,
+          companyWebsite,
+        });
+        if (candidate) found.push(this.candidates.normalizeCandidate(candidate));
       }
     }
     return found;
+  }
+
+  private async searchWithReuse(
+    contextKey: { organizationId: string; companyId: string; searchExecutionId: string | null },
+    query: string,
+  ): Promise<Array<{ title: string; url: string; snippet: string; source: string; retrievedAt: string }>> {
+    if (await this.researchContext.shouldSkipQuery(contextKey, query)) {
+      const cached = await this.researchContext.getSearchHits(contextKey, query);
+      if (cached.length) {
+        return cached.map((hit) => ({
+          title: hit.title,
+          url: hit.url,
+          snippet: hit.snippet,
+          source: hit.provider,
+          retrievedAt: hit.retrievedAt,
+        }));
+      }
+      // Near-duplicate with no cached hits for this exact query — skip issuing another provider call.
+      return [];
+    }
+    try {
+      const searchText = this.webSearch?.searchText?.bind(this.webSearch);
+      if (!searchText) return [];
+      const hits = await searchText(query, { maxResults: 10 });
+      await this.researchContext.markQueryIssued(contextKey, query);
+      await this.researchContext.recordSearchHits(contextKey, query, hits);
+      return hits.map((hit) => ({
+        title: hit.title,
+        url: hit.url,
+        snippet: hit.snippet,
+        source: hit.source,
+        retrievedAt: hit.retrievedAt,
+      }));
+    } catch {
+      await this.researchContext.markQueryIssued(contextKey, query);
+      return [];
+    }
   }
 
   private dedupe(candidates: ContactCandidate[]): ContactCandidate[] {

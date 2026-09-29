@@ -15,6 +15,25 @@ import { WebSearchProvider } from './web-search.types';
 import { WebsiteDiscoveryService } from './website-discovery.service';
 import { WebsiteNormalizerService } from './website-normalizer.service';
 
+function researchContextStub() {
+  return {
+    get: async () => null,
+    getOrCreate: async () => ({ pages: [], searchHits: [], queriesIssued: [], personHints: [], company: {} }),
+    mergePages: async () => ({ pages: [] }),
+    getPages: async () => [],
+    recordSearchHits: async () => undefined,
+    getSearchHits: async () => [],
+    shouldSkipQuery: async () => false,
+    markQueryIssued: async () => undefined,
+    addPersonHints: async () => undefined,
+    getPersonHints: async () => [],
+    observeDuration: () => undefined,
+    getStats: () => ({}),
+    resetStatsForTests: () => undefined,
+    normalizeQuery: (query: string) => query.toLowerCase(),
+  };
+}
+
 function config(values: Record<string, unknown> = { 'website.fetchTimeoutMs': 1000 }) {
   return {
     get: (key: string, fallback?: unknown) => (Object.prototype.hasOwnProperty.call(values, key) ? values[key] : fallback),
@@ -293,6 +312,7 @@ describe('web search website discovery', () => {
       { persistEvidence: jest.fn() } as never,
       { checkRequestRate: jest.fn(), recordUsage: jest.fn() } as never,
       { track: jest.fn() } as never,
+      researchContextStub() as never,
       { get: () => undefined } as never,
     );
     await expect(enrichment.runCompanyEnrichment({ companyId: 'company-1', organizationId: 'org-b' })).rejects.toBeInstanceOf(NotFoundException);
@@ -355,6 +375,7 @@ describe('web search website discovery', () => {
       { persistEvidence } as never,
       { checkRequestRate: jest.fn(), recordUsage: jest.fn() } as never,
       { track: async (_provider: string, _operation: string, callback: () => Promise<{ value: unknown }>) => (await callback()).value } as never,
+      researchContextStub() as never,
       { get: () => undefined } as never,
     );
     const saved = await enrichment.runCompanyEnrichment({ companyId: 'company-1', organizationId: 'org-1' });
@@ -395,6 +416,7 @@ describe('web search website discovery', () => {
       { persistEvidence } as never,
       { checkRequestRate: jest.fn(), recordUsage: jest.fn() } as never,
       { track: async (_provider: string, _operation: string, callback: () => Promise<{ value: unknown }>) => (await callback()).value } as never,
+      researchContextStub() as never,
       { get: () => undefined } as never,
     );
     const kept = await verified.runCompanyEnrichment({ companyId: 'company-1', organizationId: 'org-1' });
@@ -452,6 +474,7 @@ describe('web search website discovery', () => {
       { persistEvidence } as never,
       { checkRequestRate: jest.fn(), recordUsage: jest.fn() } as never,
       { track: async (_provider: string, _operation: string, callback: () => Promise<{ value: unknown }>) => (await callback()).value } as never,
+      researchContextStub() as never,
       { get: () => undefined } as never,
     );
     const saved = await enrichment.runCompanyEnrichment({ companyId: 'company-1', organizationId: 'org-1' });

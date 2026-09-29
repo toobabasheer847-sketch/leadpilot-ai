@@ -9,7 +9,10 @@ import { ConfigService } from '@nestjs/config';
 describe('Contact discovery primitives', () => {
   it('detects founder and CEO titles from website text', () => {
     const extractor = new ContactExtractorService({ get: () => ['CEO', 'FOUNDER', 'PRESIDENT'] } as ConfigService);
-    const provider = new WebsiteContactProvider(extractor, {} as WebsiteDiscoveryService, new WebsiteNormalizerService());
+    const provider = new WebsiteContactProvider(extractor, {} as WebsiteDiscoveryService, new WebsiteNormalizerService(), {
+      getPages: async () => [],
+      mergePages: async () => ({ pages: [] }),
+    } as never);
     const html = `
       <html><body>
         <a href="/about">About</a>
@@ -61,7 +64,10 @@ describe('Contact discovery primitives', () => {
 
   it('does not invent people, titles, or emails when a page has no explicit person evidence', () => {
     const extractor = new ContactExtractorService({ get: () => ['CEO', 'FOUNDER'] } as ConfigService);
-    const provider = new WebsiteContactProvider(extractor, {} as WebsiteDiscoveryService, new WebsiteNormalizerService());
+    const provider = new WebsiteContactProvider(extractor, {} as WebsiteDiscoveryService, new WebsiteNormalizerService(), {
+      getPages: async () => [],
+      mergePages: async () => ({ pages: [] }),
+    } as never);
     const candidates = provider.extractCandidatesFromHtml('https://company.example/about', '<html><body><h1>About our company</h1><p>We serve local businesses.</p></body></html>', 'Actual Company');
     expect(candidates).toEqual([]);
   });
