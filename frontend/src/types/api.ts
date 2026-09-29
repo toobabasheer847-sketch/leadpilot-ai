@@ -85,7 +85,7 @@ export interface PipelineStageMap {
   qualification: StageState;
 }
 
-export type StageState = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'PARTIAL' | 'FAILED';
+export type StageState = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'PARTIAL' | 'FAILED' | 'SKIPPED';
 
 export interface PipelineStageStatus {
   name: string;

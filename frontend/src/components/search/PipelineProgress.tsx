@@ -83,14 +83,14 @@ export function PipelineProgress({ pipeline }: { pipeline: PipelineView }) {
 }
 
 function mark(status: StageState) {
-  if (status === 'COMPLETED') return '✓';
+  if (status === 'COMPLETED' || status === 'SKIPPED') return '✓';
   if (status === 'RUNNING') return '●';
   if (status === 'FAILED' || status === 'PARTIAL') return '!';
   return '○';
 }
 
 function markClass(status: StageState) {
-  if (status === 'COMPLETED') return 'done';
+  if (status === 'COMPLETED' || status === 'SKIPPED') return 'done';
   if (status === 'RUNNING') return 'active';
   if (status === 'FAILED' || status === 'PARTIAL') return 'issue';
   return 'waiting';

@@ -9,9 +9,9 @@ import {
   type StageState,
   type WorkStage,
 } from './pipeline.constants';
-import type { PipelineCounters, PipelineFailure, PipelineProgressState, StageMap } from './pipeline.types';
+import type { PipelineCounters, PipelineFailure, PipelineProgressState, PipelineStageMetrics, StageMap, StageTimingMetrics } from './pipeline.types';
 
-const STAGE_STATES = new Set<StageState>(['PENDING', 'RUNNING', 'COMPLETED', 'PARTIAL', 'FAILED']);
+const STAGE_STATES = new Set<StageState>(['PENDING', 'RUNNING', 'COMPLETED', 'PARTIAL', 'FAILED', 'SKIPPED']);
 
 export function emptyStageMap(): StageMap {
   return {
@@ -33,16 +33,26 @@ export function emptyStageMap(): StageMap {
   };
 }
 
+export function emptyStageMetrics(concurrencyLimit: number | null = null): PipelineStageMetrics {
+  return { stages: {}, concurrencyLimit, dispatchBatches: 0, providerRequestCount: 0 };
+}
+
 export function initialProgress(): PipelineProgressState {
   const stages = emptyStageMap();
   stages.search = 'RUNNING';
-  return { stages, jobs: {}, waits: 0, failures: [] };
+  return { stages, jobs: {}, waits: 0, failures: [], metrics: emptyStageMetrics() };
 }
 
 export function parseProgress(value: unknown): PipelineProgressState {
   const stages = emptyStageMap();
-  if (!value || typeof value !== 'object') return { stages, jobs: {}, waits: 0, failures: [] };
-  const record = value as { stages?: Partial<StageMap>; jobs?: PipelineProgressState['jobs']; waits?: number; failures?: unknown };
+  if (!value || typeof value !== 'object') return { stages, jobs: {}, waits: 0, failures: [], metrics: emptyStageMetrics() };
+  const record = value as {
+    stages?: Partial<StageMap>;
+    jobs?: PipelineProgressState['jobs'];
+    waits?: number;
+    failures?: unknown;
+    metrics?: PipelineStageMetrics;
+  };
   for (const key of Object.keys(stages) as StageProgressKey[]) {
     const state = record.stages?.[key];
     if (state && STAGE_STATES.has(state)) stages[key] = state;
@@ -53,7 +63,122 @@ export function parseProgress(value: unknown): PipelineProgressState {
       if (Array.isArray(ids) && ids.every((id) => typeof id === 'string')) jobs[key as StageProgressKey] = ids;
     }
   }
-  return { stages, jobs, waits: Number.isInteger(record.waits) && (record.waits ?? 0) >= 0 ? record.waits ?? 0 : 0, failures: readFailures(record) };
+  return {
+    stages,
+    jobs,
+    waits: Number.isInteger(record.waits) && (record.waits ?? 0) >= 0 ? record.waits ?? 0 : 0,
+    failures: readFailures(record),
+    metrics: parseStageMetrics(record.metrics),
+  };
+}
+
+function parseStageMetrics(value: unknown): PipelineStageMetrics {
+  const empty = emptyStageMetrics();
+  if (!value || typeof value !== 'object') return empty;
+  const record = value as Partial<PipelineStageMetrics>;
+  const stages: PipelineStageMetrics['stages'] = {};
+  if (record.stages && typeof record.stages === 'object') {
+    for (const [key, timing] of Object.entries(record.stages)) {
+      if (!timing || typeof timing !== 'object') continue;
+      const item = timing as StageTimingMetrics;
+      stages[key as StageProgressKey] = {
+        startedAtMs: typeof item.startedAtMs === 'number' ? item.startedAtMs : null,
+        completedAtMs: typeof item.completedAtMs === 'number' ? item.completedAtMs : null,
+        durationMs: typeof item.durationMs === 'number' ? item.durationMs : null,
+        waitingMs: typeof item.waitingMs === 'number' ? item.waitingMs : null,
+        activeJobs: typeof item.activeJobs === 'number' ? item.activeJobs : 0,
+        failedJobs: typeof item.failedJobs === 'number' ? item.failedJobs : 0,
+        retryCount: typeof item.retryCount === 'number' ? item.retryCount : 0,
+      };
+    }
+  }
+  return {
+    stages,
+    concurrencyLimit: typeof record.concurrencyLimit === 'number' ? record.concurrencyLimit : null,
+    dispatchBatches: typeof record.dispatchBatches === 'number' ? record.dispatchBatches : 0,
+    providerRequestCount: typeof record.providerRequestCount === 'number' ? record.providerRequestCount : 0,
+  };
+}
+
+export function markStageStarted(
+  progress: PipelineProgressState,
+  key: StageProgressKey,
+  activeJobs: number,
+  now = Date.now(),
+): PipelineProgressState {
+  const metrics = progress.metrics ?? emptyStageMetrics();
+  const previous = metrics.stages[key];
+  return {
+    ...progress,
+    metrics: {
+      ...metrics,
+      dispatchBatches: metrics.dispatchBatches + 1,
+      stages: {
+        ...metrics.stages,
+        [key]: {
+          startedAtMs: previous?.startedAtMs ?? now,
+          completedAtMs: null,
+          durationMs: null,
+          waitingMs: previous?.waitingMs ?? 0,
+          activeJobs,
+          failedJobs: previous?.failedJobs ?? 0,
+          retryCount: previous?.retryCount ?? 0,
+        },
+      },
+    },
+  };
+}
+
+export function markStageCompleted(
+  progress: PipelineProgressState,
+  key: StageProgressKey,
+  failedJobs = 0,
+  now = Date.now(),
+): PipelineProgressState {
+  const metrics = progress.metrics ?? emptyStageMetrics();
+  const previous = metrics.stages[key] ?? {
+    startedAtMs: now,
+    completedAtMs: null,
+    durationMs: null,
+    waitingMs: 0,
+    activeJobs: 0,
+    failedJobs: 0,
+    retryCount: 0,
+  };
+  const started = previous.startedAtMs ?? now;
+  return {
+    ...progress,
+    metrics: {
+      ...metrics,
+      stages: {
+        ...metrics.stages,
+        [key]: {
+          ...previous,
+          completedAtMs: now,
+          durationMs: Math.max(0, now - started),
+          waitingMs: previous.waitingMs ?? 0,
+          activeJobs: 0,
+          failedJobs,
+        },
+      },
+    },
+  };
+}
+
+export function accumulateWait(progress: PipelineProgressState, key: StageProgressKey, waitMs: number): PipelineProgressState {
+  const metrics = progress.metrics ?? emptyStageMetrics();
+  const previous = metrics.stages[key];
+  if (!previous) return progress;
+  return {
+    ...progress,
+    metrics: {
+      ...metrics,
+      stages: {
+        ...metrics.stages,
+        [key]: { ...previous, waitingMs: (previous.waitingMs ?? 0) + Math.max(0, waitMs) },
+      },
+    },
+  };
 }
 
 export function isPipelineStage(value: string): value is PipelineStage {
@@ -268,4 +393,8 @@ export function maskCounters(stages: StageMap, counts: PipelineCounters): Pipeli
 
 export function hasPartialStage(stages: StageMap): boolean {
   return Object.values(stages).includes('PARTIAL');
+}
+
+export function isSettledStageState(state: StageState): boolean {
+  return state === 'COMPLETED' || state === 'PARTIAL' || state === 'SKIPPED' || state === 'FAILED';
 }

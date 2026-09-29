@@ -4,6 +4,7 @@ import type { SearchPlan } from '../search/types/search-plan.types';
 import { employeeSizeRequested, contactDiscoveryRequested, decisionMakerRolesForPlan } from '../search/search-plan.limits';
 import type { ClassificationCriteria } from '../ai/classification/types/classification.types';
 import { clampConcurrency, mapWithConcurrency } from '../common/concurrency';
+import { MetricsService } from '../common/observability/metrics.service';
 import { EnrichmentService } from '../enrichment/enrichment.service';
 import { ContactsService } from '../contacts/contacts.service';
 import { ClassificationService } from '../ai/classification/classification.service';
@@ -14,9 +15,29 @@ import { QualificationService } from '../qualification/qualification.service';
 import { ResearchService } from '../research/research.service';
 import { ContactQualityService } from '../contacts/quality/contact-quality.service';
 import { EmployeeSizeQueue } from '../enrichment/employee-size/employee-size.queue';
-import { TRACKED_QUEUES, type PipelineErrorCode, type WorkStage } from './pipeline.constants';
+import { TRACKED_QUEUES, type PipelineErrorCode, type StageProgressKey, type StageState, type WorkStage } from './pipeline.constants';
+import {
+  AFTER_POST_ENRICHMENT,
+  AFTER_POST_EVIDENCE,
+  POST_ENRICHMENT_PARALLEL,
+  POST_EVIDENCE_PARALLEL,
+  type PostEnrichmentKey,
+  type PostEvidenceKey,
+} from './pipeline.dependencies';
 import { PipelineJobInspector } from './pipeline.job-inspector';
-import { classifyPipelineError, ENRICHMENT_EMPTY_MESSAGE, nextWorkStage, progressKey, WEBSITE_PARTIAL_MESSAGE, withStageState } from './pipeline.progress';
+import {
+  accumulateWait,
+  classifyPipelineError,
+  emptyStageMetrics,
+  ENRICHMENT_EMPTY_MESSAGE,
+  isSettledStageState,
+  markStageCompleted,
+  markStageStarted,
+  nextWorkStage,
+  progressKey,
+  WEBSITE_PARTIAL_MESSAGE,
+  withStageState,
+} from './pipeline.progress';
 import { PipelineRepository, type PipelineExecutionRow } from './pipeline.repository';
 import type { PipelineProgressState, StageTick } from './pipeline.types';
 
@@ -36,6 +57,8 @@ const KEY_TO_STAGE: Record<TrackedKey, WorkStage> = {
   qualification: 'QUALIFICATION',
 };
 
+type SettleResult = Awaited<ReturnType<PipelineJobInspector['settle']>>;
+
 @Injectable()
 export class PipelineStageRunner {
   private readonly dispatchConcurrency: number;
@@ -53,6 +76,7 @@ export class PipelineStageRunner {
     private readonly contactQuality: ContactQualityService,
     private readonly employeeSize: EmployeeSizeQueue,
     private readonly jobs: PipelineJobInspector,
+    private readonly metrics: MetricsService,
     config: ConfigService,
   ) {
     this.dispatchConcurrency = clampConcurrency(
@@ -63,38 +87,41 @@ export class PipelineStageRunner {
   }
 
   tick(row: PipelineExecutionRow, progress: PipelineProgressState): Promise<StageTick> {
+    const withLimit = progress.metrics?.concurrencyLimit == null
+      ? { ...progress, metrics: { ...(progress.metrics ?? emptyStageMetrics()), concurrencyLimit: this.dispatchConcurrency } }
+      : progress;
     switch (row.currentStage) {
       case 'SEARCH':
-        return this.tickSearch(row, progress);
+        return this.tickSearch(row, withLimit);
       case 'SOURCE_DISCOVERY':
       case 'COMPANY_PERSISTENCE':
-        return this.tickDiscovery(row, progress, row.currentStage);
+        return this.tickDiscovery(row, withLimit, row.currentStage);
       case 'WEBSITE_DISCOVERY':
-        return this.tickTracked(row, progress, 'websiteDiscovery');
+        return this.tickTracked(row, withLimit, 'websiteDiscovery');
       case 'ENRICHMENT':
-        return this.finishTracked(progress, 'enrichment', progress.jobs.websiteDiscovery ?? []);
+        return this.finishTracked(withLimit, 'enrichment', withLimit.jobs.websiteDiscovery ?? []);
       case 'DEEP_RESEARCH':
-        return this.tickDeepResearchParallel(row, progress);
+        return this.tickPostEnrichmentParallel(row, withLimit);
       case 'EMPLOYEE_SIZE':
-        return this.tickEmployeeSize(row, progress);
+        return this.tickSettledOrTracked(row, withLimit, 'employeeSize');
       case 'DECISION_MAKER_DISCOVERY':
-        return this.tickTracked(row, progress, 'decisionMakerDiscovery');
+        return this.tickSettledOrTracked(row, withLimit, 'decisionMakerDiscovery');
       case 'CONTACT_QUALITY':
-        return this.tickTracked(row, progress, 'contactQuality');
+        return this.tickTracked(row, withLimit, 'contactQuality');
       case 'EVIDENCE':
-        return this.tickEvidence(row, progress);
+        return this.tickEvidence(row, withLimit);
       case 'CLASSIFICATION':
-        return this.tickTracked(row, progress, 'classification');
+        return this.tickPostEvidenceParallel(row, withLimit);
       case 'VERIFICATION':
-        return this.tickTracked(row, progress, 'verification');
+        return this.tickSettledOrTracked(row, withLimit, 'verification');
       case 'DEDUPLICATION':
-        return this.tickTracked(row, progress, 'deduplication');
+        return this.tickTracked(row, withLimit, 'deduplication');
       case 'SCORING':
-        return this.tickTracked(row, progress, 'scoring');
+        return this.tickTracked(row, withLimit, 'scoring');
       case 'QUALIFICATION':
-        return this.tickQualification(row, progress);
+        return this.tickQualification(row, withLimit);
       default:
-        return Promise.resolve(this.fail(progress, 'SOURCE_DISCOVERY', 'INTERNAL_ERROR', 'Pipeline stage failed.'));
+        return Promise.resolve(this.fail(withLimit, 'SOURCE_DISCOVERY', 'INTERNAL_ERROR', 'Pipeline stage failed.'));
     }
   }
 
@@ -107,9 +134,11 @@ export class PipelineStageRunner {
 
   private async tickEvidence(row: PipelineExecutionRow, progress: PipelineProgressState): Promise<StageTick> {
     if (!row.searchExecutionId) return this.fail(progress, 'EVIDENCE', 'NOT_FOUND', 'Search execution not found');
+    // Evidence barrier: prior writers (enrichment, deep research, DM, contact quality) must already be settled
+    // by the stage graph before this tick runs.
     const companyIds = await this.repository.listCompanyIds(row.organizationId, row.searchExecutionId);
     await this.repository.countEvidence(row.organizationId, companyIds);
-    return this.move(progress, 'evidence', nextWorkStage('EVIDENCE'));
+    return this.move(markStageCompleted(markStageStarted(progress, 'evidence', companyIds.length), 'evidence'), 'evidence', nextWorkStage('EVIDENCE'));
   }
 
   private async tickDiscovery(row: PipelineExecutionRow, progress: PipelineProgressState, stage: 'SOURCE_DISCOVERY' | 'COMPANY_PERSISTENCE'): Promise<StageTick> {
@@ -130,104 +159,194 @@ export class PipelineStageRunner {
   private async tickTracked(row: PipelineExecutionRow, progress: PipelineProgressState, key: TrackedKey): Promise<StageTick> {
     if (!progress.jobs[key]) {
       const jobIds = await this.dispatch(row, key);
-      const dispatched = { ...progress, jobs: { ...progress.jobs, [key]: jobIds }, stages: { ...progress.stages, [key]: 'RUNNING' as const } };
-      if (jobIds.length === 0) return this.advance(dispatched, key);
+      let dispatched = { ...progress, jobs: { ...progress.jobs, [key]: jobIds }, stages: { ...progress.stages, [key]: (jobIds.length === 0 ? 'SKIPPED' : 'RUNNING') as StageState } };
+      dispatched = markStageStarted(dispatched, key, jobIds.length);
+      this.observeDispatch(key, jobIds.length);
+      if (jobIds.length === 0) {
+        return this.advance(markStageCompleted(dispatched, key), key, 'SKIPPED');
+      }
       return { type: 'wait', progress: dispatched };
     }
     return this.finishTracked(progress, key, progress.jobs[key] ?? []);
   }
 
   /**
-   * After enrichment, deep research and employee-size are independent per company.
-   * Dispatch both together so a 300-company run does not wait serially for every deep-research job
-   * before starting employee-size work.
+   * After enrichment: deep research, employee-size, and decision-maker discovery are independent.
+   * Dispatch together so unrelated stages do not wait serially for each other.
    */
-  private async tickDeepResearchParallel(row: PipelineExecutionRow, progress: PipelineProgressState): Promise<StageTick> {
+  private async tickPostEnrichmentParallel(row: PipelineExecutionRow, progress: PipelineProgressState): Promise<StageTick> {
     let next = progress;
     if (!next.jobs.deepResearch) {
-      const [deepIds, sizeIds] = await Promise.all([
+      const [deepIds, sizeIds, dmIds] = await Promise.all([
         this.dispatch(row, 'deepResearch'),
         this.dispatch(row, 'employeeSize'),
+        this.dispatch(row, 'decisionMakerDiscovery'),
       ]);
       next = {
         ...next,
-        jobs: { ...next.jobs, deepResearch: deepIds, employeeSize: sizeIds },
+        jobs: { ...next.jobs, deepResearch: deepIds, employeeSize: sizeIds, decisionMakerDiscovery: dmIds },
         stages: {
           ...next.stages,
-          deepResearch: 'RUNNING',
-          employeeSize: sizeIds.length > 0 ? 'RUNNING' : 'COMPLETED',
+          deepResearch: deepIds.length > 0 ? 'RUNNING' : 'SKIPPED',
+          employeeSize: sizeIds.length > 0 ? 'RUNNING' : 'SKIPPED',
+          decisionMakerDiscovery: dmIds.length > 0 ? 'RUNNING' : 'SKIPPED',
         },
       };
-      if (deepIds.length === 0 && sizeIds.length === 0) {
-        return this.move(withStageState(withStageState(next, 'deepResearch', 'COMPLETED'), 'employeeSize', 'COMPLETED'), 'deepResearch', 'DECISION_MAKER_DISCOVERY');
+      for (const key of POST_ENRICHMENT_PARALLEL) {
+        const ids = next.jobs[key] ?? [];
+        next = markStageStarted(next, key, ids.length);
+        this.observeDispatch(key, ids.length);
+      }
+      if (deepIds.length === 0 && sizeIds.length === 0 && dmIds.length === 0) {
+        let done = next;
+        for (const key of POST_ENRICHMENT_PARALLEL) done = markStageCompleted(done, key);
+        return this.advanceTo(done, AFTER_POST_ENRICHMENT);
       }
       return { type: 'wait', progress: next };
     }
 
-    const deepSettle = await this.jobs.settle(TRACKED_QUEUES.deepResearch, next.jobs.deepResearch ?? []);
-    if (deepSettle.state === 'PENDING') return { type: 'wait', progress: withStageState(next, 'deepResearch', 'RUNNING') };
+    return this.settleParallelGroup(next, POST_ENRICHMENT_PARALLEL, 'DEEP_RESEARCH', AFTER_POST_ENRICHMENT);
+  }
 
-    const sizeIds = next.jobs.employeeSize ?? [];
-    let sizeSettle: Awaited<ReturnType<PipelineJobInspector['settle']>> = { state: 'COMPLETED' };
-    if (sizeIds.length > 0) {
-      sizeSettle = await this.jobs.settle(TRACKED_QUEUES.employeeSize, sizeIds);
-      if (sizeSettle.state === 'PENDING') {
-        const deepState = deepSettle.state === 'FAILED' || deepSettle.state === 'PARTIAL' ? 'PARTIAL' : 'COMPLETED';
-        return { type: 'wait', progress: withStageState(withStageState(next, 'deepResearch', deepState), 'employeeSize', 'RUNNING') };
+  /**
+   * After evidence barrier: classification and verification do not consume each other's outputs.
+   */
+  private async tickPostEvidenceParallel(row: PipelineExecutionRow, progress: PipelineProgressState): Promise<StageTick> {
+    let next = progress;
+    if (!next.jobs.classification) {
+      const [classificationIds, verificationIds] = await Promise.all([
+        this.dispatch(row, 'classification'),
+        this.dispatch(row, 'verification'),
+      ]);
+      next = {
+        ...next,
+        jobs: { ...next.jobs, classification: classificationIds, verification: verificationIds },
+        stages: {
+          ...next.stages,
+          classification: classificationIds.length > 0 ? 'RUNNING' : 'SKIPPED',
+          verification: verificationIds.length > 0 ? 'RUNNING' : 'SKIPPED',
+        },
+      };
+      for (const key of POST_EVIDENCE_PARALLEL) {
+        const ids = next.jobs[key] ?? [];
+        next = markStageStarted(next, key, ids.length);
+        this.observeDispatch(key, ids.length);
+      }
+      if (classificationIds.length === 0 && verificationIds.length === 0) {
+        let done = next;
+        for (const key of POST_EVIDENCE_PARALLEL) done = markStageCompleted(done, key);
+        return this.advanceTo(done, AFTER_POST_EVIDENCE);
+      }
+      return { type: 'wait', progress: next };
+    }
+
+    return this.settleParallelGroup(next, POST_EVIDENCE_PARALLEL, 'CLASSIFICATION', AFTER_POST_EVIDENCE);
+  }
+
+  private async settleParallelGroup(
+    progress: PipelineProgressState,
+    keys: readonly (PostEnrichmentKey | PostEvidenceKey)[],
+    failStage: WorkStage,
+    nextStage: WorkStage,
+  ): Promise<StageTick> {
+    const settlements: Array<{ key: StageProgressKey; ids: string[]; settle: SettleResult }> = [];
+    for (const key of keys) {
+      const ids = progress.jobs[key] ?? [];
+      if (ids.length === 0) {
+        settlements.push({ key, ids, settle: { state: 'COMPLETED' } });
+        continue;
+      }
+      const settle = await this.jobs.settle(TRACKED_QUEUES[key as TrackedKey], ids);
+      settlements.push({ key, ids, settle });
+    }
+
+    if (settlements.some((item) => item.ids.length > 0 && item.settle.state === 'PENDING')) {
+      let waiting = progress;
+      for (const item of settlements) {
+        if (item.ids.length === 0) {
+          waiting = withStageState(waiting, item.key, 'SKIPPED');
+          continue;
+        }
+        if (item.settle.state === 'PENDING') {
+          waiting = accumulateWait(withStageState(waiting, item.key, 'RUNNING'), item.key, 2000);
+        } else if (item.settle.state === 'FAILED' || item.settle.state === 'PARTIAL') {
+          waiting = withStageState(waiting, item.key, 'PARTIAL');
+        } else {
+          waiting = withStageState(waiting, item.key, 'COMPLETED');
+        }
+      }
+      return { type: 'wait', progress: waiting };
+    }
+
+    const active = settlements.filter((item) => item.ids.length > 0);
+    if (active.length > 0 && active.every((item) => item.settle.state === 'FAILED')) {
+      const failed = active[0];
+      const message = failed && failed.settle.state === 'FAILED' ? failed.settle.message : 'Pipeline stage failed.';
+      const classified = classifyPipelineError(new Error(message));
+      return this.fail(progress, failStage, classified.code, classified.message);
+    }
+
+    let updated = progress;
+    for (const item of settlements) {
+      if (item.ids.length === 0) {
+        updated = withStageState(updated, item.key, 'SKIPPED');
+        updated = markStageCompleted(updated, item.key);
+        continue;
+      }
+      if (item.settle.state === 'FAILED' || item.settle.state === 'PARTIAL') {
+        updated = { ...updated, failures: [...updated.failures, { stage: KEY_TO_STAGE[item.key as TrackedKey], message: item.settle.message }] };
+        updated = withStageState(updated, item.key, 'PARTIAL');
+        updated = markStageCompleted(updated, item.key, item.ids.length);
+        this.metrics.increment('pipeline_stage_jobs_failed_total', { stage: item.key });
+      } else {
+        updated = withStageState(updated, item.key, 'COMPLETED');
+        updated = markStageCompleted(updated, item.key);
+      }
+      const timing = updated.metrics?.stages[item.key];
+      if (timing?.durationMs != null) {
+        this.metrics.observe('pipeline_stage_duration_ms', timing.durationMs, { stage: item.key });
+        if (timing.waitingMs != null && timing.waitingMs > 0) {
+          this.metrics.observe('pipeline_stage_waiting_ms', timing.waitingMs, { stage: item.key });
+        }
       }
     }
 
-    if (deepSettle.state === 'FAILED' && (sizeSettle.state === 'FAILED' || sizeIds.length === 0)) {
-      const classified = classifyPipelineError(new Error(deepSettle.message));
-      return this.fail(next, 'DEEP_RESEARCH', classified.code, classified.message);
-    }
-
-    let updated = next;
-    if (deepSettle.state === 'FAILED') {
-      updated = { ...updated, failures: [...updated.failures, { stage: 'DEEP_RESEARCH', message: deepSettle.message }] };
-      updated = withStageState(updated, 'deepResearch', 'PARTIAL');
-    } else if (deepSettle.state === 'PARTIAL') {
-      updated = { ...updated, failures: [...updated.failures, { stage: 'DEEP_RESEARCH', message: deepSettle.message }] };
-      updated = withStageState(updated, 'deepResearch', 'PARTIAL');
-    } else {
-      updated = withStageState(updated, 'deepResearch', 'COMPLETED');
-    }
-
-    if (sizeSettle.state === 'FAILED') {
-      updated = { ...updated, failures: [...updated.failures, { stage: 'EMPLOYEE_SIZE', message: sizeSettle.message }] };
-      updated = withStageState(updated, 'employeeSize', 'PARTIAL');
-    } else if (sizeSettle.state === 'PARTIAL') {
-      updated = { ...updated, failures: [...updated.failures, { stage: 'EMPLOYEE_SIZE', message: sizeSettle.message }] };
-      updated = withStageState(updated, 'employeeSize', 'PARTIAL');
-    } else {
-      updated = withStageState(updated, 'employeeSize', sizeIds.length ? 'COMPLETED' : updated.stages.employeeSize);
-    }
-
-    // Skip the dedicated EMPLOYEE_SIZE stage — work already settled in parallel.
-    return this.move(updated, 'deepResearch', 'DECISION_MAKER_DISCOVERY');
+    return this.advanceTo(updated, nextStage);
   }
 
-  private async tickEmployeeSize(row: PipelineExecutionRow, progress: PipelineProgressState): Promise<StageTick> {
-    // When deep-research parallel path already settled employee-size, advance immediately.
-    if (progress.jobs.employeeSize !== undefined && (progress.stages.employeeSize === 'COMPLETED' || progress.stages.employeeSize === 'PARTIAL')) {
-      return this.move(progress, 'employeeSize', nextWorkStage('EMPLOYEE_SIZE'), progress.stages.employeeSize === 'PARTIAL' ? 'PARTIAL' : 'COMPLETED');
+  private async tickSettledOrTracked(row: PipelineExecutionRow, progress: PipelineProgressState, key: TrackedKey): Promise<StageTick> {
+    if (progress.jobs[key] !== undefined && isSettledStageState(progress.stages[key])) {
+      const state = progress.stages[key];
+      const outcome = state === 'PARTIAL' ? 'PARTIAL' : state === 'SKIPPED' ? 'SKIPPED' : 'COMPLETED';
+      return this.move(progress, key, nextWorkStage(KEY_TO_STAGE[key]), outcome);
     }
-    return this.tickTracked(row, progress, 'employeeSize');
+    return this.tickTracked(row, progress, key);
   }
 
   private async finishTracked(progress: PipelineProgressState, key: TrackedKey, jobIds: string[]): Promise<StageTick> {
     const settlement = await this.jobs.settle(TRACKED_QUEUES[key], jobIds);
-    if (settlement.state === 'PENDING') return { type: 'wait', progress: withStageState(progress, key, 'RUNNING') };
+    if (settlement.state === 'PENDING') {
+      return { type: 'wait', progress: accumulateWait(withStageState(progress, key, 'RUNNING'), key, 2000) };
+    }
     if (settlement.state === 'FAILED') {
       const classified = classifyPipelineError(new Error(settlement.message));
-      return this.fail(progress, KEY_TO_STAGE[key], classified.code, classified.message);
+      return this.fail(markStageCompleted(progress, key, jobIds.length), KEY_TO_STAGE[key], classified.code, classified.message);
+    }
+    let completed = markStageCompleted(progress, key, settlement.state === 'PARTIAL' ? 1 : 0);
+    const timing = completed.metrics?.stages[key];
+    if (timing?.durationMs != null) {
+      this.metrics.observe('pipeline_stage_duration_ms', timing.durationMs, { stage: key });
+      if (timing.waitingMs != null && timing.waitingMs > 0) {
+        this.metrics.observe('pipeline_stage_waiting_ms', timing.waitingMs, { stage: key });
+      }
     }
     if (settlement.state === 'PARTIAL') {
       const message = key === 'enrichment' && settlement.message === WEBSITE_PARTIAL_MESSAGE ? ENRICHMENT_EMPTY_MESSAGE : settlement.message;
-      const failures = [...progress.failures, { stage: KEY_TO_STAGE[key], message }];
-      return this.advance({ ...progress, failures }, key, 'PARTIAL');
+      const failures = [...completed.failures, { stage: KEY_TO_STAGE[key], message }];
+      this.metrics.increment('pipeline_stage_jobs_failed_total', { stage: key });
+      return this.advance({ ...completed, failures }, key, 'PARTIAL');
     }
-    return this.advance(progress, key);
+    return this.advance(completed, key);
   }
 
   private async tickQualification(row: PipelineExecutionRow, progress: PipelineProgressState): Promise<StageTick> {
@@ -235,8 +354,13 @@ export class PipelineStageRunner {
     if (!progress.jobs.qualification) {
       const result = await this.qualification.enqueueExecution(row.searchExecutionId, row.organizationId, false);
       const jobIds = result.status === 'QUEUED' && 'jobId' in result && result.jobId ? [String(result.jobId)] : [];
-      const dispatched = { ...withStageState(progress, 'qualification', 'RUNNING'), jobs: { ...progress.jobs, qualification: jobIds } };
-      if (jobIds.length === 0) return { type: 'complete', progress: withStageState({ ...dispatched, waits: 0 }, 'qualification', 'COMPLETED') };
+      const queued: PipelineProgressState = {
+        ...withStageState(progress, 'qualification', jobIds.length ? 'RUNNING' : 'SKIPPED'),
+        jobs: { ...progress.jobs, qualification: jobIds },
+      };
+      const dispatched = markStageStarted(queued, 'qualification', jobIds.length);
+      this.observeDispatch('qualification', jobIds.length);
+      if (jobIds.length === 0) return { type: 'complete', progress: withStageState({ ...markStageCompleted(dispatched, 'qualification'), waits: 0 }, 'qualification', 'COMPLETED') };
       return { type: 'wait', progress: dispatched };
     }
     return this.finishTracked(progress, 'qualification', progress.jobs.qualification ?? []);
@@ -370,15 +494,29 @@ export class PipelineStageRunner {
     return jobIds.filter((jobId): jobId is string => Boolean(jobId));
   }
 
-  private move(progress: PipelineProgressState, completedKey: TrackedKey | 'sourceDiscovery' | 'companyPersistence' | 'search' | 'evidence', next: WorkStage | 'COMPLETED', outcome: 'COMPLETED' | 'PARTIAL' = 'COMPLETED'): StageTick {
-    const completed = withStageState(progress, completedKey, outcome);
-    if (next === 'COMPLETED') return { type: 'complete', progress: { ...completed, waits: 0 } };
+  private move(
+    progress: PipelineProgressState,
+    completedKey: TrackedKey | 'sourceDiscovery' | 'companyPersistence' | 'search' | 'evidence',
+    next: WorkStage | 'COMPLETED',
+    outcome: 'COMPLETED' | 'PARTIAL' | 'SKIPPED' = 'COMPLETED',
+  ): StageTick {
+    const current = progress.stages[completedKey];
+    const finalState: StageState =
+      outcome === 'PARTIAL' || current === 'PARTIAL' ? 'PARTIAL'
+        : outcome === 'SKIPPED' || current === 'SKIPPED' ? 'SKIPPED'
+          : 'COMPLETED';
+    const preserved = withStageState(progress, completedKey, finalState);
+    if (next === 'COMPLETED') return { type: 'complete', progress: { ...preserved, waits: 0 } };
+    return this.advanceTo(preserved, next);
+  }
+
+  private advanceTo(progress: PipelineProgressState, next: WorkStage): StageTick {
     const nextKey = progressKey(next);
-    const running = nextKey ? withStageState(completed, nextKey, 'RUNNING') : completed;
+    const running = nextKey ? withStageState(progress, nextKey, 'RUNNING') : progress;
     return { type: 'advance', currentStage: next, progress: { ...running, waits: 0 } };
   }
 
-  private advance(progress: PipelineProgressState, key: TrackedKey, outcome: 'COMPLETED' | 'PARTIAL' = 'COMPLETED'): StageTick {
+  private advance(progress: PipelineProgressState, key: TrackedKey, outcome: 'COMPLETED' | 'PARTIAL' | 'SKIPPED' = 'COMPLETED'): StageTick {
     return this.move(progress, key, nextWorkStage(KEY_TO_STAGE[key]), outcome);
   }
 
@@ -390,6 +528,11 @@ export class PipelineStageRunner {
       errorMessage,
       progress: key ? withStageState(progress, key, 'FAILED') : progress,
     };
+  }
+
+  private observeDispatch(key: string, jobCount: number) {
+    this.metrics.increment('pipeline_stage_dispatch_total', { stage: key });
+    this.metrics.observe('pipeline_stage_active_jobs', jobCount, { stage: key });
   }
 }
 

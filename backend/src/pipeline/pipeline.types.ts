@@ -15,11 +15,30 @@ export interface PipelineFailure {
   message: string;
 }
 
+/** Per-stage timing / load signals for Phase M dependency optimization. */
+export interface StageTimingMetrics {
+  startedAtMs: number | null;
+  completedAtMs: number | null;
+  durationMs: number | null;
+  waitingMs: number | null;
+  activeJobs: number;
+  failedJobs: number;
+  retryCount: number;
+}
+
+export interface PipelineStageMetrics {
+  stages: Partial<Record<StageProgressKey, StageTimingMetrics>>;
+  concurrencyLimit: number | null;
+  dispatchBatches: number;
+  providerRequestCount: number;
+}
+
 export interface PipelineProgressState {
   stages: StageMap;
   jobs: Partial<Record<StageProgressKey, string[]>>;
   waits: number;
   failures: PipelineFailure[];
+  metrics?: PipelineStageMetrics;
 }
 
 export interface PipelineCounters {

@@ -49,7 +49,7 @@ export const STAGE_PROGRESS_KEYS = {
 } as const;
 
 export type StageProgressKey = (typeof STAGE_PROGRESS_KEYS)[WorkStage];
-export type StageState = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'PARTIAL' | 'FAILED';
+export type StageState = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'PARTIAL' | 'FAILED' | 'SKIPPED';
 
 export const PIPELINE_ERROR_CODES = [
   'TRANSIENT_PROVIDER_ERROR',

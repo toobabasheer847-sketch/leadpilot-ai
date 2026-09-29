@@ -256,6 +256,7 @@ describe('pipeline orchestration', () => {
       {} as never, {} as never, {} as never, {} as never, {} as never,
       {} as never,
       jobs as never,
+      { increment: jest.fn(), observe: jest.fn() } as never,
       config({}),
     );
     const progress = initialProgress();
@@ -394,6 +395,7 @@ function runnerWith(repository: Record<string, unknown>) {
     {} as never,
     {} as never,
     {} as never,
+    { increment: jest.fn(), observe: jest.fn() } as never,
     config({}),
   );
 }

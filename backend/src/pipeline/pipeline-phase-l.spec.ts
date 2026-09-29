@@ -172,6 +172,7 @@ describe('Phase L post-discovery throughput', () => {
       {} as never,
       employeeSize as never,
       jobs as never,
+      { increment: jest.fn(), observe: jest.fn() } as never,
       { get: () => 4 } as ConfigService,
     );
 
@@ -224,9 +225,11 @@ describe('Phase L post-discovery throughput', () => {
 
     expect(second.type).toBe('advance');
     if (second.type === 'advance') {
-      expect(second.currentStage).toBe('DECISION_MAKER_DISCOVERY');
+      // Phase M: after post-enrichment parallel (deep ∥ size ∥ DM), advance to CONTACT_QUALITY.
+      expect(second.currentStage).toBe('CONTACT_QUALITY');
       expect(second.progress.stages.deepResearch).toBe('COMPLETED');
       expect(second.progress.stages.employeeSize).toBe('COMPLETED');
+      expect(second.progress.stages.decisionMakerDiscovery).toBe('SKIPPED');
     }
   });
 

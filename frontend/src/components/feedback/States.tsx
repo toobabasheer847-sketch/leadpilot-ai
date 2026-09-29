@@ -77,6 +77,18 @@ export function verificationStatusLabel(status: string | null | undefined): stri
       return 'Invalid';
     case 'NOT_VERIFIED':
       return 'Unverified';
+    case 'SKIPPED':
+      return 'Skipped';
+    case 'PENDING':
+      return 'Pending';
+    case 'RUNNING':
+      return 'Running';
+    case 'COMPLETED':
+      return 'Completed';
+    case 'PARTIAL':
+      return 'Partial';
+    case 'FAILED':
+      return 'Failed';
     default:
       return status;
   }
