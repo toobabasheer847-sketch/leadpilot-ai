@@ -18,15 +18,58 @@ const PERSON_FIELD_TOKENS = new Set([
   'linkedin', 'facebook', 'instagram', 'youtube', 'twitter', 'x',
 ]);
 
+export type CountIntent = NonNullable<SearchPlan['countIntent']>;
+
 export function explicitResultCount(plan: Pick<SearchPlan, 'requestedCount' | 'maxResults'> | null | undefined): number | undefined {
   const value = plan?.requestedCount ?? plan?.maxResults;
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) return undefined;
   return Math.min(RESULT_SAFETY_CAP, value);
 }
 
-/** Uses an explicit prompt count as-is. 100 is only the default when the prompt has no count. */
-export function discoveryTarget(plan: Pick<SearchPlan, 'requestedCount' | 'maxResults'> | null | undefined): number {
-  return explicitResultCount(plan) ?? 100;
+export function resolveCountIntent(plan: Pick<SearchPlan, 'countIntent' | 'requestedCount' | 'maxResults'> | null | undefined): CountIntent | undefined {
+  if (explicitResultCount(plan) === undefined) return undefined;
+  const intent = plan?.countIntent;
+  if (intent === 'exact' || intent === 'maximum' || intent === 'minimum' || intent === 'approximate') return intent;
+  return 'exact';
+}
+
+/**
+ * How many candidates discovery should attempt to obtain.
+ * - exact / maximum / approximate → the requested count
+ * - minimum → modest over-seek within the safety cap (never fabricate; providers may still shortfall)
+ * - no count → default 100
+ */
+export function discoveryTarget(plan: Pick<SearchPlan, 'requestedCount' | 'maxResults' | 'countIntent'> | null | undefined): number {
+  const explicit = explicitResultCount(plan);
+  if (explicit === undefined) return 100;
+  const intent = resolveCountIntent(plan) ?? 'exact';
+  if (intent === 'minimum') {
+    return Math.min(RESULT_SAFETY_CAP, Math.max(explicit, Math.ceil(explicit * 1.25)));
+  }
+  return explicit;
+}
+
+/**
+ * Hard ceiling on how many candidates may be accepted/persisted for this plan.
+ * maximum/exact/approximate must not intentionally exceed the stated count.
+ * minimum may fill above the stated floor (within RESULT_SAFETY_CAP).
+ */
+export function discoveryAcceptanceCap(plan: Pick<SearchPlan, 'requestedCount' | 'maxResults' | 'countIntent'> | null | undefined): number {
+  const explicit = explicitResultCount(plan);
+  if (explicit === undefined) return RESULT_SAFETY_CAP;
+  const intent = resolveCountIntent(plan) ?? 'exact';
+  if (intent === 'minimum') return RESULT_SAFETY_CAP;
+  return explicit;
+}
+
+/** Honest shortfall vs the user-stated count (not vs an inflated discovery ceiling). */
+export function countShortfall(
+  plan: Pick<SearchPlan, 'requestedCount' | 'maxResults' | 'countIntent'> | null | undefined,
+  candidates: number,
+): number {
+  const explicit = explicitResultCount(plan);
+  if (explicit === undefined) return 0;
+  return Math.max(0, explicit - Math.max(0, candidates));
 }
 
 /** Distinct web queries allowed for a requested count. Scales past the old fixed 80-query ceiling. */
@@ -101,4 +144,25 @@ function uniqueRoles(roles: string[]): string[] {
     out.push(cleaned);
   }
   return out;
+}
+
+/**
+ * Latest-score filter semantics used by Leads API (and exports via the same filters).
+ * Historical rows are ignored; only the newest score matters.
+ */
+export function latestScorePassesFilter(
+  historicalScores: Array<{ score: number; calculatedAt: Date | string | number }>,
+  bounds: { minScore?: number; maxScore?: number } = {},
+): boolean {
+  if (!historicalScores.length) {
+    return bounds.minScore === undefined && bounds.maxScore === undefined;
+  }
+  const latest = [...historicalScores].sort((left, right) => {
+    const leftAt = new Date(left.calculatedAt).getTime();
+    const rightAt = new Date(right.calculatedAt).getTime();
+    return rightAt - leftAt;
+  })[0];
+  if (bounds.minScore !== undefined && latest.score < bounds.minScore) return false;
+  if (bounds.maxScore !== undefined && latest.score > bounds.maxScore) return false;
+  return true;
 }

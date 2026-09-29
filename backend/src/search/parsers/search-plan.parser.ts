@@ -291,13 +291,13 @@ export class SearchPlanParser {
   }
 
   private parseExclusions(prompt: string): string[] {
-    const matches = [...prompt.matchAll(/\b(?:excluding|except|but not|without)\s+([^.,;]+)/gi)];
+    const matches = [...prompt.matchAll(/\b(?:excluding|exclude|except|but\s+not|but\s+exclude|without)\s+([^.,;]+)/gi)];
     return [...new Set(matches.map((match) => match[1].trim()).filter((text) => text && !/^specifying\b/i.test(text)))];
   }
 
   private withoutExclusions(prompt: string): string {
     return prompt
-      .replace(/\b(?:excluding|except|but not|without)\s+[^.,;]+/gi, ' ')
+      .replace(/\b(?:excluding|exclude|except|but\s+not|but\s+exclude|without)\s+[^.,;]+/gi, ' ')
       .replace(/\s+/g, ' ')
       .trim();
   }

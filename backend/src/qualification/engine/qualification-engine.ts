@@ -1,4 +1,5 @@
 import { assessCategoryEvidence } from '../../search/category-evidence';
+import { assessPlanExclusions } from '../../search/exclusion-evidence';
 import type { SearchPlan } from '../../search/types/search-plan.types';
 import { roleMatches } from '../../contacts/discovery/public-decision-maker';
 import { sameCountry } from '../../sources/location/location-evidence';
@@ -178,6 +179,9 @@ export function normalizeCriteria(plan: SearchPlan | null | undefined): Qualific
     personEmailRequired,
     companyEmailRequired,
     verifiedEmailRequired,
+    exclusions: [...(plan?.exclusions ?? [])].map((item) => item.trim()).filter(Boolean),
+    requestedCount: plan?.requestedCount ?? plan?.maxResults,
+    countIntent: plan?.countIntent,
     minimumScore: plan?.minimumScore,
   };
 }
@@ -199,6 +203,7 @@ export function evaluateQualification(context: QualificationContext, criteria: Q
   if (criteria.companySize) results.push(evaluateCompanySize(context, criteria));
   if (criteria.industry.length || criteria.leadTypes.length) results.push(evaluateCategory(context, criteria));
   if (criteria.requiredRoles.length) results.push(evaluateDecisionMaker(context, criteria));
+  if (criteria.exclusions.length) results.push(evaluateExclusions(context, criteria));
 
   for (const field of new Set([...criteria.companyRequiredFields, ...criteria.personRequiredFields, ...criteria.preferredFields])) {
     if (['companyWebsite', 'website', 'companyLinkedin', 'companyFacebook', 'companyInstagram', 'companyYoutube', 'companyX'].includes(field)) continue;
@@ -547,6 +552,45 @@ export function companySizeFit(employeeCount: number | null, employeeRange: stri
   if (span.max < min || span.min > max) return 'OUTSIDE_RANGE';
   if (span.min >= min && span.max <= max) return 'MATCHED';
   return 'UNKNOWN';
+}
+
+function evaluateExclusions(context: QualificationContext, criteria: QualificationCriteria): CriterionEvidence {
+  const corpus = [
+    context.company.name,
+    context.company.description,
+    context.company.category,
+    context.company.investorType,
+    ...context.evidence.map((item) => item.evidenceText),
+  ].filter(Boolean).join(' ');
+  const assessments = assessPlanExclusions({
+    exclusions: criteria.exclusions,
+    text: corpus,
+    companyName: context.company.name,
+    category: context.company.category,
+  });
+  const excluded = assessments.filter((item) => item.verdict === 'EXCLUDED');
+  if (excluded.length) {
+    const lead = excluded[0];
+    return evidence('exclusion', 'NO_MATCH', true, `Excluded by search plan (“${lead.exclusion}”).`, {
+      source: 'exclusion_evidence',
+      sourceUrl: null,
+      excerpt: lead.excerpt,
+    }, null);
+  }
+  const ambiguous = assessments.filter((item) => item.verdict === 'AMBIGUOUS');
+  if (ambiguous.length) {
+    const lead = ambiguous[0];
+    return evidence('exclusion', 'NEEDS_REVIEW', true, `Exclusion evidence is ambiguous for “${lead.exclusion}”; not fabricating an exclusion decision.`, {
+      source: 'exclusion_evidence',
+      sourceUrl: null,
+      excerpt: lead.excerpt,
+    }, null);
+  }
+  return evidence('exclusion', 'MATCH', true, 'No exclusion match found in available evidence.', {
+    source: 'exclusion_evidence',
+    sourceUrl: null,
+    excerpt: criteria.exclusions.join(', '),
+  }, null);
 }
 
 function evaluateCategory(context: QualificationContext, criteria: QualificationCriteria): CriterionEvidence {

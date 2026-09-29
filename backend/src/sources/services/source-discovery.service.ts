@@ -7,7 +7,13 @@ import { ProviderObservabilityService } from '../../common/observability/provide
 import { RequestContextService } from '../../common/observability/request-context.service';
 import { UsageService } from '../../usage/usage.service';
 import { SearchPlan } from '../../search/types/search-plan.types';
-import { discoveryTarget, explicitResultCount } from '../../search/search-plan.limits';
+import {
+  countShortfall,
+  discoveryAcceptanceCap,
+  discoveryTarget,
+  explicitResultCount,
+  resolveCountIntent,
+} from '../../search/search-plan.limits';
 import { toCountryCode } from '../location/location-evidence';
 import { isRecoverableDiscoveryError, SourceProviderError } from '../providers/source-provider.error';
 import { SOURCE_PROVIDER } from '../interfaces/source-provider.interface';
@@ -62,6 +68,8 @@ export class SourceDiscoveryService {
     await this.usage.checkRequestRate(organizationId, undefined, 'DISCOVERY');
     const target = discoveryTarget(plan);
     const explicit = explicitResultCount(plan);
+    const acceptanceCap = discoveryAcceptanceCap(plan);
+    const countIntent = resolveCountIntent(plan) ?? null;
     const synthetic = this.provider.metadata().synthetic;
     let rejected = 0;
     let duplicates = 0;
@@ -70,7 +78,10 @@ export class SourceDiscoveryService {
     let primaryError: string | null = null;
     try {
       const result = await this.providerObservability.track(this.provider.providerName(), 'DISCOVERY', async () => ({ value: await this.provider.searchBusinesses(plan, context) }));
-      primaryResults = result.results;
+      primaryResults = result.results.slice(0, acceptanceCap);
+      if ((result.results.length ?? 0) > primaryResults.length) {
+        rejected += result.results.length - primaryResults.length;
+      }
       primaryError = result.providerError ?? null;
       rejected += result.rejectedCandidates ?? 0;
       duplicates += result.duplicatesRemoved ?? 0;
@@ -87,10 +98,11 @@ export class SourceDiscoveryService {
 
     let webResults: NormalizedSourceResult[] = [];
     let webError: string | null = null;
-    if (!synthetic && primaryResults.length < target) {
+    const remainingSlots = Math.max(0, Math.min(target, acceptanceCap) - primaryResults.length);
+    if (!synthetic && remainingSlots > 0) {
       try {
-        const extra = await this.webDiscovery.collect(plan, target - primaryResults.length, primaryResults);
-        webResults = extra.results;
+        const extra = await this.webDiscovery.collect(plan, remainingSlots, primaryResults);
+        webResults = extra.results.slice(0, remainingSlots);
         webError = extra.providerError;
         rejected += extra.rejected;
         providerQueries += extra.queriesRun;
@@ -107,9 +119,11 @@ export class SourceDiscoveryService {
       web: { results: webResults, error: webError },
     });
     duplicates += resolved.duplicatesRemoved;
+    const cappedPrimary = resolved.primary.slice(0, acceptanceCap);
+    const cappedWeb = resolved.web.slice(0, Math.max(0, acceptanceCap - cappedPrimary.length));
     let candidates = 0;
-    candidates += await this.persistResults(organizationId, executionId, this.provider.getSourceType(), resolved.primary, synthetic, context);
-    if (!synthetic) candidates += await this.persistResults(organizationId, executionId, 'web_search', resolved.web, false, context);
+    candidates += await this.persistResults(organizationId, executionId, this.provider.getSourceType(), cappedPrimary, synthetic, context);
+    if (!synthetic) candidates += await this.persistResults(organizationId, executionId, 'web_search', cappedWeb, false, context);
     const failure = discoveryProviderFailure(
       candidates,
       this.provider.providerName(),
@@ -121,22 +135,25 @@ export class SourceDiscoveryService {
       throw new SourceProviderError(discoveryFailureCode(failure), failure, true);
     }
 
-    const shortfall = explicit === undefined ? 0 : Math.max(0, explicit - candidates);
-    const remaining = Math.max(0, target - candidates);
+    const shortfall = countShortfall(plan, candidates);
+    const remaining = Math.max(0, (explicit ?? target) - candidates);
+    const discovered = primaryResults.length + webResults.length;
     const unresolved = (plan.unresolvedRequirements ?? plan.unresolvedCriteria ?? [])
       .map((item) => item.text)
       .filter(Boolean)
       .slice(0, 8)
       .join(' | ');
-    await this.usage.recordUsage({ organizationId, operation: 'DISCOVERY', provider: this.provider.providerName(), resourceType: 'search_execution', resourceId: executionId, units: 1, status: 'COMPLETED', requestId: context.requestId, metadata: { candidates } });
+    await this.usage.recordUsage({ organizationId, operation: 'DISCOVERY', provider: this.provider.providerName(), resourceType: 'search_execution', resourceId: executionId, units: 1, status: 'COMPLETED', requestId: context.requestId, metadata: { candidates, countIntent, shortfall } });
     await this.audit(organizationId, executionId, 'CANDIDATES_DISCOVERED', undefined, {
       count: String(candidates),
       requested: explicit === undefined ? '' : String(explicit),
-      discovered: String(primaryResults.length + webResults.length),
+      countIntent: countIntent ?? '',
+      discovered: String(discovered),
       accepted: String(candidates),
       rejected: String(rejected),
       duplicatesRemoved: String(duplicates),
       persisted: String(candidates),
+      qualified: '', // filled later by qualification stage; never claim requested == qualified here
       shortfall: String(shortfall),
       remainingTarget: String(remaining),
       providerQueries: String(providerQueries),
@@ -144,14 +161,17 @@ export class SourceDiscoveryService {
       primaryError: primaryError ?? '',
       webError: webError ?? '',
       unresolvedRequirements: unresolved,
+      exclusions: (plan.exclusions ?? []).slice(0, 8).join(' | '),
       status: shortfall > 0 ? 'SHORTFALL' : 'COMPLETE',
     });
-    await this.audit(organizationId, executionId, 'SOURCE_SEARCH_COMPLETED', undefined, { count: String(candidates), provider: this.provider.providerName() });
+    await this.audit(organizationId, executionId, 'SOURCE_SEARCH_COMPLETED', undefined, { count: String(candidates), provider: this.provider.providerName(), countIntent: countIntent ?? '' });
     return {
       candidates,
       requested: explicit ?? null,
-      discovered: primaryResults.length + webResults.length,
+      countIntent,
+      discovered,
       accepted: candidates,
+      persisted: candidates,
       rejected,
       duplicatesRemoved: duplicates,
       shortfall,

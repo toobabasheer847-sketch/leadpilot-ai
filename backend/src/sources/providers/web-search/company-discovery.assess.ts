@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { classifyOfficialWebsiteHost } from '../../../enrichment/website/official-website.validator';
 import { assessCategoryEvidence } from '../../../search/category-evidence';
-import { discoveryQueryBudget } from '../../../search/search-plan.limits';
+import { discoveryQueryBudget, discoveryTarget } from '../../../search/search-plan.limits';
+import { assessPlanExclusions } from '../../../search/exclusion-evidence';
 import { expansionCities, placeMentioned } from '../../../search/search-plan.places';
 import { toCountryCode } from '../../location/location-evidence';
 import type { SearchLocation, SearchPlan } from '../../../search/types/search-plan.types';
@@ -59,7 +60,8 @@ export function companyDiscoveryQueries(plan: SearchPlan, maxQueries: number): s
 }
 
 export function queryBudgetForPlan(plan: SearchPlan, remaining: number): number {
-  const requested = plan.requestedCount ?? plan.maxResults ?? remaining;
+  // Use discoveryTarget so minimum intents get a slightly larger query budget.
+  const requested = discoveryTarget(plan);
   return discoveryQueryBudget(Math.max(remaining, requested));
 }
 
@@ -137,6 +139,12 @@ export function assessWebCompanyCandidate(
   if (requested && !location) return { accepted: false, reason: 'OUTSIDE_REQUESTED_LOCATION' };
   const category = categoryDecision(text, plan, name);
   if (!category.matched) return { accepted: false, reason: category.reason };
+  if ((plan.exclusions?.length ?? 0) > 0) {
+    const exclusions = assessPlanExclusions({ exclusions: plan.exclusions ?? [], text, companyName: name, category: category.label });
+    if (exclusions.some((item) => item.verdict === 'EXCLUDED')) {
+      return { accepted: false, reason: 'EXCLUSION_MATCH' };
+    }
+  }
   const website = canonicalWebsite(hit.url);
   const externalId = createHash('sha256').update(`${name.toLowerCase()}|${hostname}`).digest('hex').slice(0, 40);
   return {

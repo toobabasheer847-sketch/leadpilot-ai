@@ -24,6 +24,11 @@ export interface QualificationCriteria {
   companyEmailRequired: boolean;
   /** True when the plan asked for a verified email. */
   verifiedEmailRequired: boolean;
+  /** Prompt exclusions preserved for qualification (evidence-based). */
+  exclusions: string[];
+  /** Plan count semantics retained for audit/traceability (not a per-lead gate). */
+  requestedCount?: number;
+  countIntent?: SearchPlan['countIntent'];
   minimumScore?: number;
 }
 
