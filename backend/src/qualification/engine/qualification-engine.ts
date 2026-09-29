@@ -7,6 +7,7 @@ import { sameCountry } from '../../sources/location/location-evidence';
 import { rejectDiscoveryUrl } from '../../sources/services/discovery-candidate.gate';
 import { isGenericBusinessEmail } from '../../verification/utils/generic-email';
 import type { CriterionEvidence, CriterionResultCode, QualificationContext, QualificationCriteria, QualificationDecision } from '../types/qualification.types';
+import { applyFinalDataQualityGate } from './final-quality-gate';
 
 const REAL_ESTATE_POSITIVE = [
   /\bbe?uy(?:s|ing)?\s+(?:houses?|homes?|properties|real estate)\b/i,
@@ -17,13 +18,17 @@ const REAL_ESTATE_POSITIVE = [
   /\bfix(?:\s|-)?and(?:\s|-)?flip\b/i,
   /\bbuy(?:\s|-)?and(?:\s|-)?hold\b/i,
   /\bbrrrr?\b/i,
+  /\bwholesal(?:e|er|ing)\b/i,
   /\brental\s+(?:property\s+)?acquisitions?\b/i,
   /\b(?:commercial|land|multifamily|multi-family)\s+(?:property\s+)?acquisitions?\b/i,
   /\binvestment\s+portfolio\b/i,
   /\b(?:owned|property)\s+portfolio\b/i,
   /\bwe\s+buy\s+houses?\b/i,
+  /\breal\s+estate\s+invest(?:or|ment|ing)\b/i,
+  /\bproperty\s+invest(?:or|ment|ing)\b/i,
 ];
 
+/** Service/adjacent businesses that are NOT investors — even when "real estate" appears. */
 const REAL_ESTATE_NEGATIVE = [
   /\bbrokerage(?:\s+only)?\b/i,
   /\brealtor\b|\breal\s+estate\s+agent\b|\bestate\s+agent\b/i,
@@ -32,14 +37,38 @@ const REAL_ESTATE_NEGATIVE = [
   /\btitle\s+(?:company|services?)\b/i,
   /\binsurance\b/i,
   /\binspection\s+(?:company|services?)\b/i,
-  /\blaw\s+firm\b|\blegal\s+services?\b/i,
-  /\bcontractor\b/i,
+  /\blaw\s+firm\b|\blegal\s+services?\b|\breal\s+estate\s+attorney\b|\breal\s+estate\s+lawyer\b/i,
+  /\bcontractor\b|\bconstruction\s+company\b/i,
   /\bapartment\s+leasing\b/i,
-  /\bwholesal(?:e|ing)\b/i,
   /\bmarketing\s+(?:agency|services?)\b|\bsoftware\s+(?:company|platform)\b/i,
+  /\breal\s+estate\s+photographer\b|\bproperty\s+photographer\b/i,
+  /\breal\s+estate\s+agency\b|\brealty\s+agency\b/i,
 ];
 
-export const QUALIFICATION_VERSION = 'qualification-v1';
+const SPECIALIZATION_PATTERNS: Array<{ types: RegExp; patterns: RegExp[] }> = [
+  {
+    types: /cash_home_buyer|house_buyer/i,
+    patterns: [/\bcash\s+(?:home|house)\s+buy/i, /\bwe\s+buy\s+houses?\b/i, /\bhouse\s+buying\b/i, /\bcash\s+offer\b/i],
+  },
+  {
+    types: /fix_and_flip|house_flipper/i,
+    patterns: [/\bfix(?:\s|-)?and(?:\s|-)?flip\b/i, /\bhouse\s+flip/i, /\bflip(?:ping)?\s+(?:houses?|homes?|properties)\b/i],
+  },
+  {
+    types: /wholesaler|wholesaling/i,
+    patterns: [/\bwholesal(?:e|er|ing)\b/i, /\boff[\s-]?market\b/i, /\bassignment\s+(?:of\s+)?contract\b/i],
+  },
+  {
+    types: /buy_and_hold|brrrr/i,
+    patterns: [/\bbuy(?:\s|-)?and(?:\s|-)?hold\b/i, /\bbrrrr?\b/i, /\brental\s+(?:property\s+)?acquisitions?\b/i],
+  },
+  {
+    types: /commercial_real_estate_investor|land_investor/i,
+    patterns: [/\bcommercial\s+(?:real\s+estate|property|acquisitions?)\b/i, /\bland\s+(?:invest|acqui)/i],
+  },
+];
+
+export const QUALIFICATION_VERSION = 'qualification-v2-phase-p';
 
 function hasRoles(plan: SearchPlan | null | undefined): boolean {
   return Boolean(
@@ -204,6 +233,7 @@ export function evaluateQualification(context: QualificationContext, criteria: Q
   if (criteria.locations.length) results.push(evaluateLocation(context, criteria));
   if (criteria.companySize) results.push(evaluateCompanySize(context, criteria));
   if (criteria.industry.length || criteria.leadTypes.length) results.push(evaluateCategory(context, criteria));
+  if (hasSpecificSpecialization(criteria.leadTypes)) results.push(evaluateSpecialization(context, criteria));
   if (criteria.requiredRoles.length) results.push(evaluateDecisionMaker(context, criteria));
   if (criteria.exclusions.length) results.push(evaluateExclusions(context, criteria));
 
@@ -315,7 +345,7 @@ export function evaluateQualification(context: QualificationContext, criteria: Q
   const needsReviewReasons = results.filter((item) => item.result === 'NEEDS_REVIEW' || (item.required && item.result === 'NOT_FOUND')).map((item) => item.message);
   const missingOptional = results.filter((item) => !item.required && (item.result === 'NOT_FOUND' || item.result === 'NO_MATCH')).map((item) => `${item.criterion}: ${item.message}`);
 
-  return {
+  return applyFinalDataQualityGate({
     status,
     criteria,
     criterionResults: results,
@@ -326,7 +356,7 @@ export function evaluateQualification(context: QualificationContext, criteria: Q
     score: context.score?.value ?? null,
     scoreBand: context.score?.band ?? null,
     scoreBreakdown: context.score?.breakdown ?? null,
-  };
+  });
 }
 
 function evaluateSpecificField(context: QualificationContext, field: string, required: boolean, verificationRequired: boolean, requiredRoles: string[] = []): CriterionEvidence {
@@ -488,20 +518,20 @@ function evaluateLocation(context: QualificationContext, criteria: Qualification
   const foundLabel = [context.location.city, context.location.state, context.location.country].filter(Boolean).join(', ') || 'unknown';
   const fits = criteria.locations.map((wanted) => placeFit(wanted, context.location));
   if (fits.includes('match')) {
-    return evidence('location', 'MATCH', true, `Location matched requested criteria (${foundLabel}).`, {
+    return evidence('location', 'MATCH', true, `Company location matched requested criteria (${foundLabel}).`, {
       source: 'company_locations',
       sourceUrl: null,
       excerpt: foundLabel,
     }, verification);
   }
   if (fits.includes('incomplete')) {
-    return evidence('location', 'NEEDS_REVIEW', true, `Location evidence is incomplete for the requested place (found ${foundLabel}).`, {
+    return evidence('location', 'NEEDS_REVIEW', true, `Company location evidence is incomplete for the requested place (found ${foundLabel}).`, {
       source: 'company_locations',
       sourceUrl: null,
       excerpt: foundLabel,
     }, verification);
   }
-  return evidence('location', 'NO_MATCH', true, `Location did not match requested criteria (found ${foundLabel}).`, {
+  return evidence('location', 'NO_MATCH', true, `Company location did not match requested criteria (found ${foundLabel}).`, {
     source: 'company_locations',
     sourceUrl: null,
     excerpt: foundLabel,
@@ -509,7 +539,7 @@ function evaluateLocation(context: QualificationContext, criteria: Qualification
 }
 
 function placeFit(
-  wanted: { country?: string; state?: string; city?: string; region?: string },
+  wanted: { country?: string; state?: string; city?: string; region?: string; postalCode?: string },
   found: QualificationContext['location'],
 ): 'match' | 'conflict' | 'incomplete' {
   let matched = false;
@@ -529,6 +559,11 @@ function placeFit(
     conflict = agree(stateAgrees, statePresent) || conflict;
   }
   if (wanted.city) conflict = agree(Boolean(found?.city && found.city.toLowerCase() === wanted.city.toLowerCase()), Boolean(found?.city)) || conflict;
+  if (wanted.postalCode) {
+    const wantedZip = normalizePostal(wanted.postalCode);
+    const foundZip = found?.postalCode ? normalizePostal(found.postalCode) : null;
+    conflict = agree(Boolean(foundZip && wantedZip && foundZip === wantedZip), Boolean(foundZip)) || conflict;
+  }
   if (wanted.region) {
     const haystack = [found?.city, found?.state].filter(Boolean).join(' ').toLowerCase();
     conflict = agree(haystack.includes(wanted.region.toLowerCase()), Boolean(haystack)) || conflict;
@@ -735,6 +770,21 @@ function evaluateDecisionMaker(context: QualificationContext, criteria: Qualific
       excerpt: contacts.map((contact) => `${contact.fullName} (${contact.title ?? 'no title'})`).join('; '),
     }, null);
   }
+  if (!roleMatch.title?.trim()) {
+    return evidence('decisionMaker', 'NEEDS_REVIEW', true, 'Decision-maker lacks an identifiable role/title.', {
+      source: 'company_contacts',
+      sourceUrl: roleMatch.linkedinUrl,
+      excerpt: roleMatch.fullName,
+    }, 'UNVERIFIED');
+  }
+  const nameParts = splitPersonName(roleMatch.fullName);
+  if (!nameParts.first || !nameParts.last) {
+    return evidence('decisionMaker', 'NEEDS_REVIEW', true, 'Decision-maker requires an exact first and last name.', {
+      source: 'company_contacts',
+      sourceUrl: roleMatch.linkedinUrl,
+      excerpt: roleMatch.fullName,
+    }, 'UNVERIFIED');
+  }
   const relationshipStatus = context.verifications.find((item) => item.field === 'companyRelationship')?.status ?? null;
   const relationship = assessPersonCompanyRelationship({
     personName: roleMatch.fullName,
@@ -898,6 +948,93 @@ function parseEmployeeSpan(range: string | null): { min: number; max: number } |
 }
 
 function normalizeState(value: string) {
-  const map: Record<string, string> = { texas: 'TX', tx: 'TX', california: 'CA', ca: 'CA', florida: 'FL', fl: 'FL', 'new york': 'NY', ny: 'NY' };
-  return map[value.toLowerCase()] ?? value.toUpperCase();
+  const cleaned = value.toLowerCase().replace(/\./g, '').trim();
+  const map: Record<string, string> = {
+    texas: 'TX', tx: 'TX', tex: 'TX',
+    california: 'CA', ca: 'CA', calif: 'CA',
+    florida: 'FL', fl: 'FL', fla: 'FL',
+    'new york': 'NY', ny: 'NY',
+    arizona: 'AZ', az: 'AZ',
+    colorado: 'CO', co: 'CO',
+    georgia: 'GA', ga: 'GA',
+    illinois: 'IL', il: 'IL',
+    massachusetts: 'MA', ma: 'MA', mass: 'MA',
+    michigan: 'MI', mi: 'MI',
+    nevada: 'NV', nv: 'NV',
+    'north carolina': 'NC', nc: 'NC',
+    ohio: 'OH', oh: 'OH',
+    oregon: 'OR', or: 'OR',
+    pennsylvania: 'PA', pa: 'PA',
+    tennessee: 'TN', tn: 'TN',
+    virginia: 'VA', va: 'VA',
+    washington: 'WA', wa: 'WA',
+  };
+  return map[cleaned] ?? value.toUpperCase();
+}
+
+function normalizePostal(value: string): string {
+  return value.replace(/\s+/g, '').toUpperCase();
+}
+
+function splitPersonName(fullName: string | null | undefined): { first: string | null; last: string | null } {
+  if (!fullName?.trim()) return { first: null, last: null };
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return { first: parts[0] ?? null, last: null };
+  return { first: parts[0] ?? null, last: parts.slice(1).join(' ') };
+}
+
+function hasSpecificSpecialization(leadTypes: string[]): boolean {
+  return leadTypes.some((type) => SPECIALIZATION_PATTERNS.some((group) => group.types.test(type)));
+}
+
+/** Specific lead-type specialization (cash buyer / flip / wholesale) — separate from broad category. */
+function evaluateSpecialization(context: QualificationContext, criteria: QualificationCriteria): CriterionEvidence {
+  const relevantEvidence = context.evidence.filter((item) => item.evidenceText?.trim());
+  const corpus = [
+    context.company.description,
+    context.company.investorType,
+    context.classification?.investorType,
+    ...relevantEvidence.map((item) => item.evidenceText),
+  ].filter(Boolean).join('\n');
+
+  const requestedGroups = SPECIALIZATION_PATTERNS.filter((group) => criteria.leadTypes.some((type) => group.types.test(type)));
+  if (!requestedGroups.length) {
+    return evidence('specialization', 'MATCH', false, 'No specific specialization was requested.', null, null);
+  }
+
+  const matched = requestedGroups.find((group) => group.patterns.some((pattern) => pattern.test(corpus)));
+  if (matched) {
+    const hit = findEvidence(relevantEvidence, matched.patterns) ?? relevantEvidence[0];
+    return evidence('specialization', 'MATCH', true, `Specialization evidence matched requested lead type (${criteria.leadTypes.join(', ')}).`, {
+      source: hit?.provider ?? hit?.sourceType ?? 'stored-evidence',
+      sourceUrl: hit?.sourceUrl ?? null,
+      excerpt: hit?.evidenceText ?? corpus.slice(0, 160),
+      evidenceId: hit?.id,
+      retrievedAt: hit?.retrievedAt ?? null,
+    }, null);
+  }
+
+  // Classification investorType can support specialization without inventing new evidence text.
+  const classified = (context.classification?.investorType ?? context.company.investorType ?? '').toLowerCase();
+  if (classified && requestedGroups.some((group) => group.types.test(classified.replace(/\s+/g, '_')))) {
+    return evidence('specialization', 'MATCH', true, `Classification investor type supports requested specialization (${classified}).`, {
+      source: 'lead_classifications',
+      sourceUrl: null,
+      excerpt: classified,
+    }, null);
+  }
+
+  // Broad investor evidence without the specific specialization → review, not silent fail.
+  const broadInvestor = findEvidence(relevantEvidence, REAL_ESTATE_POSITIVE, { requirePositiveIntent: true });
+  if (broadInvestor) {
+    return evidence('specialization', 'NEEDS_REVIEW', true, 'Investor evidence exists but does not clearly support the requested specialization.', {
+      source: broadInvestor.provider ?? broadInvestor.sourceType ?? 'stored-evidence',
+      sourceUrl: broadInvestor.sourceUrl,
+      excerpt: broadInvestor.evidenceText,
+      evidenceId: broadInvestor.id,
+      retrievedAt: broadInvestor.retrievedAt,
+    }, null);
+  }
+
+  return evidence('specialization', 'NEEDS_REVIEW', true, 'Specialization evidence is insufficient to qualify or disqualify.', null, null);
 }

@@ -1,6 +1,7 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, like } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
+import { clampConcurrency, mapWithConcurrency } from '../common/concurrency';
 import { DRIZZLE } from '../database/database.constants';
 import type { Database } from '../database/database.types';
 import {
@@ -76,13 +77,17 @@ export class QualificationService {
     const plan = this.asPlan(execution.structuredPlan);
     const criteria = normalizeCriteria(plan);
     const companyIds = await this.companyIdsForExecution(data.searchExecutionId, data.organizationId);
-    const stored = [];
-    for (const companyId of companyIds) {
+    const concurrency = clampConcurrency(
+      Number(process.env.QUALIFICATION_CONCURRENCY ?? process.env.ENRICHMENT_CONCURRENCY ?? 8),
+      4,
+      16,
+    );
+    // Phase P: evaluate companies concurrently within configured bounds — never unbounded Promise.all.
+    const stored = (await mapWithConcurrency(companyIds, concurrency, async (companyId) => {
       const context = await this.loadContext(companyId, data.organizationId, data.searchExecutionId);
       const decision = evaluateQualification(context, criteria);
-      const row = await this.persist(data, companyId, context.contacts[0]?.id ?? null, decision);
-      if (row) stored.push(row);
-    }
+      return this.persist(data, companyId, context.contacts[0]?.id ?? null, decision);
+    }, { maxConcurrency: 16 })).filter((row): row is NonNullable<typeof row> => Boolean(row));
     const qualified = stored.filter((row) => row.status === 'QUALIFIED').length;
     const notQualified = stored.filter((row) => row.status === 'NOT_QUALIFIED').length;
     const needsReview = stored.filter((row) => row.status === 'NEEDS_REVIEW').length;
@@ -105,6 +110,7 @@ export class QualificationService {
         notQualified,
         needsReview,
         shortfall,
+        concurrency,
       },
     });
     await this.audit(data.organizationId, data.searchExecutionId, 'LEAD_QUALIFICATION_COMPLETED', {
@@ -117,6 +123,7 @@ export class QualificationService {
       notQualified,
       needsReview,
       shortfall,
+      concurrency,
       // Never claim requested == qualified; shortfall stays honest when providers lack evidence.
     });
     return stored;

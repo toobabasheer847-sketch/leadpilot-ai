@@ -56,8 +56,15 @@ const ACTIVITIES: ActivityGroup[] = [
   },
   {
     id: 'real-estate-investor',
-    phrases: ['real estate investor', 'real estate investment', 'property investment', 'acquisition'],
-    conflicts: ['real estate agent', 'realtor', 'brokerage', 'property management'],
+    phrases: [
+      'real estate investor', 'real estate investment', 'property investment', 'acquisition',
+      'cash home buyer', 'fix and flip', 'wholesaler', 'we buy houses', 'house buying',
+    ],
+    conflicts: [
+      'real estate agent', 'realtor', 'brokerage', 'property management',
+      'real estate photographer', 'real estate attorney', 'real estate lawyer',
+      'mortgage', 'real estate software', 'real estate agency', 'construction company',
+    ],
   },
 ];
 
