@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto';
 import { DRIZZLE } from '../../database/database.constants';
 import type { Database } from '../../database/database.types';
 import { auditLogs, companies, leadClassifications, leadEvidence } from '../../database/schema/schema';
+import { classificationModeFromCriteria } from './classification-mode';
+import { COMPANY_PROMPT_VERSION } from './prompts/company-classification.prompt';
 import { INVESTOR_PROMPT_VERSION } from './prompts/investor-classification.prompt';
 import { enforceEvidenceBackedDecision, parseClassificationResult } from './schemas/classification.schema';
 import type { LlmProvider } from './providers/llm-provider.interface';
@@ -15,12 +17,16 @@ import type { ClassificationJobData } from './classification.queue';
 import { ClassificationQueue } from './classification.queue';
 import { UsageService } from '../../usage/usage.service';
 
+/** Used only when callers omit criteria. Prefer SearchPlan-derived criteria from the pipeline. */
 const defaultCriteria: ClassificationCriteria = {
-  category: 'REAL_ESTATE_INVESTOR',
-  targetType: 'CASH_HOME_BUYER',
-  requiredSignals: ['cash home buying', 'property acquisition'],
-  excludedSignals: ['brokerage only', 'lending only'],
+  category: 'UNSPECIFIED',
+  requiredSignals: [],
+  excludedSignals: [],
 };
+
+function promptVersionFor(criteria: ClassificationCriteria): string {
+  return classificationModeFromCriteria(criteria) === 'investor' ? INVESTOR_PROMPT_VERSION : COMPANY_PROMPT_VERSION;
+}
 
 @Injectable()
 export class ClassificationService {
@@ -109,6 +115,7 @@ export class ClassificationService {
       await this.usage.assertDailyQuota(data.organizationId, 'AI_CLASSIFICATION');
       const result = enforceEvidenceBackedDecision(parseClassificationResult(await this.llm.classify(input)), new Set(evidence.map((item) => item.evidenceId)));
       const model = this.config.get<string>('openRouter.model') ?? 'unknown';
+      const promptVersion = promptVersionFor(data.criteria);
       const [stored] = await this.db.insert(leadClassifications).values({
         companyId: company.id,
         organizationId: data.organizationId,
@@ -120,7 +127,7 @@ export class ClassificationService {
         confidence: result.confidence.toFixed(4),
         reasoning: result.reasons.join(' '),
         modelName: model,
-        promptVersion: INVESTOR_PROMPT_VERSION,
+        promptVersion,
         reasons: result.reasons,
         positiveEvidence: result.positiveEvidence,
         negativeEvidence: result.negativeEvidence,
@@ -149,7 +156,7 @@ export class ClassificationService {
   }
 
   private buildIdempotencyKey(companyId: string, searchExecutionId: string | null, criteria: ClassificationCriteria) {
-    return createHash('sha256').update(JSON.stringify({ companyId, searchExecutionId, criteria, promptVersion: INVESTOR_PROMPT_VERSION })).digest('hex');
+    return createHash('sha256').update(JSON.stringify({ companyId, searchExecutionId, criteria, promptVersion: promptVersionFor(criteria) })).digest('hex');
   }
 
   private audit(organizationId: string, entityId: string, action: string, metadata: unknown) {

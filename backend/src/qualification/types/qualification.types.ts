@@ -16,6 +16,14 @@ export interface QualificationCriteria {
   personRequiredFields: string[];
   preferredFields: string[];
   verificationRequiredFields: string[];
+  /** Requested company social platforms (optional unless also listed in requiredFields). */
+  socialPlatforms: string[];
+  /** True when a person/decision-maker email was requested (company email must not satisfy it). */
+  personEmailRequired: boolean;
+  /** True when a company-level email was requested. */
+  companyEmailRequired: boolean;
+  /** True when the plan asked for a verified email. */
+  verifiedEmailRequired: boolean;
   minimumScore?: number;
 }
 
@@ -67,6 +75,8 @@ export interface QualificationContext {
     employeeRange: string | null;
     verificationStatus: string;
   };
+  /** Company social profiles discovered for the lead (never fabricated). */
+  socialProfiles: Array<{ platform: string; profileUrl: string | null }>;
   location: { city: string | null; state: string | null; country: string | null; postalCode: string | null } | null;
   contacts: Array<{
     id: string;

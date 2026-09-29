@@ -8,6 +8,7 @@ import {
   companies,
   companyContacts,
   companyLocations,
+  companySocialProfiles,
   leadClassifications,
   leadEvidence,
   leadQualifications,
@@ -21,7 +22,7 @@ import {
 } from '../database/schema/schema';
 import type { SearchPlan } from '../search/types/search-plan.types';
 import type { ScoreBreakdown } from '../scoring/types/scoring.types';
-import { calculateDeterministicScore } from '../scoring/scoring.service';
+import { calculateDeterministicScore, scoringOptionsFromPlan } from '../scoring/scoring.service';
 import { UsageService } from '../usage/usage.service';
 import { evaluateQualification, normalizeCriteria, QUALIFICATION_VERSION } from './engine/qualification-engine';
 import { QualificationQueue } from './qualification.queue';
@@ -152,11 +153,17 @@ export class QualificationService {
     if (!company) throw new NotFoundException('Company not found');
     const [location] = await this.db.select().from(companyLocations).where(eq(companyLocations.companyId, companyId)).limit(1);
     const contacts = await this.db.select().from(companyContacts).where(eq(companyContacts.companyId, companyId));
+    const socialProfiles = await this.db.select({
+      platform: companySocialProfiles.platform,
+      profileUrl: companySocialProfiles.profileUrl,
+    }).from(companySocialProfiles).where(eq(companySocialProfiles.companyId, companyId));
     const evidence = await this.db.select().from(leadEvidence).where(eq(leadEvidence.companyId, companyId));
     const verifications = await this.db.select().from(leadVerifications).where(and(eq(leadVerifications.companyId, companyId), eq(leadVerifications.organizationId, organizationId)));
     const conflicts = await this.db.select().from(verificationConflicts).where(and(eq(verificationConflicts.companyId, companyId), eq(verificationConflicts.organizationId, organizationId)));
     const [classification] = await this.db.select().from(leadClassifications).where(and(eq(leadClassifications.companyId, companyId), eq(leadClassifications.organizationId, organizationId))).orderBy(desc(leadClassifications.createdAt)).limit(1);
     const [scoreRow] = await this.db.select().from(leadScores).where(and(eq(leadScores.companyId, companyId), eq(leadScores.organizationId, organizationId))).orderBy(desc(leadScores.calculatedAt)).limit(1);
+    const execution = await this.findExecution(searchExecutionId, organizationId);
+    const plan = this.asPlan(execution.structuredPlan);
 
     let score = scoreRow ? { value: scoreRow.score, band: scoreRow.band, breakdown: scoreRow.breakdown as ScoreBreakdown } : null;
     if (!score) {
@@ -167,6 +174,7 @@ export class QualificationService {
         classification ? { decision: classification.decision } : null,
         verifications.map((item) => ({ field: item.field, status: item.status, evidenceId: item.evidenceId })),
         evidence.map((item) => ({ id: item.id, evidenceType: item.evidenceType, evidenceText: item.evidenceText, retrievedAt: item.evidenceTimestamp })),
+        scoringOptionsFromPlan(plan),
       );
       score = { value: breakdown.total, band: breakdown.band, breakdown };
       await this.db.insert(leadScores).values({
@@ -197,6 +205,7 @@ export class QualificationService {
         employeeRange: company.employeeRange,
         verificationStatus: company.verificationStatus,
       },
+      socialProfiles: socialProfiles.map((item) => ({ platform: item.platform, profileUrl: item.profileUrl })),
       location: location ? { city: location.city, state: location.state, country: location.country, postalCode: location.postalCode } : null,
       contacts: contacts.map((contact) => ({
         id: contact.id,

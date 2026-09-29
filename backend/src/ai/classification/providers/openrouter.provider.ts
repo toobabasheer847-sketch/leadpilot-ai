@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { classificationModeFromCriteria } from '../classification-mode';
+import { buildCompanyClassificationPrompt } from '../prompts/company-classification.prompt';
 import { buildInvestorClassificationPrompt } from '../prompts/investor-classification.prompt';
 import { classificationParserCategory, classificationResponseFormat, parseClassificationResult, parseModelJson } from '../schemas/classification.schema';
 import { INVESTOR_TYPES, type ClassificationInput, type ClassificationResult } from '../types/classification.types';
@@ -60,14 +62,23 @@ export class OpenRouterProvider implements LlmProvider {
   constructor(private readonly config: ConfigService) {}
 
   async classify(input: ClassificationInput): Promise<ClassificationResult> {
+    const mode = classificationModeFromCriteria(input.criteria);
+    const prompt = mode === 'investor'
+      ? buildInvestorClassificationPrompt(input)
+      : buildCompanyClassificationPrompt(input);
     const completion = await this.chat([
       { role: 'system', content: 'Return only valid JSON matching the requested classification schema. Use only the supplied enum values.' },
-      { role: 'user', content: buildInvestorClassificationPrompt(input) },
-    ], classificationResponseFormat(), { minimalReasoning: true });
+      { role: 'user', content: prompt },
+    ], classificationResponseFormat(mode), { minimalReasoning: true });
     let parsed: unknown;
     try {
       parsed = parseModelJson(completion.content);
-      return parseClassificationResult(parsed);
+      const result = parseClassificationResult(parsed);
+      // Non-investor searches must not invent an investor strategy.
+      if (mode === 'company' && result.investorType !== 'NOT_DETERMINED') {
+        return { ...result, investorType: 'NOT_DETERMINED' };
+      }
+      return result;
     } catch (error) {
       const settings = this.settings();
       if (error instanceof Error && error.message.startsWith('Invalid investor type')) {

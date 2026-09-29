@@ -1,4 +1,6 @@
 import { classificationResponseSchema, enforceEvidenceBackedDecision, parseClassificationResult, parseModelJson } from './schemas/classification.schema';
+import { classificationModeFromCriteria, classificationModeFromPlan } from './classification-mode';
+import { buildCompanyClassificationPrompt } from './prompts/company-classification.prompt';
 import { buildInvestorClassificationPrompt } from './prompts/investor-classification.prompt';
 import { INVESTOR_TYPES } from './types/classification.types';
 import { normalizeEvidence } from './utils/evidence-normalizer';
@@ -126,5 +128,23 @@ describe('AI classification safeguards', () => {
       { id: 'evidence-2', evidenceType: 'COMPANY_WEBSITE', sourceUrl: 'https://example.test/team', evidenceText: ' ', evidenceTimestamp: null, metadata: null },
     ]);
     expect(evidence).toEqual([expect.objectContaining({ evidenceId: 'evidence-1', excerpt: 'We buy houses for cash.', title: 'About' })]);
+  });
+
+  it('Phase C: restaurant and SaaS plans use company classification mode, not investor mode', () => {
+    expect(classificationModeFromPlan({ industry: ['restaurant'], leadTypes: [], category: 'restaurant' })).toBe('company');
+    expect(classificationModeFromPlan({ industry: ['saas'], leadTypes: [], category: 'saas' })).toBe('company');
+    expect(classificationModeFromPlan({ industry: ['real_estate'], leadTypes: ['real_estate_investor'], category: 'real_estate' })).toBe('investor');
+    expect(classificationModeFromCriteria({ category: 'restaurant' })).toBe('company');
+    expect(classificationModeFromCriteria({ category: 'saas' })).toBe('company');
+    expect(classificationModeFromCriteria({ category: 'REAL_ESTATE_INVESTOR', targetType: 'real_estate_investor' })).toBe('investor');
+
+    const restaurantPrompt = buildCompanyClassificationPrompt({
+      company: { id: 'c1', name: 'Dubai Bites', description: null, website: null, category: 'restaurant', investorType: null, investmentStrategy: null, employeeCount: null, employeeRange: null },
+      criteria: { category: 'restaurant' },
+      evidence: [],
+    });
+    expect(restaurantPrompt).toMatch(/requested company\/industry criteria/i);
+    expect(restaurantPrompt).toContain('NOT_DETERMINED');
+    expect(restaurantPrompt).not.toMatch(/cash home buying/i);
   });
 });

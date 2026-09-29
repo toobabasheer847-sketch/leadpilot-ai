@@ -17,6 +17,7 @@ function baseContext(overrides: Partial<QualificationContext> = {}): Qualificati
       employeeRange: '1-50',
       verificationStatus: 'SUPPORTED',
     },
+    socialProfiles: [],
     location: { city: 'Austin', state: 'Texas', country: 'US', postalCode: '78701' },
     contacts: [{
       id: 'contact-1',
@@ -388,11 +389,136 @@ describe('qualification engine', () => {
       contactRequirements: { titles: ['CEO'], fields: ['email'] },
       requiredFields: ['email'],
       optionalFields: ['instagram'],
+      emailRequirement: { requested: true, required: true, verified: false },
       unresolvedCriteria: [],
     });
     expect(normalized.requiredRoles).toEqual(['CEO']);
-    expect(normalized.requiredFields).toEqual(expect.arrayContaining(['companyName', 'location', 'companySize', 'decisionMaker', 'category', 'email']));
+    expect(normalized.personEmailRequired).toBe(true);
+    expect(normalized.personRequiredFields).toContain('personEmail');
+    expect(normalized.requiredFields).toEqual(expect.arrayContaining(['companyName', 'location', 'companySize', 'decisionMaker', 'category', 'personEmail']));
+    expect(normalized.requiredFields).not.toContain('email');
     expect(normalized.optionalFields).toContain('instagram');
     expect(normalized.leadTypes).toEqual([]);
+  });
+
+  it('Phase C: verified decision-maker email is required and company email alone cannot satisfy it', () => {
+    const plan = {
+      industry: ['software'],
+      leadTypes: [],
+      locations: [{ country: 'US', state: 'California' }],
+      companyFields: [],
+      personFields: ['email'],
+      decisionMakerRoles: [],
+      emailRequirement: { requested: true, required: true, verified: true },
+      verificationRequirement: { requested: true, required: true, fields: ['email'] },
+      requiredFields: [],
+      optionalFields: [],
+      unresolvedCriteria: [],
+      originalPrompt: 'Find 10 software companies in California with verified decision-maker emails',
+    };
+    const normalized = normalizeCriteria(plan);
+    expect(normalized.personEmailRequired).toBe(true);
+    expect(normalized.verifiedEmailRequired).toBe(true);
+    expect(normalized.personRequiredFields).toContain('personEmail');
+
+    const companyOnly = evaluateQualification(baseContext({
+      company: { ...baseContext().company, email: 'info@acme.test', category: 'software', employeeCount: null, employeeRange: null },
+      location: { city: 'San Francisco', state: 'California', country: 'US', postalCode: null },
+      contacts: [{ ...baseContext().contacts[0], email: null }],
+      evidence: [{ ...baseContext().evidence[0], evidenceText: 'Acme builds software platforms.' }],
+      classification: null,
+    }), normalized);
+    expect(companyOnly.criterionResults.find((item) => item.criterion === 'personEmail')?.result).toBe('NOT_FOUND');
+    expect(companyOnly.status).not.toBe('QUALIFIED');
+
+    const withPersonUnverified = evaluateQualification(baseContext({
+      company: { ...baseContext().company, email: 'info@acme.test', category: 'software', employeeCount: null, employeeRange: null },
+      location: { city: 'San Francisco', state: 'California', country: 'US', postalCode: null },
+      contacts: [{ ...baseContext().contacts[0], email: 'alex@acme.test' }],
+      verifications: baseContext().verifications.concat([{ field: 'email', status: 'UNVERIFIED', fieldValue: 'alex@acme.test', evidenceId: null }]),
+      evidence: [{ ...baseContext().evidence[0], evidenceText: 'Acme builds software platforms.' }],
+      classification: null,
+    }), normalizeCriteria({ ...plan, requiredRoles: [], decisionMakerRoles: [] }));
+    expect(withPersonUnverified.criterionResults.find((item) => item.criterion === 'personEmail')?.result).toBe('NEEDS_REVIEW');
+    expect(withPersonUnverified.status).toBe('NEEDS_REVIEW');
+  });
+
+  it('Phase C: missing verified/person email must not become QUALIFIED', () => {
+    const normalized = normalizeCriteria({
+      industry: ['software'],
+      leadTypes: [],
+      locations: [{ country: 'US', state: 'California' }],
+      companyFields: [],
+      personFields: ['email'],
+      decisionMakerRoles: ['CEO', 'Founder'],
+      emailRequirement: { requested: true, required: true, verified: true },
+      verificationRequirement: { requested: true, required: true, fields: ['email'] },
+      requiredFields: [],
+      unresolvedCriteria: [],
+    });
+    const decision = evaluateQualification(baseContext({
+      company: { ...baseContext().company, category: 'software', employeeCount: null, employeeRange: null },
+      location: { city: 'San Francisco', state: 'California', country: 'US', postalCode: null },
+      contacts: [{ ...baseContext().contacts[0], email: null }],
+      evidence: [{ ...baseContext().evidence[0], evidenceText: 'We build SaaS software tools.' }],
+      classification: null,
+    }), normalized);
+    expect(decision.status).not.toBe('QUALIFIED');
+    expect(decision.criterionResults.find((item) => item.criterion === 'personEmail')?.result).toBe('NOT_FOUND');
+  });
+
+  it('Phase C: generic social profiles are tracked as optional company socials without fabrication', () => {
+    const normalized = normalizeCriteria({
+      industry: ['software'],
+      leadTypes: [],
+      locations: [{ country: 'US', state: 'California' }],
+      companyFields: [],
+      socialPlatforms: ['linkedin', 'facebook', 'instagram', 'youtube', 'x'],
+      requiredFields: [],
+      unresolvedCriteria: [],
+    });
+    expect(normalized.socialPlatforms).toEqual(expect.arrayContaining(['linkedin', 'facebook', 'instagram']));
+    const missing = evaluateQualification(baseContext({
+      company: { ...baseContext().company, category: 'software', employeeCount: null, employeeRange: null },
+      location: { city: 'San Francisco', state: 'California', country: 'US', postalCode: null },
+      socialProfiles: [],
+      evidence: [{ ...baseContext().evidence[0], evidenceText: 'We build software platforms.' }],
+      classification: null,
+      contacts: [],
+    }), normalizeCriteria({
+      industry: ['software'],
+      leadTypes: [],
+      locations: [{ country: 'US', state: 'California' }],
+      companyFields: [],
+      socialPlatforms: ['linkedin', 'facebook'],
+      requiredRoles: [],
+      requiredFields: ['companyName'],
+      unresolvedCriteria: [],
+    }));
+    expect(missing.criterionResults.filter((item) => item.criterion.startsWith('companySocial:')).every((item) => item.result === 'NOT_FOUND' && !item.required)).toBe(true);
+    expect(missing.status).toBe('QUALIFIED');
+  });
+
+  it('Phase C: investor verified-email behavior remains supported for real-estate investment searches', () => {
+    const normalized = normalizeCriteria({
+      industry: ['real_estate'],
+      leadTypes: ['real_estate_investor'],
+      locations: [{ country: 'US', state: 'Texas' }],
+      companyFields: ['website'],
+      decisionMakerRoles: ['Founder', 'CEO'],
+      requiredRoles: ['Founder', 'CEO'],
+      emailRequirement: { requested: true, required: true, verified: true },
+      verificationRequirement: { requested: true, required: true, fields: ['email'] },
+      personFields: ['email'],
+      requiredFields: [],
+      unresolvedCriteria: [],
+    });
+    expect(normalized.personEmailRequired).toBe(true);
+    expect(normalized.verifiedEmailRequired).toBe(true);
+    expect(normalized.leadTypes).toContain('real_estate_investor');
+    const decision = evaluateQualification(baseContext({
+      contacts: [{ ...baseContext().contacts[0], email: null }],
+    }), normalized);
+    expect(decision.status).toBe('NEEDS_REVIEW');
   });
 });

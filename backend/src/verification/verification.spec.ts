@@ -9,6 +9,10 @@ describe('field-level verification providers', () => {
     const provider = new EmailVerificationProvider();
     await expect(provider.verify({ field: 'email', value: 'bad-email', evidence: [] })).resolves.toMatchObject({ status: 'INVALID' });
     await expect(provider.verify({ field: 'email', value: 'john@example.test', evidence: [] })).resolves.toMatchObject({ status: 'UNVERIFIED', metadata: { ownershipVerified: false, deliverabilityVerified: false } });
+    // Phase C: syntax alone must never become VERIFIED.
+    const syntaxOnly = await provider.verify({ field: 'email', value: 'ceo@acme.test', evidence: [] });
+    expect(syntaxOnly.status).not.toBe('VERIFIED');
+    expect(syntaxOnly.status).toBe('UNVERIFIED');
   });
 
   it('returns NOT_FOUND instead of guessing a missing email or phone', async () => {

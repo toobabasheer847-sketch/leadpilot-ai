@@ -1,12 +1,14 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, isNull, like } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
+import { classificationModeFromPlan } from '../ai/classification/classification-mode';
 import { DRIZZLE } from '../database/database.constants';
 import type { Database } from '../database/database.types';
-import { auditLogs, companies, companyContacts, leadClassifications, leadEvidence, leadScores, leadVerifications } from '../database/schema/schema';
+import { auditLogs, companies, companyContacts, leadClassifications, leadEvidence, leadScores, leadVerifications, searchExecutions } from '../database/schema/schema';
+import type { SearchPlan } from '../search/types/search-plan.types';
 import { CONFLICT_PENALTY, SCORING_VERSION, SCORING_WEIGHTS } from './config/scoring.config';
 import { ScoringQueue } from './scoring.queue';
-import type { ScoreBand, ScoreBreakdown, ScoreSignal, ScoringJobData } from './types/scoring.types';
+import type { ScoreBand, ScoreBreakdown, ScoreSignal, ScoringJobData, ScoringOptions } from './types/scoring.types';
 
 interface ScoreCompany {
   name: string;
@@ -52,7 +54,23 @@ export function scoreBand(score: number): ScoreBand {
   return 'VERY_HIGH';
 }
 
-export function calculateDeterministicScore(company: ScoreCompany, contact: ScoreContact | null, classification: ScoreClassification | null, verifications: ScoreVerification[], evidence: ScoreEvidence[]): ScoreBreakdown {
+export function scoringOptionsFromPlan(plan: SearchPlan | null | undefined): ScoringOptions {
+  return {
+    mode: classificationModeFromPlan(plan),
+    requireDecisionMaker: Boolean(plan?.decisionMakerRoles?.length || plan?.requiredRoles?.length || plan?.contactRequirements?.titles?.length),
+    requireEmail: Boolean(plan?.emailRequirement?.requested),
+  };
+}
+
+export function calculateDeterministicScore(
+  company: ScoreCompany,
+  contact: ScoreContact | null,
+  classification: ScoreClassification | null,
+  verifications: ScoreVerification[],
+  evidence: ScoreEvidence[],
+  options: ScoringOptions = {},
+): ScoreBreakdown {
+  const mode = options.mode ?? 'company';
   const signals: ScoreSignal[] = [];
   const add = (name: string, value: string | number | boolean, points: number, reason: string, evidenceId?: string) => signals.push({ name, value, points, reason, ...(evidenceId ? { evidenceId } : {}) });
   const verification = (field: string) => verifications.find((item) => item.field === field);
@@ -64,13 +82,16 @@ export function calculateDeterministicScore(company: ScoreCompany, contact: Scor
     return { points: 0, reason: `${label} is not verified; missing data is not penalized.` };
   };
 
-  if (classification?.decision === 'QUALIFIED') add('investor_classification', classification.decision, SCORING_WEIGHTS.investorClassification, 'AI classification is QUALIFIED.');
-  else if (classification?.decision === 'NOT_QUALIFIED') add('investor_classification', classification.decision, -SCORING_WEIGHTS.investorClassification, 'AI classification is NOT_QUALIFIED for the investor criteria.');
-  else if (classification?.decision === 'INSUFFICIENT_EVIDENCE') add('investor_classification', classification.decision, 5, 'Classification lacks sufficient evidence and receives only a limited signal.');
-  else add('investor_classification', 'NOT_AVAILABLE', 0, 'No classification is available.');
+  const classificationSignal = mode === 'investor' ? 'investor_classification' : 'category_classification';
+  if (classification?.decision === 'QUALIFIED') add(classificationSignal, classification.decision, SCORING_WEIGHTS.classificationMatch, mode === 'investor' ? 'AI classification is QUALIFIED for the investor criteria.' : 'AI classification is QUALIFIED for the requested company criteria.');
+  else if (classification?.decision === 'NOT_QUALIFIED') add(classificationSignal, classification.decision, -SCORING_WEIGHTS.classificationMatch, mode === 'investor' ? 'AI classification is NOT_QUALIFIED for the investor criteria.' : 'AI classification is NOT_QUALIFIED for the requested company criteria.');
+  else if (classification?.decision === 'INSUFFICIENT_EVIDENCE') add(classificationSignal, classification.decision, 5, 'Classification lacks sufficient evidence and receives only a limited signal.');
+  else add(classificationSignal, 'NOT_AVAILABLE', 0, 'No classification is available.');
 
-  const acquisition = evidence.find((item) => /buy|purchase|acqui|invest|cash home|fix.and.flip|rental/i.test(item.evidenceText));
-  add('acquisition_evidence', Boolean(acquisition), acquisition ? SCORING_WEIGHTS.acquisitionEvidence : 0, acquisition ? 'Evidence contains explicit acquisition or investment language.' : 'No acquisition evidence was found.', acquisition?.id);
+  if (mode === 'investor') {
+    const acquisition = evidence.find((item) => /buy|purchase|acqui|invest|cash home|fix.and.flip|rental/i.test(item.evidenceText));
+    add('acquisition_evidence', Boolean(acquisition), acquisition ? SCORING_WEIGHTS.acquisitionEvidence : 0, acquisition ? 'Evidence contains explicit acquisition or investment language.' : 'No acquisition evidence was found.', acquisition?.id);
+  }
 
   for (const [field, signalName, weight, label] of [
     ['companyName', 'company_identity', SCORING_WEIGHTS.companyIdentity, 'Company identity'],
@@ -97,13 +118,16 @@ export function calculateDeterministicScore(company: ScoreCompany, contact: Scor
   }
 
   const companySize = statusPoints('companySize', SCORING_WEIGHTS.companySize, 'Company size');
-  const strategy = statusPoints('investmentStrategy', SCORING_WEIGHTS.investmentStrategy, 'Investment strategy');
-  const markets = statusPoints('marketsServed', SCORING_WEIGHTS.marketsServed, 'Markets served');
-  const propertyType = statusPoints('propertyTypes', SCORING_WEIGHTS.propertyType, 'Property type');
   add('company_size', company.employeeCount ?? company.employeeRange ?? 'NOT_FOUND', companySize.points, companySize.reason, companySize.evidenceId);
-  add('investment_strategy', company.investmentStrategy ?? 'NOT_FOUND', strategy.points, strategy.reason, strategy.evidenceId);
-  add('markets_served', Boolean(company.marketsServed), markets.points, markets.reason, markets.evidenceId);
-  add('property_type', Boolean(company.propertyTypes), propertyType.points, propertyType.reason, propertyType.evidenceId);
+
+  if (mode === 'investor') {
+    const strategy = statusPoints('investmentStrategy', SCORING_WEIGHTS.investmentStrategy, 'Investment strategy');
+    const markets = statusPoints('marketsServed', SCORING_WEIGHTS.marketsServed, 'Markets served');
+    const propertyType = statusPoints('propertyTypes', SCORING_WEIGHTS.propertyType, 'Property type');
+    add('investment_strategy', company.investmentStrategy ?? 'NOT_FOUND', strategy.points, strategy.reason, strategy.evidenceId);
+    add('markets_served', Boolean(company.marketsServed), markets.points, markets.reason, markets.evidenceId);
+    add('property_type', Boolean(company.propertyTypes), propertyType.points, propertyType.reason, propertyType.evidenceId);
+  }
 
   const latestEvidence = evidence.filter((item) => item.retrievedAt).sort((a, b) => (b.retrievedAt?.getTime() ?? 0) - (a.retrievedAt?.getTime() ?? 0))[0];
   const ageDays = latestEvidence ? Math.max(0, (Date.now() - latestEvidence.retrievedAt!.getTime()) / 86400000) : null;
@@ -129,8 +153,10 @@ export function calculateDeterministicScore(company: ScoreCompany, contact: Scor
     add('conflict_flags', conflictEntries.map((item) => `${item.field}:${item.status}`).join(','), 0, `Conflict/needs-review fields: ${conflictEntries.map((item) => item.field).join(', ')}.`);
   }
 
-  const expectedFields = 11;
-  const availableFields = [company.name, company.website, company.description, company.phone, company.employeeCount ?? company.employeeRange, company.investmentStrategy, contact?.fullName, contact?.title, contact?.email, contact?.phone, contact?.linkedinUrl].filter(Boolean).length;
+  const expectedFields = mode === 'investor' ? 11 : 8;
+  const availableFields = mode === 'investor'
+    ? [company.name, company.website, company.description, company.phone, company.employeeCount ?? company.employeeRange, company.investmentStrategy, contact?.fullName, contact?.title, contact?.email, contact?.phone, contact?.linkedinUrl].filter(Boolean).length
+    : [company.name, company.website, company.description, company.phone, company.employeeCount ?? company.employeeRange, contact?.fullName, contact?.email, contact?.linkedinUrl].filter(Boolean).length;
   const completenessPercentage = Math.round((availableFields / expectedFields) * 100);
   add('data_completeness', completenessPercentage, 0, `${availableFields} of ${expectedFields} important fields are available; completeness is reported separately from verification.`);
 
@@ -194,10 +220,19 @@ export class ScoringService {
     const [classification] = await this.db.select({ decision: leadClassifications.decision }).from(leadClassifications).where(and(eq(leadClassifications.companyId, company.id), eq(leadClassifications.organizationId, data.organizationId))).orderBy(desc(leadClassifications.createdAt)).limit(1);
     const verificationRows = await this.db.select({ field: leadVerifications.field, status: leadVerifications.status, evidenceId: leadVerifications.evidenceId }).from(leadVerifications).where(and(eq(leadVerifications.companyId, company.id), eq(leadVerifications.organizationId, data.organizationId), data.contactId ? eq(leadVerifications.contactId, data.contactId) : isNull(leadVerifications.contactId)));
     const evidenceRows = await this.db.select({ id: leadEvidence.id, evidenceType: leadEvidence.evidenceType, evidenceText: leadEvidence.evidenceText, retrievedAt: leadEvidence.evidenceTimestamp }).from(leadEvidence).where(eq(leadEvidence.companyId, company.id));
-    const breakdown = calculateDeterministicScore(company, contact, classification ?? null, verificationRows, evidenceRows);
+    const options = await this.optionsForExecution(data.searchExecutionId, data.organizationId);
+    const breakdown = calculateDeterministicScore(company, contact, classification ?? null, verificationRows, evidenceRows, options);
     const [stored] = await this.db.insert(leadScores).values({ companyId: company.id, contactId: data.contactId, organizationId: data.organizationId, searchExecutionId: data.searchExecutionId, score: breakdown.total, band: breakdown.band, version: SCORING_VERSION, breakdown, idempotencyKey: data.idempotencyKey }).returning();
     await this.audit(data.organizationId, company.id, 'LEAD_SCORING_COMPLETED', { scoreId: stored?.id, score: breakdown.total, band: breakdown.band, version: SCORING_VERSION, contactId: data.contactId });
     return stored;
+  }
+
+  private async optionsForExecution(searchExecutionId: string | null, organizationId: string): Promise<ScoringOptions> {
+    if (!searchExecutionId) return { mode: 'company' };
+    const [execution] = await this.db.select({ structuredPlan: searchExecutions.structuredPlan }).from(searchExecutions)
+      .where(and(eq(searchExecutions.id, searchExecutionId), eq(searchExecutions.organizationId, organizationId))).limit(1);
+    const plan = execution?.structuredPlan && typeof execution.structuredPlan === 'object' ? execution.structuredPlan as SearchPlan : null;
+    return scoringOptionsFromPlan(plan);
   }
 
   private async findCompany(companyId: string, organizationId: string) {

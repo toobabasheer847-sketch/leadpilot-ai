@@ -149,11 +149,11 @@ export function classificationResponseSchema() {
   };
 }
 
-export function classificationResponseFormat() {
+export function classificationResponseFormat(mode: 'investor' | 'company' = 'investor') {
   return {
     type: 'json_schema',
     json_schema: {
-      name: 'investor_classification',
+      name: mode === 'investor' ? 'investor_classification' : 'company_classification',
       strict: true,
       schema: classificationResponseSchema(),
     },

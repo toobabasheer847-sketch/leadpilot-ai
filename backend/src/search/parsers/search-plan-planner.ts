@@ -250,7 +250,7 @@ function validateDraft(value: unknown, prompt: string, fallback: SearchPlan): Pl
   }
   for (const platform of draft.socialPlatforms) {
     if (!(SOCIAL_PLATFORMS as readonly string[]).includes(platform)) throw new Error(`Planner returned an unsupported social platform (${platform}).`);
-    requireGrounded(draft, 'socialPlatforms', platform, prompt, (quote) => fieldMentioned(quote, platform));
+    requireGrounded(draft, 'socialPlatforms', platform, prompt, (quote) => fieldMentioned(quote, platform) || /\b(?:company\s+)?social\s+(?:profiles?|media|accounts?)\b|\bsocials\b/i.test(quote));
   }
   for (const item of draft.unresolvedRequirements) {
     if (!isRecord(item) || typeof item.text !== 'string' || typeof item.reason !== 'string' || typeof item.sourceText !== 'string'
@@ -274,10 +274,10 @@ function validateDraft(value: unknown, prompt: string, fallback: SearchPlan): Pl
     if (!isRecord(item) || typeof item.field !== 'string' || typeof item.value !== 'string' || typeof item.quote !== 'string') throw new Error('Planner returned an invalid evidence quote.');
     assertKeys(item, ['field', 'value', 'quote'], 'planner evidence quote');
   }
-  const emailMentioned = /e-?mail/i.test(prompt);
-  const emailModal = /\b(?:must|required|need|only)\b[^.]{0,40}\be-?mail\b/i.test(prompt);
+  const emailMentioned = /\be-?mails?\b/i.test(prompt);
+  const emailModal = /\b(?:must|required|need|only)\b[^.]{0,60}\be-?mails?\b/i.test(prompt);
   if (draft.emailRequirement.requested && !emailMentioned) throw new Error('Planner invented an email requirement.');
-  if (draft.emailRequirement.verified && !/verified\s+e-?mail|e-?mail\s+(?:must be\s+)?verified/i.test(prompt)) throw new Error('Planner invented email verification intent.');
+  if (draft.emailRequirement.verified && !/verified\s+(?:decision[- ]makers?\s+)?e-?mails?|e-?mails?\s+(?:must be\s+)?verified/i.test(prompt)) throw new Error('Planner invented email verification intent.');
   if (draft.emailRequirement.required && !draft.emailRequirement.requested) throw new Error('Planner marked an unrequested email as required.');
   if (draft.emailRequirement.required && !draft.emailRequirement.verified && !emailModal) throw new Error('Planner made a plain email request mandatory.');
   if (draft.websiteRequirement.requested && !/website/i.test(prompt)) throw new Error('Planner invented a website requirement.');
@@ -375,9 +375,9 @@ function normalizeDraft(draft: PlannerDraft, prompt: string, fallback: SearchPla
     }),
     ...(draft.leadTypes.length ? [] : fallback.leadTypes.map(normalizeTerm)),
   ]);
-  const personFields = unique(draft.personFields);
-  const companyFields = unique(draft.companyFields);
-  const socialPlatforms = unique(draft.socialPlatforms);
+  const personFields = unique([...draft.personFields, ...(fallback.personFields ?? [])]);
+  const companyFields = unique([...draft.companyFields, ...(fallback.companyFields ?? [])]);
+  const socialPlatforms = unique([...draft.socialPlatforms, ...(fallback.socialPlatforms ?? [])]);
   const companySize = numericSize ?? fallback.companySize;
   const employeeSize = draft.employeeSize
     ? { ...numericSize, ...(draft.employeeSize.qualitative ? { qualitative: draft.employeeSize.qualitative } : {}) }

@@ -36,24 +36,94 @@ const REAL_ESTATE_NEGATIVE = [
 
 export const QUALIFICATION_VERSION = 'qualification-v1';
 
+function hasRoles(plan: SearchPlan | null | undefined): boolean {
+  return Boolean(
+    (plan?.requiredRoles?.length ?? 0)
+    || (plan?.decisionMakerRoles?.length ?? 0)
+    || (plan?.contactRequirements?.titles?.length ?? 0),
+  );
+}
+
+function tokenEquals(value: string, expected: string): boolean {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '') === expected.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function bagHas(bag: string[] | undefined, ...names: string[]): boolean {
+  return (bag ?? []).some((field) => names.some((name) => tokenEquals(field, name)));
+}
+
+/** Person/decision-maker email is required when the plan asked for a person mailbox (not a company inbox). */
+export function planWantsPersonEmail(plan: SearchPlan | null | undefined): boolean {
+  if (!plan) return false;
+  if (bagHas(plan.personFields, 'email', 'personEmail')) return true;
+  if (bagHas(plan.contactRequirements?.fields, 'email', 'personEmail')) return true;
+  if (bagHas(plan.requiredFields, 'personEmail')) return true;
+  if (bagHas(plan.optionalFields, 'personEmail')) return true;
+  if (plan.emailRequirement?.requested && hasRoles(plan)) return true;
+  return false;
+}
+
+export function planWantsCompanyEmail(plan: SearchPlan | null | undefined): boolean {
+  if (!plan) return false;
+  if (bagHas(plan.companyFields, 'email', 'companyEmail')) return true;
+  if (bagHas(plan.requiredFields, 'companyEmail')) return true;
+  if (bagHas(plan.optionalFields, 'companyEmail')) return true;
+  // Plain email with no person/decision-maker context is company-level.
+  if (plan.emailRequirement?.requested && !planWantsPersonEmail(plan)) return true;
+  return false;
+}
+
 export function normalizeCriteria(plan: SearchPlan | null | undefined): QualificationCriteria {
   const requiredRoles = plan?.requiredRoles?.length
     ? plan.requiredRoles
     : plan?.decisionMakerRoles?.length
       ? plan.decisionMakerRoles
       : plan?.contactRequirements?.titles ?? [];
-  const explicitRequiredFields = plan?.requiredFields ?? [];
+  const personEmailRequired = Boolean(
+    planWantsPersonEmail(plan) && (plan?.emailRequirement?.required || plan?.emailRequirement?.verified || bagHas(plan?.requiredFields, 'email', 'personEmail')),
+  );
+  const companyEmailRequired = Boolean(
+    planWantsCompanyEmail(plan) && (plan?.emailRequirement?.required || plan?.emailRequirement?.verified || bagHas(plan?.requiredFields, 'email', 'companyEmail')),
+  );
+  const verifiedEmailRequired = Boolean(plan?.emailRequirement?.verified || bagHas(plan?.verificationRequirement?.fields, 'email', 'personEmail', 'companyEmail'));
+
+  const explicitRequiredFields = [...(plan?.requiredFields ?? [])];
+  // Wire emailRequirement into qualification required fields.
+  if (personEmailRequired && !bagHas(explicitRequiredFields, 'personEmail')) explicitRequiredFields.push('personEmail');
+  if (companyEmailRequired && !bagHas(explicitRequiredFields, 'companyEmail') && !personEmailRequired) explicitRequiredFields.push('companyEmail');
+  if ((plan?.emailRequirement?.required || plan?.emailRequirement?.verified) && !personEmailRequired && !companyEmailRequired && !bagHas(explicitRequiredFields, 'email')) {
+    explicitRequiredFields.push('email');
+  }
+  // Plain "email" with person intent must not be satisfied by a company mailbox.
   const requiredFields = [...new Set([
-    ...explicitRequiredFields,
+    ...explicitRequiredFields.filter((field) => !(personEmailRequired && tokenEquals(field, 'email'))),
     'companyName',
     ...(plan?.locations?.length ? ['location'] as const : []),
     ...(plan?.companySize ? ['companySize'] as const : []),
     ...(requiredRoles.length ? ['decisionMaker'] as const : []),
     ...((plan?.industry?.length || plan?.leadTypes?.length) ? ['category'] as const : []),
   ])];
-  const optionalFields = [...new Set((plan?.optionalFields ?? plan?.companyFields ?? []).concat(plan?.contactRequirements?.fields ?? []).filter((field) => !requiredFields.includes(field) && field !== 'name'))];
+
+  const socialPlatforms = [...new Set((plan?.socialPlatforms ?? []).map((item) => item.toLowerCase()))];
+  const optionalFromPlan = [
+    ...(plan?.optionalFields ?? plan?.companyFields ?? []),
+    ...(plan?.contactRequirements?.fields ?? []),
+    ...socialPlatforms,
+    ...(planWantsPersonEmail(plan) && plan?.emailRequirement?.requested && !personEmailRequired ? ['personEmail'] : []),
+    ...(planWantsCompanyEmail(plan) && plan?.emailRequirement?.requested && !companyEmailRequired ? ['companyEmail'] : []),
+  ];
+  const optionalFields = [...new Set(optionalFromPlan.filter((field) => !requiredFields.includes(field) && !bagHas(requiredFields, field) && field !== 'name'))];
+
   const companyRequiredFields = explicitRequiredFields.filter((field) => ['companyWebsite', 'companyEmail', 'companyPhone', 'companyEmployeeCount', 'companyLocation'].includes(field));
+  if (companyEmailRequired && !companyRequiredFields.includes('companyEmail')) companyRequiredFields.push('companyEmail');
   const personRequiredFields = explicitRequiredFields.filter((field) => ['personName', 'personTitle', 'personEmail', 'personPhone', 'personLinkedin', 'personFacebook', 'personInstagram', 'personYoutube', 'personX'].includes(field));
+  if (personEmailRequired && !personRequiredFields.includes('personEmail')) personRequiredFields.push('personEmail');
+
+  const verificationRequiredFields = [...new Set([
+    ...(plan?.verificationRequirement?.fields ?? []),
+    ...(verifiedEmailRequired ? (personEmailRequired ? ['email', 'personEmail'] : companyEmailRequired ? ['email', 'companyEmail'] : ['email']) : []),
+  ])];
+
   return {
     industry: plan?.industry ?? [],
     leadTypes: plan?.leadTypes ?? [],
@@ -65,7 +135,11 @@ export function normalizeCriteria(plan: SearchPlan | null | undefined): Qualific
     companyRequiredFields,
     personRequiredFields,
     preferredFields: plan?.preferredFields ?? [],
-    verificationRequiredFields: plan?.verificationRequirement?.fields ?? [],
+    verificationRequiredFields,
+    socialPlatforms,
+    personEmailRequired,
+    companyEmailRequired,
+    verifiedEmailRequired,
     minimumScore: plan?.minimumScore,
   };
 }
@@ -86,14 +160,26 @@ export function evaluateQualification(context: QualificationContext, criteria: Q
   for (const field of new Set([...criteria.companyRequiredFields, ...criteria.personRequiredFields, ...criteria.preferredFields])) {
     if (['companyWebsite', 'website'].includes(field)) continue;
     const key = field.replace(/^(company|person)/, '').toLowerCase();
-    const verificationRequired = criteria.verificationRequiredFields.some((item) => item.toLowerCase() === key || item.toLowerCase() === field.toLowerCase());
+    const verificationRequired = criteria.verificationRequiredFields.some((item) => item.toLowerCase() === key || item.toLowerCase() === field.toLowerCase())
+      || (criteria.verifiedEmailRequired && /email/i.test(key));
     results.push(evaluateSpecificField(context, field, criteria.companyRequiredFields.includes(field) || criteria.personRequiredFields.includes(field), verificationRequired));
   }
 
   for (const field of ['email', 'phone', 'linkedin', 'facebook', 'instagram', 'youtube'] as const) {
+    // personEmail/companyEmail are evaluated above; plain email must not double-count or use company fallback for person intent.
+    if (field === 'email' && (criteria.personEmailRequired || criteria.companyEmailRequired)) continue;
     if (criteria.requiredFields.includes(field) || criteria.optionalFields.includes(field)) {
-      results.push(evaluateContactField(context, field, criteria.requiredFields.includes(field)));
+      const personOnly = criteria.personEmailRequired || criteria.requiredRoles.length > 0;
+      results.push(evaluateContactField(context, field, criteria.requiredFields.includes(field), {
+        personOnlyEmail: personOnly,
+        verificationRequired: criteria.verifiedEmailRequired && field === 'email',
+      }));
     }
+  }
+
+  for (const platform of criteria.socialPlatforms) {
+    const required = criteria.requiredFields.some((field) => tokenEquals(field, platform) || tokenEquals(field, `company${platform}`));
+    results.push(evaluateCompanySocial(context, platform, required));
   }
 
   const conflictResult = evaluateConflicts(context, criteria);
@@ -197,10 +283,27 @@ function evaluateSpecificField(context: QualificationContext, field: string, req
   if (verification === 'CONFLICT' || verification === 'NEEDS_REVIEW') {
     return evidence(field, 'NEEDS_REVIEW', required, `${field} has conflicting verification evidence.`, { source: 'verification', sourceUrl: null, excerpt: value }, verification);
   }
-  if (required && verificationRequired && /email|phone/i.test(key) && verification !== 'VERIFIED' && verification !== 'SUPPORTED') {
-    return evidence(field, 'NEEDS_REVIEW', true, `${field} exists but is not verified/supported.`, { source: person ? 'contact_record' : 'company_record', sourceUrl: null, excerpt: value }, verification ?? 'UNVERIFIED');
+  if (required && verificationRequired && /email|phone/i.test(key)) {
+    // Syntax-only / deliverability-unavailable emails stay UNVERIFIED — never treat as VERIFIED.
+    if (verification !== 'VERIFIED' && verification !== 'SUPPORTED') {
+      return evidence(field, 'NEEDS_REVIEW', true, `${field} exists but is not verified/supported.`, { source: person ? 'contact_record' : 'company_record', sourceUrl: null, excerpt: value }, verification ?? 'UNVERIFIED');
+    }
   }
   return evidence(field, 'MATCH', required, `${field} is available.`, { source: person ? 'contact_record' : 'company_record', sourceUrl: null, excerpt: value }, verification);
+}
+
+function evaluateCompanySocial(context: QualificationContext, platform: string, required: boolean): CriterionEvidence {
+  const normalized = platform.toLowerCase();
+  const aliases = normalized === 'x' ? ['x', 'twitter'] : [normalized];
+  const profile = (context.socialProfiles ?? []).find((item) => aliases.includes(item.platform.toLowerCase()) && item.profileUrl);
+  if (!profile?.profileUrl) {
+    return evidence(`companySocial:${normalized}`, 'NOT_FOUND', required, `Company ${normalized} profile was not found.`, null, null);
+  }
+  return evidence(`companySocial:${normalized}`, 'MATCH', required, `Company ${normalized} profile is available.`, {
+    source: 'company_social_profiles',
+    sourceUrl: profile.profileUrl,
+    excerpt: profile.profileUrl,
+  }, fieldStatus(context, normalized));
 }
 
 function evaluateIdentity(context: QualificationContext): CriterionEvidence {
@@ -475,9 +578,15 @@ function evaluateDecisionMaker(context: QualificationContext, criteria: Qualific
   }, verification?.status ?? roleMatch.verificationStatus);
 }
 
-function evaluateContactField(context: QualificationContext, field: string, required: boolean): CriterionEvidence {
+function evaluateContactField(
+  context: QualificationContext,
+  field: string,
+  required: boolean,
+  options: { personOnlyEmail?: boolean; verificationRequired?: boolean } = {},
+): CriterionEvidence {
   const contact = context.contacts[0];
-  const value = field === 'email' ? contact?.email ?? context.company.email
+  const value = field === 'email'
+    ? (options.personOnlyEmail ? contact?.email ?? null : contact?.email ?? context.company.email)
     : field === 'phone' ? contact?.phone ?? context.company.phone
       : field === 'linkedin' ? contact?.linkedinUrl
         : field === 'facebook' ? contact?.facebookUrl
@@ -488,8 +597,10 @@ function evaluateContactField(context: QualificationContext, field: string, requ
   if (verification === 'CONFLICT' || verification === 'NEEDS_REVIEW') {
     return evidence(field, 'NEEDS_REVIEW', required, `${field} has conflicting verification evidence.`, { source: 'verification', sourceUrl: null, excerpt: value }, verification);
   }
-  if (required && verification !== 'VERIFIED' && verification !== 'SUPPORTED' && /email|phone/.test(field)) {
-    return evidence(field, 'NEEDS_REVIEW', required, `${field} exists but is not verified/supported.`, { source: 'contact_record', sourceUrl: null, excerpt: value }, verification ?? 'UNVERIFIED');
+  if ((required || options.verificationRequired) && (options.verificationRequired || required) && /email|phone/.test(field)) {
+    if (verification !== 'VERIFIED' && verification !== 'SUPPORTED') {
+      return evidence(field, 'NEEDS_REVIEW', required || Boolean(options.verificationRequired), `${field} exists but is not verified/supported.`, { source: 'contact_record', sourceUrl: null, excerpt: value }, verification ?? 'UNVERIFIED');
+    }
   }
   return evidence(field, 'MATCH', required, `${field} is available.`, { source: 'contact_record', sourceUrl: null, excerpt: value }, verification);
 }

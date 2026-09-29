@@ -33,3 +33,9 @@ export interface ScoringJobData {
   force: boolean;
   idempotencyKey: string;
 }
+
+export interface ScoringOptions {
+  mode?: 'investor' | 'company';
+  requireDecisionMaker?: boolean;
+  requireEmail?: boolean;
+}

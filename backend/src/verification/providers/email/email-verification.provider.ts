@@ -7,10 +7,11 @@ import { isGenericBusinessEmail } from '../../utils/generic-email';
 
 /**
  * Email verification:
- * - syntax check always
+ * - syntax check always (syntax alone NEVER yields VERIFIED)
  * - generic mailboxes flagged as company-level only
  * - optional ZeroBounce deliverability when ZEROBOUNCE_API_KEY is configured
- * Never performs SMTP mailbox probing.
+ * - ownershipVerified stays false unless a configured provider actually verifies ownership
+ * Never performs SMTP mailbox probing. Never invents emails.
  */
 @Injectable()
 export class EmailVerificationProvider implements VerificationProvider {

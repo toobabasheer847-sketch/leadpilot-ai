@@ -300,8 +300,9 @@ function criteriaFromPlan(plan: unknown): ClassificationCriteria {
   const industry = record.industry?.[0];
   const location = record.locations?.[0];
   const companySize = record.companySize ?? record.employeeSize ?? record.employeeRange;
+  const category = leadType ?? industry ?? record.category ?? 'UNSPECIFIED';
   return {
-    category: leadType ?? industry ?? 'UNSPECIFIED',
+    category,
     ...(leadType ? { targetType: leadType } : {}),
     ...(location ? { location: { country: location.country, ...(location.state ? { states: [location.state] } : {}) } } : {}),
     ...(companySize && hasNumericSize(companySize) ? { companySize } : {}),

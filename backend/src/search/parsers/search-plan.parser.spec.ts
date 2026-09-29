@@ -217,4 +217,26 @@ describe('SearchPlanParser', () => {
     expect(discoveryQueryBudget(300)).toBe(150);
     expect(discoveryQueryBudget(500)).toBe(240);
   });
+
+  it('Phase C: expands generic social profile wording to supported company platforms', () => {
+    const plan = parser.parse('Find 10 software companies in California with social profiles');
+    expect(plan.socialPlatforms).toEqual(expect.arrayContaining(['linkedin', 'facebook', 'instagram', 'youtube', 'x']));
+    expect(plan.industry).toEqual(['software']);
+    expect(plan.locations).toEqual([{ country: 'US', state: 'California' }]);
+  });
+
+  it('Phase C: treats verified decision-maker emails as person email intent', () => {
+    const plan = parser.parse('Find 10 software companies in California with verified decision-maker emails');
+    expect(plan.emailRequirement).toEqual({ requested: true, required: true, verified: true });
+    expect(plan.personFields).toContain('email');
+    expect(plan.verificationRequirement?.fields).toContain('email');
+  });
+
+  it('Phase C: keeps investor prompts with founders/CEOs and verified emails', () => {
+    const plan = parser.parse('Find 10 real estate investment companies in Texas with founders or CEOs and verified emails');
+    expect(plan.leadTypes).toContain('real_estate_investor');
+    expect(plan.decisionMakerRoles).toEqual(expect.arrayContaining(['Founder', 'CEO']));
+    expect(plan.emailRequirement?.verified).toBe(true);
+    expect(plan.emailRequirement?.required).toBe(true);
+  });
 });

@@ -78,9 +78,9 @@ export class SearchPlanParser {
     const personFields = this.parsePersonFields(criteriaPrompt);
     const socialPlatforms = this.parseSocialPlatforms(criteriaPrompt);
     const preferredFields = this.parsePreferredFields(criteriaPrompt, companyFields, contactFields, requiredFields);
-    const emailRequested = /\be-?mail\b/i.test(criteriaPrompt);
-    const emailVerified = /\bverified\s+e-?mail\b|\be-?mail\s+(?:must be\s+)?verified\b/i.test(criteriaPrompt);
-    const emailRequired = emailVerified || /\b(?:must|required|need)\b[^.]{0,40}\be-?mail\b/i.test(criteriaPrompt);
+    const emailRequested = /\be-?mails?\b/i.test(criteriaPrompt);
+    const emailVerified = /\bverified\s+(?:decision[- ]makers?\s+)?e-?mails?\b|\be-?mails?\s+(?:must be\s+)?verified\b/i.test(criteriaPrompt);
+    const emailRequired = emailVerified || /\b(?:must|required|need)\b[^.]{0,60}\be-?mails?\b/i.test(criteriaPrompt);
     const websiteRequested = /\bwebsite\b/i.test(criteriaPrompt);
     const websiteRequired = /\b(?:must|required|need)\b[^.]{0,40}\bwebsite\b/i.test(criteriaPrompt);
     const verificationRequested = /\bverified\b|\bverification\b/i.test(criteriaPrompt);
@@ -243,7 +243,7 @@ export class SearchPlanParser {
   private parsePersonFields(prompt: string): string[] {
     const fields: Array<[RegExp, string]> = [
       [/\b(?:person|decision[- ]maker|contact)(?:'s)?\s+(?:full\s+)?name\b|\b(?:find|identify)\s+(?:the\s+)?(?:ceo|founder|owner|president|manager)\b/i, 'name'],
-      [/\b(?:person|decision[- ]maker|contact)(?:'s)?\s+(?:business\s+)?e-?mail\b|\bpublic contact information\b|\bcontact details\b/i, 'email'],
+      [/\b(?:person|decision[- ]maker|contact)(?:'s)?\s+(?:business\s+)?e-?mails?\b|\b(?:verified\s+)?decision[- ]maker\s+e-?mails?\b|\btheir\s+e-?mails?\b|\bpublic contact information\b|\bcontact details\b/i, 'email'],
       [/\b(?:person|decision[- ]maker|contact)(?:'s)?\s+phone\b|\bpublic contact information\b|\bcontact details\b/i, 'phone'],
       [/\blinkedin\b/i, 'linkedin'],
       [/\bfacebook\b/i, 'facebook'],
@@ -262,7 +262,14 @@ export class SearchPlanParser {
       [/\b(?:x\/twitter|twitter|x account)\b/i, 'x'],
       [/\byoutube\b/i, 'youtube'],
     ];
-    return platforms.filter(([pattern]) => pattern.test(prompt)).map(([, platform]) => platform);
+    const found = platforms.filter(([pattern]) => pattern.test(prompt)).map(([, platform]) => platform);
+    // Generic social wording maps to the platforms the product already supports — never invent URLs.
+    if (/\b(?:company\s+)?social\s+(?:profiles?|media|accounts?)\b|\bsocials\b/i.test(prompt)) {
+      for (const platform of ['linkedin', 'facebook', 'instagram', 'youtube', 'x'] as const) {
+        if (!found.includes(platform)) found.push(platform);
+      }
+    }
+    return found;
   }
 
   private parsePreferredFields(prompt: string, companyFields: string[], contactFields: string[], requiredFields: string[]) {
