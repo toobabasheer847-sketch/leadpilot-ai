@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import type { FieldClaim, VerificationConflictLog, VerificationEvidence, VerificationInput, VerificationSignal } from '../types/verification.types';
+import { independentSourceKey } from '../utils/email-ownership';
 
 @Injectable()
 export class ConflictEngineService {
@@ -30,6 +31,8 @@ export class ConflictEngineService {
           evidenceIds: claims.map((claim) => claim.evidenceId).filter(Boolean),
           values: [...byValue.keys()],
           sourceCount: this.independentSourceCount(claims),
+          ownershipVerified: false,
+          verificationKind: 'evidence',
           requiresReview: true,
           conflict,
         },
@@ -40,7 +43,12 @@ export class ConflictEngineService {
     if (!matches.length) {
       const textMatches = input.evidence.filter((item) => this.evidenceMatches(item, input.field, input.value!));
       if (!textMatches.length) {
-        return { status: 'UNVERIFIED', verificationType: 'SOURCE_EVIDENCE', provider: 'stored-evidence' };
+        return {
+          status: 'UNVERIFIED',
+          verificationType: 'SOURCE_EVIDENCE',
+          provider: 'stored-evidence',
+          metadata: { ownershipVerified: false, verificationKind: 'syntax', sourceCount: 0 },
+        };
       }
       const distinct = new Set(textMatches.map((item) => this.evidenceValue(item)).filter(Boolean).map((value) => this.normalize(input.field, value!)));
       if (distinct.size > 1) {
@@ -55,23 +63,29 @@ export class ConflictEngineService {
           verificationType: 'CROSS_SOURCE_MATCH',
           provider: 'stored-evidence',
           conflict,
-          metadata: { evidenceIds: textMatches.map((item) => item.id), requiresReview: true, conflict },
+          metadata: { evidenceIds: textMatches.map((item) => item.id), requiresReview: true, ownershipVerified: false, conflict },
         };
       }
       const lead = textMatches[0];
+      const sourceCount = this.independentSourceCount(textMatches.map((item) => this.toClaim(item, input.value!)));
       return {
-        status: this.independentSourceCount(textMatches.map((item) => this.toClaim(item, input.value!))) >= 2 ? 'VERIFIED' : 'SUPPORTED',
+        status: sourceCount >= 2 ? 'VERIFIED' : 'SUPPORTED',
         verificationType: 'SOURCE_EVIDENCE',
         provider: 'stored-evidence',
         evidenceId: lead.id,
-        confidence: this.independentSourceCount(textMatches.map((item) => this.toClaim(item, input.value!))) >= 2 ? 0.9 : 0.75,
+        confidence: sourceCount >= 2 ? 0.9 : 0.75,
         provenance: {
           sourceType: lead.sourceType ?? lead.provider ?? null,
           sourceUrl: lead.canonicalUrl ?? lead.sourceUrl,
           retrievedAt: lead.retrievedAt,
           evidenceExcerpt: lead.evidenceText,
         },
-        metadata: { sourceCount: this.independentSourceCount(textMatches.map((item) => this.toClaim(item, input.value!))), sourcePriority: sourcePriority(lead) },
+        metadata: {
+          sourceCount,
+          sourcePriority: sourcePriority(lead),
+          ownershipVerified: false,
+          verificationKind: sourceCount >= 2 ? 'independent_evidence' : 'evidence_supported',
+        },
       };
     }
 
@@ -89,7 +103,12 @@ export class ConflictEngineService {
         retrievedAt: lead.retrievedAt,
         evidenceExcerpt: lead.evidenceExcerpt,
       },
-      metadata: { sourceCount, sourcePriority: sourcePriority({ provider: lead.provider, sourceType: lead.sourceType } as VerificationEvidence) },
+      metadata: {
+        sourceCount,
+        sourcePriority: sourcePriority({ provider: lead.provider, sourceType: lead.sourceType } as VerificationEvidence),
+        ownershipVerified: false,
+        verificationKind: sourceCount >= 2 ? 'independent_evidence' : 'evidence_supported',
+      },
     };
   }
 
@@ -144,7 +163,11 @@ export class ConflictEngineService {
   private independentSourceCount(claims: Array<FieldClaim | VerificationEvidence>): number {
     return new Set(claims.map((claim) => {
       if ('sourceUrl' in claim && 'evidenceExcerpt' in claim && !('evidenceText' in claim)) {
-        return `${claim.provider ?? claim.sourceType}:${claim.sourceUrl}`;
+        return independentSourceKey({
+          provider: claim.provider,
+          sourceType: claim.sourceType,
+          sourceUrl: claim.sourceUrl,
+        });
       }
       return this.sourceKey(claim as VerificationEvidence);
     })).size;
@@ -186,6 +209,6 @@ export class ConflictEngineService {
   }
 
   private sourceKey(item: VerificationEvidence) {
-    return `${item.provider ?? item.sourceType ?? 'unknown'}:${item.canonicalUrl ?? item.sourceUrl}`;
+    return independentSourceKey(item);
   }
 }

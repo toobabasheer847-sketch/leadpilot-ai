@@ -102,7 +102,13 @@ export interface QualificationContext {
     retrievedAt: Date | null;
     metadata: unknown;
   }>;
-  verifications: Array<{ field: string; status: string; fieldValue: string | null; evidenceId: string | null }>;
+  verifications: Array<{
+    field: string;
+    status: string;
+    fieldValue: string | null;
+    evidenceId: string | null;
+    metadata?: Record<string, unknown> | null;
+  }>;
   conflicts: Array<{ fieldName: string; requiresReview: boolean; resolutionStatus: string }>;
   classification: {
     decision: string;

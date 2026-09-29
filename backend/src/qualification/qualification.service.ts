@@ -231,7 +231,13 @@ export class QualificationService {
         retrievedAt: item.evidenceTimestamp,
         metadata: item.metadata,
       })),
-      verifications: verifications.map((item) => ({ field: item.field, status: item.status, fieldValue: item.fieldValue, evidenceId: item.evidenceId })),
+      verifications: verifications.map((item) => ({
+        field: item.field,
+        status: item.status,
+        fieldValue: item.fieldValue,
+        evidenceId: item.evidenceId,
+        metadata: typeof item.metadata === 'object' && item.metadata !== null ? item.metadata as Record<string, unknown> : null,
+      })),
       conflicts: conflicts.map((item) => ({ fieldName: item.fieldName, requiresReview: item.requiresReview, resolutionStatus: item.resolutionStatus })),
       classification: classification ? {
         decision: classification.decision,

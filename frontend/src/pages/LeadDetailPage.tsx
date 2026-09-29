@@ -20,6 +20,7 @@ import { EmptyState, ErrorState } from '../components/feedback/States';
 import { LeadStatusBadge } from '../components/leads/LeadStatusBadge';
 import { useToasts } from '../feedback/toasts';
 import { toCompanyOverview, verificationCards } from '../lib/company-view';
+import { truthfulEmailVerificationStatus } from '../lib/email-verification-label';
 import { mergeEvidence } from '../lib/evidence';
 import { collectSocialLinks } from '../lib/social';
 import type { ClassificationRecord, CompanyProfile, DecisionMaker, EvidenceItem, LeadRecord, ResearchExecution, VerificationSummary } from '../types/api';
@@ -31,7 +32,13 @@ function message(reason: unknown, fallback: string) {
 }
 
 function companyStatus(summary: VerificationSummary | null, fieldName: string): string | null {
-  return summary?.fields.find((field) => field.fieldName === fieldName && !field.contactId)?.status ?? null;
+  const field = summary?.fields.find((item) => item.fieldName === fieldName && !item.contactId);
+  if (!field) return null;
+  if (fieldName === 'email') {
+    const metadata = typeof field.metadata === 'object' && field.metadata !== null ? field.metadata as Record<string, unknown> : null;
+    return truthfulEmailVerificationStatus(field.status, metadata);
+  }
+  return field.status;
 }
 
 export function LeadDetailPage() {

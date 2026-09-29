@@ -2,6 +2,7 @@ import { assessCategoryEvidence } from '../../search/category-evidence';
 import type { SearchPlan } from '../../search/types/search-plan.types';
 import { roleMatches } from '../../contacts/discovery/public-decision-maker';
 import { sameCountry } from '../../sources/location/location-evidence';
+import { isGenericBusinessEmail } from '../../verification/utils/generic-email';
 import type { CriterionEvidence, CriterionResultCode, QualificationContext, QualificationCriteria, QualificationDecision } from '../types/qualification.types';
 
 const REAL_ESTATE_POSITIVE = [
@@ -332,14 +333,29 @@ function evaluateSpecificField(context: QualificationContext, field: string, req
   const verificationField = key === 'employeecount' ? 'companySize' : key === 'name' ? 'fullName' : key;
   const verification = fieldStatus(context, verificationField);
   if (!value) return evidence(field, 'NOT_FOUND', required, `${field} was not found.`, null, verification);
+  if (person && key === 'email' && isGenericBusinessEmail(value)) {
+    return evidence(field, 'NOT_FOUND', required, 'Generic/company mailbox cannot satisfy a person email requirement.', {
+      source: 'contact_record',
+      sourceUrl: null,
+      excerpt: value,
+    }, verification ?? 'UNVERIFIED');
+  }
   if (verification === 'INVALID') {
     return evidence(field, 'NO_MATCH', required, `${field} failed verification.`, { source: 'verification', sourceUrl: null, excerpt: value }, verification);
   }
   if (verification === 'CONFLICT' || verification === 'NEEDS_REVIEW') {
     return evidence(field, 'NEEDS_REVIEW', required, `${field} has conflicting verification evidence.`, { source: 'verification', sourceUrl: null, excerpt: value }, verification);
   }
-  if (required && verificationRequired && /email|phone|linkedin|facebook|instagram|youtube|website/i.test(key)) {
-    // Syntax-only / deliverability-unavailable emails stay UNVERIFIED — never treat as VERIFIED.
+  if (person && key === 'email' && verificationRequired) {
+    if (!personEmailOwnershipVerified(context)) {
+      return evidence(field, 'NEEDS_REVIEW', true, 'Person email lacks person-ownership verification (syntax, single-source evidence, or deliverability alone is not enough).', {
+        source: 'verification',
+        sourceUrl: null,
+        excerpt: value,
+      }, verification ?? 'UNVERIFIED');
+    }
+  } else if (required && verificationRequired && /email|phone|linkedin|facebook|instagram|youtube|website/i.test(key)) {
+    // Company/other fields: SUPPORTED or VERIFIED evidence still qualifies; never invent VERIFIED from absence.
     if (verification !== 'VERIFIED' && verification !== 'SUPPORTED') {
       return evidence(field, 'NEEDS_REVIEW', true, `${field} exists but is not verified/supported.`, { source: person ? 'contact_record' : 'company_record', sourceUrl: null, excerpt: value }, verification ?? 'UNVERIFIED');
     }
@@ -685,10 +701,25 @@ function evaluateContactField(
             : contact?.youtubeUrl ?? null;
   const verification = fieldStatus(context, field);
   if (!value) return evidence(field, 'NOT_FOUND', required, `${field} was not found.`, null, verification);
+  if (field === 'email' && options.personOnlyEmail && isGenericBusinessEmail(value)) {
+    return evidence(field, 'NOT_FOUND', required, 'Generic/company mailbox cannot satisfy a person email requirement.', {
+      source: 'contact_record',
+      sourceUrl: null,
+      excerpt: value,
+    }, verification ?? 'UNVERIFIED');
+  }
   if (verification === 'CONFLICT' || verification === 'NEEDS_REVIEW') {
     return evidence(field, 'NEEDS_REVIEW', required, `${field} has conflicting verification evidence.`, { source: 'verification', sourceUrl: null, excerpt: value }, verification);
   }
-  if ((required || options.verificationRequired) && (options.verificationRequired || required) && /email|phone/.test(field)) {
+  if (field === 'email' && options.personOnlyEmail && options.verificationRequired) {
+    if (!personEmailOwnershipVerified(context)) {
+      return evidence(field, 'NEEDS_REVIEW', required || Boolean(options.verificationRequired), 'Person email lacks person-ownership verification (syntax, single-source evidence, or deliverability alone is not enough).', {
+        source: 'verification',
+        sourceUrl: null,
+        excerpt: value,
+      }, verification ?? 'UNVERIFIED');
+    }
+  } else if ((required || options.verificationRequired) && (options.verificationRequired || required) && /email|phone/.test(field)) {
     if (verification !== 'VERIFIED' && verification !== 'SUPPORTED') {
       return evidence(field, 'NEEDS_REVIEW', required || Boolean(options.verificationRequired), `${field} exists but is not verified/supported.`, { source: 'contact_record', sourceUrl: null, excerpt: value }, verification ?? 'UNVERIFIED');
     }
@@ -745,6 +776,12 @@ function evidence(
 
 function fieldStatus(context: QualificationContext, field: string) {
   return context.verifications.find((item) => item.field === field || item.field === field.toLowerCase())?.status ?? null;
+}
+
+/** True only when verification metadata explicitly records person-ownership evidence. */
+function personEmailOwnershipVerified(context: QualificationContext): boolean {
+  const row = context.verifications.find((item) => item.field === 'email' || item.field === 'personEmail');
+  return row?.metadata?.ownershipVerified === true;
 }
 
 function findEvidence(evidence: QualificationContext['evidence'], patterns: RegExp[], options?: { requirePositiveIntent?: boolean }) {

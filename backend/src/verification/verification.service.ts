@@ -21,6 +21,7 @@ import { CrossSourceEntityMatcherService } from './matching/cross-source-entity-
 import type { SearchPlan } from '../search/types/search-plan.types';
 import { companyFieldsForVerification, fieldIsRequiredByPlan, personFieldsForVerification } from './plan-verification-fields';
 import { isGenericBusinessEmail } from './utils/generic-email';
+import { assessPersonEmailOwnership } from './utils/email-ownership';
 
 @Injectable()
 export class VerificationService {
@@ -131,8 +132,14 @@ export class VerificationService {
       : await this.verifyCompanyFields(company, evidence, data, entityMatch?.conflicts ?? [], plan);
     const conflictCount = rows.filter((row) => row.status === 'CONFLICT' || row.status === 'NEEDS_REVIEW').length + (entityMatch?.conflicts.length ?? 0);
     await this.usage.recordUsage({ organizationId: data.organizationId, operation: 'VERIFICATION', provider: 'stored-evidence', resourceType: data.contactId ? 'contact' : 'company', resourceId: data.contactId ?? data.companyId, units: Math.max(1, rows.length), status: 'COMPLETED', metadata: { conflicts: conflictCount } });
-    if (contact) await this.updateContactQuality(contact.id, rows.map((row) => ({ field: row.field, value: row.fieldValue, status: row.status })));
-    else await this.updateCompanyQuality(company.id, rows.map((row) => row.status), entityMatch);
+    if (contact) {
+      await this.updateContactQuality(contact.id, rows.map((row) => ({
+        field: row.field,
+        value: row.fieldValue,
+        status: row.status,
+        metadata: typeof row.metadata === 'object' && row.metadata !== null ? row.metadata as Record<string, unknown> : null,
+      })));
+    } else await this.updateCompanyQuality(company.id, rows.map((row) => row.status), entityMatch);
     await this.audit(data.organizationId, company.id, 'MULTI_SOURCE_VERIFICATION_COMPLETED', { contactId: data.contactId, count: rows.length, conflicts: conflictCount, sameEntity: entityMatch?.sameEntity ?? null });
     return rows;
   }
@@ -206,10 +213,47 @@ export class VerificationService {
       if (emailResult) {
         emailResult.value = null;
         emailResult.status = 'NOT_FOUND';
-        emailResult.metadata = { ...emailResult.metadata, companyLevelOnly: true, rejectedGenericMailbox: contact.email };
+        emailResult.metadata = {
+          ...emailResult.metadata,
+          companyLevelOnly: true,
+          rejectedGenericMailbox: contact.email,
+          ownershipVerified: false,
+          verificationKind: 'syntax',
+        };
       }
+    } else {
+      this.applyPersonEmailOwnership(results, personEmail, contact.fullName, evidence);
     }
     return this.persistResults(data, results);
+  }
+
+  /** Person ownership is never inferred from deliverability or source-count alone. */
+  private applyPersonEmailOwnership(
+    results: VerificationResult[],
+    email: string | null,
+    personName: string | null,
+    evidence: VerificationEvidence[],
+  ) {
+    const emailResult = results.find((row) => row.field === 'email');
+    if (!emailResult) return;
+    const deliverabilityVerified = Boolean(emailResult.metadata?.deliverabilityVerified);
+    const ownership = assessPersonEmailOwnership({
+      email,
+      personName,
+      evidence,
+      evidenceStatus: (emailResult.metadata?.evidenceStatus as string | undefined) ?? emailResult.status,
+      deliverabilityVerified,
+    });
+    emailResult.metadata = {
+      ...emailResult.metadata,
+      ownershipVerified: ownership.ownershipVerified,
+      ownershipSourceCount: ownership.ownershipSourceCount,
+      deliverabilityVerified,
+      verificationKind: ownership.ownershipVerified
+        ? 'ownership'
+        : (emailResult.metadata?.verificationKind as string | undefined)
+          ?? ownership.verificationKind,
+    };
   }
 
   private async evaluateFields(fields: Array<{ field: string; value: string | null; provider?: VerificationProvider }>, evidence: VerificationEvidence[], plan: SearchPlan | null) {
@@ -241,10 +285,19 @@ export class VerificationService {
     return results;
   }
 
-  /** Evidence/conflict engine wins on conflicts and multi-source confirmation; providers can upgrade deliverability. */
+  /** Evidence/conflict engine wins on conflicts and multi-source confirmation; providers can upgrade deliverability only. */
   private mergeSignals(evidenceSignal: VerificationSignal, providerSignal: VerificationSignal): VerificationSignal {
     if (evidenceSignal.status === 'NEEDS_REVIEW' || evidenceSignal.status === 'CONFLICT') {
-      return { ...evidenceSignal, provider: providerSignal.provider || evidenceSignal.provider };
+      return {
+        ...evidenceSignal,
+        provider: providerSignal.provider || evidenceSignal.provider,
+        metadata: {
+          ...evidenceSignal.metadata,
+          ...providerSignal.metadata,
+          ownershipVerified: false,
+          deliverabilityVerified: Boolean(providerSignal.metadata?.deliverabilityVerified),
+        },
+      };
     }
     if (evidenceSignal.status === 'VERIFIED') {
       return {
@@ -253,14 +306,16 @@ export class VerificationService {
         metadata: {
           ...evidenceSignal.metadata,
           ...providerSignal.metadata,
-          ownershipVerified: evidenceSignal.metadata?.ownershipVerified ?? Boolean(((evidenceSignal.metadata?.sourceCount as number | undefined) ?? 0) >= 2),
+          // Never promote multi-source agreement to person ownership here.
+          ownershipVerified: false,
+          deliverabilityVerified: Boolean(providerSignal.metadata?.deliverabilityVerified),
           verificationKind: evidenceSignal.metadata?.verificationKind
-            ?? (providerSignal.metadata?.deliverabilityVerified ? 'evidence_and_deliverability' : 'independent_evidence'),
+            ?? (providerSignal.metadata?.deliverabilityVerified ? 'independent_evidence' : 'independent_evidence'),
         },
       };
     }
-    if (providerSignal.status === 'INVALID') return { ...providerSignal, conflict: evidenceSignal.conflict };
-    // ZeroBounce (or similar) deliverability VERIFIED is preserved, but ownership stays false unless evidence already verified.
+    if (providerSignal.status === 'INVALID') return { ...providerSignal, conflict: evidenceSignal.conflict, metadata: { ...providerSignal.metadata, ownershipVerified: false } };
+    // ZeroBounce (or similar) deliverability VERIFIED is preserved, but ownership stays false.
     if (providerSignal.status === 'VERIFIED' && (evidenceSignal.status === 'SUPPORTED' || evidenceSignal.status === 'UNVERIFIED' || evidenceSignal.status === 'FOUND')) {
       return {
         ...providerSignal,
@@ -296,7 +351,7 @@ export class VerificationService {
       metadata: {
         ...evidenceSignal.metadata,
         ...providerSignal.metadata,
-        ownershipVerified: providerSignal.metadata?.ownershipVerified ?? false,
+        ownershipVerified: false,
         deliverabilityVerified: providerSignal.metadata?.deliverabilityVerified ?? false,
       },
     };
@@ -455,7 +510,7 @@ export class VerificationService {
     void entityMatch;
   }
 
-  private async updateContactQuality(contactId: string, rows: Array<{ field: string; value: string | null; status: string }>) {
+  private async updateContactQuality(contactId: string, rows: Array<{ field: string; value: string | null; status: string; metadata?: Record<string, unknown> | null }>) {
     const conflict = rows.some((row) => row.status === 'CONFLICT' || row.status === 'NEEDS_REVIEW');
     const coreFields = ['fullName', 'title', 'companyRelationship'];
     const coreVerified = coreFields.every((field) => rows.some((row) => row.field === field && (row.status === 'VERIFIED' || row.status === 'SUPPORTED')));
@@ -471,12 +526,21 @@ export class VerificationService {
     }).where(eq(companyContacts.id, contactId));
   }
 
-  private contactChannelStatus(row?: { field: string; value: string | null; status: string }) {
+  private contactChannelStatus(row?: { field: string; value: string | null; status: string; metadata?: Record<string, unknown> | null }) {
     if (!row || row.status === 'NOT_FOUND' || !row.value) return 'NOT_FOUND';
+    if (row.status === 'CONFLICT' || row.status === 'NEEDS_REVIEW') return 'NEEDS_REVIEW';
+    if (row.status === 'INVALID') return 'NOT_FOUND';
+    if (row.field === 'email') {
+      if (row.metadata?.ownershipVerified === true) return 'PERSON_OWNERSHIP_VERIFIED';
+      if (row.metadata?.deliverabilityVerified === true) return 'DELIVERABILITY_VERIFIED';
+      if (row.status === 'VERIFIED') return 'EVIDENCE_VERIFIED';
+      if (row.status === 'SUPPORTED') return 'SUPPORTED';
+      if (row.metadata?.verificationKind === 'syntax') return 'SYNTAX_VALID';
+      if (row.status === 'FOUND') return 'FOUND';
+      return 'UNVERIFIED';
+    }
     if (row.status === 'VERIFIED') return 'VERIFIED';
     if (row.status === 'SUPPORTED') return 'SUPPORTED';
-    if (row.status === 'CONFLICT' || row.status === 'NEEDS_REVIEW') return 'UNVERIFIED';
-    if (row.status === 'INVALID') return 'NOT_FOUND';
     if (row.status === 'FOUND') return 'FOUND';
     return 'UNVERIFIED';
   }

@@ -1,5 +1,6 @@
 import type { CompanyProfile, EvidenceItem, LeadRecord, VerificationField } from '../types/api';
 import { evidenceCountFor } from './evidence';
+import { truthfulEmailVerificationStatus } from './email-verification-label';
 
 export interface CompanyOverviewData {
   name: string | null;
@@ -72,14 +73,18 @@ export function verificationCards(fields: VerificationField[], evidence: Evidenc
       continue;
     }
     matches.forEach((field, index) => {
+      const metadata = typeof field.metadata === 'object' && field.metadata !== null ? field.metadata as Record<string, unknown> : null;
+      const status = requested.key === 'email'
+        ? truthfulEmailVerificationStatus(field.status, metadata)
+        : field.status;
       cards.push({
         key: `${requested.key}-${field.contactId ?? 'company'}-${index}`,
         label: requested.label,
         value: field.fieldValue,
-        status: field.status,
+        status,
         evidenceCount: evidenceCountFor(requested.key, field.metadata, evidence),
         verifiedAt: field.checkedAt,
-        metadata: typeof field.metadata === 'object' && field.metadata !== null ? field.metadata as Record<string, unknown> : null,
+        metadata,
       });
     });
   }

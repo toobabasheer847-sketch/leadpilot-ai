@@ -53,8 +53,16 @@ export function verificationStatusLabel(status: string | null | undefined): stri
       return 'Found';
     case 'UNVERIFIED':
       return 'Unverified';
+    case 'SYNTAX_VALID':
+      return 'Email Syntax Valid';
     case 'SUPPORTED':
       return 'Evidence Supported';
+    case 'EVIDENCE_VERIFIED':
+      return 'Evidence Verified';
+    case 'DELIVERABILITY_VERIFIED':
+      return 'Deliverability Verified';
+    case 'PERSON_OWNERSHIP_VERIFIED':
+      return 'Person Ownership Verified';
     case 'VERIFIED':
       return 'Verified';
     case 'PARTIALLY_VERIFIED':

@@ -142,9 +142,28 @@ describe('Phase D verification, evidence, and lead quality', () => {
 
     const withPerson = evaluateQualification(baseContext({
       contacts: [{ ...baseContext().contacts[0], email: 'ada@northwind.example' }],
-      verifications: baseContext().verifications.concat([{ field: 'email', status: 'SUPPORTED', fieldValue: 'ada@northwind.example', evidenceId: 'ev-1' }]),
+      verifications: baseContext().verifications.concat([{
+        field: 'email',
+        status: 'SUPPORTED',
+        fieldValue: 'ada@northwind.example',
+        evidenceId: 'ev-1',
+        metadata: { ownershipVerified: false, verificationKind: 'evidence_supported' },
+      }]),
     }), criteria);
-    expect(withPerson.criterionResults.find((item) => item.criterion === 'personEmail')?.result).toBe('MATCH');
+    // Phase F: SUPPORTED alone cannot satisfy verified person email.
+    expect(withPerson.criterionResults.find((item) => item.criterion === 'personEmail')?.result).toBe('NEEDS_REVIEW');
+
+    const withOwnership = evaluateQualification(baseContext({
+      contacts: [{ ...baseContext().contacts[0], email: 'ada@northwind.example' }],
+      verifications: baseContext().verifications.concat([{
+        field: 'email',
+        status: 'VERIFIED',
+        fieldValue: 'ada@northwind.example',
+        evidenceId: 'ev-1',
+        metadata: { ownershipVerified: true, verificationKind: 'ownership', ownershipSourceCount: 2 },
+      }]),
+    }), criteria);
+    expect(withOwnership.criterionResults.find((item) => item.criterion === 'personEmail')?.result).toBe('MATCH');
   });
 
   it('F: generic company email never becomes person email', () => {
