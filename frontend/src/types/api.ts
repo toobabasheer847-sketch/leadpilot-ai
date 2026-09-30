@@ -108,6 +108,12 @@ export interface PipelineCounters {
   discoveryProvidersFailed: number | null;
   discoveryProvidersSkipped: number | null;
   discoveryQueriesSkipped: number | null;
+  discoveryStopReason: string | null;
+  discoveryRejectionSummary: string | null;
+  discoveryLocationYieldSummary: string | null;
+  discoveryCategoryYieldSummary: string | null;
+  discoveryYieldPerQuery: number | null;
+  discoveryEmptyFieldEnrichments: number | null;
   companySizeRequested: boolean | null;
   websitesFound: number | null;
   websitesNotFound: number | null;

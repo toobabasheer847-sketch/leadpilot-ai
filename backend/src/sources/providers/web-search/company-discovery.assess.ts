@@ -11,9 +11,17 @@ import {
   buildExpandedDiscoveryQueries,
   expandDiscoveryLocationVariants,
   expandDiscoveryPhrases,
-  QueryFamilyYieldTracker,
   type DiscoveryQueryExpansionMetrics,
+  type DiscoveryQueryVariant,
 } from '../../services/discovery-query-expansion';
+import {
+  classifyDiscoveryRejectionReason,
+  classifyDiscoveryStopReason,
+  DiscoveryYieldTracker,
+  type DiscoveryRejectionReason,
+  type DiscoveryStopReason,
+  type DiscoveryYieldSnapshot,
+} from '../../services/discovery-yield';
 import type { NormalizedSourceResult } from '../../types/source.types';
 import type { WebSearchResult } from '../../../enrichment/website/web-search.types';
 
@@ -41,6 +49,14 @@ export interface WebCompanyCollection {
   queriesSkippedLowYield?: number;
   queryFamiliesGenerated?: number;
   queriesGenerated?: number;
+  /** Phase T */
+  rejectionCounts?: Partial<Record<DiscoveryRejectionReason, number>>;
+  rejectionSummary?: string;
+  locationYieldSummary?: string;
+  categoryYieldSummary?: string;
+  yieldPerQuery?: number;
+  stopReason?: DiscoveryStopReason | null;
+  yieldSnapshot?: DiscoveryYieldSnapshot;
 }
 
 export type WebCompanySearchFn = (
@@ -96,12 +112,13 @@ export async function collectWebCompanyCandidates(
   if (wanted === 0) {
     return emptyCollection();
   }
+  const maxQueries = options.maxQueries ?? queryBudgetForPlan(plan, wanted);
   const expansion = buildExpandedDiscoveryQueries(
     plan,
-    options.maxQueries ?? queryBudgetForPlan(plan, wanted),
+    maxQueries,
     { round: options.round ?? 0, includeTails: true },
   );
-  const queries = expansion.variants;
+  let remaining = [...expansion.variants];
   const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const delayMs = Math.max(0, options.delayMs ?? 0);
   const concurrency = Math.max(1, Math.trunc(options.concurrency ?? 1));
@@ -118,10 +135,9 @@ export async function collectWebCompanyCandidates(
   for (const existing of options.exclude ?? []) discoveryIdentityKeys(existing).forEach((key) => seen.add(key));
   let rejected = 0;
   let queriesRun = 0;
-  let queriesSkippedLowYield = 0;
   let consecutiveFailures = 0;
   let providerError: string | null = null;
-  const yieldTracker = new QueryFamilyYieldTracker();
+  const yieldTracker = new DiscoveryYieldTracker(plan);
 
   const flushChunk = async (force = false) => {
     if (!options.onBatch) {
@@ -134,31 +150,42 @@ export async function collectWebCompanyCandidates(
     await options.onBatch(batch);
   };
 
-  const acceptHit = (hit: WebSearchResult): 'accepted' | 'rejected' | 'duplicate' => {
+  const acceptHit = (hit: WebSearchResult): { status: 'accepted' | 'rejected' | 'duplicate'; reason?: DiscoveryRejectionReason } => {
     const decision = assessWebCompanyCandidate(hit, plan);
     if (!decision.accepted) {
       rejected += 1;
-      return 'rejected';
+      return { status: 'rejected', reason: classifyDiscoveryRejectionReason(decision.reason) };
     }
     const keys = discoveryIdentityKeys(decision.result);
-    if (keys.some((key) => seen.has(key))) return 'duplicate';
+    if (keys.some((key) => seen.has(key))) return { status: 'duplicate', reason: 'DUPLICATE' };
     keys.forEach((key) => seen.add(key));
     results.push(decision.result);
     pendingChunk.push(decision.result);
-    return 'accepted';
+    return { status: 'accepted' };
   };
 
-  for (let offset = 0; offset < queries.length && results.length < wanted; offset += concurrency) {
-    if (offset > 0 && delayMs > 0) await sleep(delayMs);
-    const batchVariants = queries.slice(offset, offset + concurrency).filter((variant) => {
-      if (yieldTracker.shouldSkip(variant.familyId)) {
-        queriesSkippedLowYield += 1;
-        return false;
+  while (remaining.length > 0 && results.length < wanted) {
+    if (queriesRun > 0 && delayMs > 0) await sleep(delayMs);
+    remaining = yieldTracker.prioritizeVariants(remaining);
+    const batchVariants: DiscoveryQueryVariant[] = [];
+    while (batchVariants.length < concurrency && remaining.length > 0) {
+      const next = remaining.shift();
+      if (!next) break;
+      if (yieldTracker.shouldSkip(next.familyId)) {
+        yieldTracker.recordSkippedLowYield(next);
+        continue;
       }
-      return true;
-    });
-    if (!batchVariants.length) continue;
+      batchVariants.push(next);
+    }
+    if (!batchVariants.length) {
+      // Remaining variants were all low-yield skips (or emptied by skipping).
+      yieldTracker.setStopReason('LOW_YIELD_EXHAUSTED');
+      break;
+    }
+
     queriesRun += batchVariants.length;
+    for (const variant of batchVariants) yieldTracker.recordIssued(variant);
+
     const outcomes = await Promise.all(batchVariants.map(async (variant) => {
       const controller = new AbortController();
       const timer = queryTimeoutMs === undefined
@@ -186,40 +213,69 @@ export async function collectWebCompanyCandidates(
       if (results.length >= wanted) break;
       if (!outcome.ok) {
         consecutiveFailures += 1;
-        yieldTracker.record(outcome.variant.familyId, { raw: 0, acceptedNew: 0, duplicates: 0, rejected: 0 });
+        yieldTracker.recordBatch(outcome.variant, { raw: 0, newlyAccepted: 0, duplicates: 0, rejected: 0 });
         if (
           /rate limit|429|plan limit|pay-as-you-go limit|quota|HTTP 432|HTTP 433/i.test(outcome.message)
           || consecutiveFailures >= maxConsecutiveFailures
         ) {
           providerError = outcome.message;
+          const classified = classifyDiscoveryRejectionReason(providerError);
+          if (classified === 'PROVIDER_QUOTA' || classified === 'PROVIDER_RATE_LIMIT') {
+            yieldTracker.recordProviderFailure(classified);
+            yieldTracker.setStopReason(classified);
+          } else {
+            yieldTracker.setStopReason('PROVIDER_UNAVAILABLE');
+          }
           await flushChunk(true);
-          return withExpansionMetrics(results, rejected, providerError, queriesRun, expansion.metrics, queriesSkippedLowYield);
+          return withExpansionMetrics(results, rejected, providerError, queriesRun, expansion.metrics, yieldTracker);
         }
         continue;
       }
       consecutiveFailures = 0;
-      let acceptedNew = 0;
+      let newlyAccepted = 0;
       let duplicates = 0;
       let rejectedHere = 0;
+      const rejectionReasons: Partial<Record<DiscoveryRejectionReason, number>> = {};
       for (const hit of outcome.hits) {
         if (results.length >= wanted) break;
         const status = acceptHit(hit);
-        if (status === 'accepted') acceptedNew += 1;
-        else if (status === 'duplicate') duplicates += 1;
-        else rejectedHere += 1;
+        if (status.status === 'accepted') newlyAccepted += 1;
+        else if (status.status === 'duplicate') {
+          duplicates += 1;
+          rejectionReasons.DUPLICATE = (rejectionReasons.DUPLICATE ?? 0) + 1;
+        } else {
+          rejectedHere += 1;
+          const reason = status.reason ?? 'OTHER';
+          rejectionReasons[reason] = (rejectionReasons[reason] ?? 0) + 1;
+        }
       }
-      yieldTracker.record(outcome.variant.familyId, {
+      yieldTracker.recordBatch(outcome.variant, {
         raw: outcome.hits.length,
-        acceptedNew,
+        newlyAccepted,
         duplicates,
         rejected: rejectedHere,
+        rejectionReasons,
       });
       await flushChunk(false);
     }
   }
 
   await flushChunk(true);
-  return withExpansionMetrics(results, rejected, providerError, queriesRun, expansion.metrics, queriesSkippedLowYield);
+  if (results.length >= wanted) yieldTracker.setStopReason('ACCEPTANCE_CAP_REACHED');
+  else if (queriesRun >= maxQueries) yieldTracker.setStopReason('QUERY_BUDGET_EXHAUSTED');
+  else if (!yieldTracker.snapshot().stopReason) {
+    const lowYieldExhausted = remaining.length > 0
+      && remaining.every((variant) => yieldTracker.shouldSkip(variant.familyId));
+    yieldTracker.setStopReason(classifyDiscoveryStopReason({
+      accepted: results.length,
+      acceptanceCap: wanted,
+      queriesIssued: queriesRun,
+      queryBudget: maxQueries,
+      providerError,
+      lowYieldExhausted,
+    }));
+  }
+  return withExpansionMetrics(results, rejected, providerError, queriesRun, expansion.metrics, yieldTracker);
 }
 
 function emptyCollection(): WebCompanyCollection {
@@ -233,6 +289,12 @@ function emptyCollection(): WebCompanyCollection {
     queriesSkippedLowYield: 0,
     queryFamiliesGenerated: 0,
     queriesGenerated: 0,
+    rejectionCounts: {},
+    rejectionSummary: '',
+    locationYieldSummary: '',
+    categoryYieldSummary: '',
+    yieldPerQuery: 0,
+    stopReason: 'INSUFFICIENT_VALID_CANDIDATES',
   };
 }
 
@@ -242,8 +304,9 @@ function withExpansionMetrics(
   providerError: string | null,
   queriesRun: number,
   metrics: DiscoveryQueryExpansionMetrics,
-  queriesSkippedLowYield: number,
+  yieldTracker: DiscoveryYieldTracker,
 ): WebCompanyCollection {
+  const snapshot = yieldTracker.snapshot();
   return {
     results,
     rejected,
@@ -251,9 +314,16 @@ function withExpansionMetrics(
     queriesRun,
     queriesSkippedDuplicate: metrics.duplicateQueriesSkipped,
     queriesSkippedBudget: metrics.queriesSkippedBudget,
-    queriesSkippedLowYield,
+    queriesSkippedLowYield: snapshot.queriesSkippedLowYield,
     queryFamiliesGenerated: metrics.queryFamiliesGenerated,
     queriesGenerated: metrics.queriesGenerated,
+    rejectionCounts: snapshot.rejectionCounts,
+    rejectionSummary: snapshot.rejectionSummary,
+    locationYieldSummary: snapshot.locationYieldSummary,
+    categoryYieldSummary: snapshot.categoryYieldSummary,
+    yieldPerQuery: snapshot.yieldPerQuery,
+    stopReason: snapshot.stopReason,
+    yieldSnapshot: snapshot,
   };
 }
 

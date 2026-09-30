@@ -121,6 +121,12 @@ export class PipelineRepository {
       discoveryProvidersFailed: discovery.providersFailed,
       discoveryProvidersSkipped: discovery.providersSkipped,
       discoveryQueriesSkipped: discovery.queriesSkipped,
+      discoveryStopReason: discovery.stopReason,
+      discoveryRejectionSummary: discovery.rejectionSummary,
+      discoveryLocationYieldSummary: discovery.locationYieldSummary,
+      discoveryCategoryYieldSummary: discovery.categoryYieldSummary,
+      discoveryYieldPerQuery: discovery.yieldPerQuery,
+      discoveryEmptyFieldEnrichments: discovery.emptyFieldEnrichments,
       companySizeRequested: employeeSizeRequested(execution.plan),
       websitesFound,
       websitesNotFound: facts.length - websitesFound,
@@ -255,6 +261,12 @@ export class PipelineRepository {
     providersFailed: number | null;
     providersSkipped: number | null;
     queriesSkipped: number | null;
+    stopReason: string | null;
+    rejectionSummary: string | null;
+    locationYieldSummary: string | null;
+    categoryYieldSummary: string | null;
+    yieldPerQuery: number | null;
+    emptyFieldEnrichments: number | null;
   }> {
     const [row] = await this.db.select({ metadata: auditLogs.metadata }).from(auditLogs).where(and(
       eq(auditLogs.organizationId, organizationId),
@@ -281,6 +293,12 @@ export class PipelineRepository {
       providersFailed: numberOrNull('providersFailed'),
       providersSkipped: numberOrNull('providersSkipped'),
       queriesSkipped: numberOrNull('queriesSkipped'),
+      stopReason: stringOrNull('discoveryStopReason'),
+      rejectionSummary: stringOrNull('rejectionSummary'),
+      locationYieldSummary: stringOrNull('locationYieldSummary'),
+      categoryYieldSummary: stringOrNull('categoryYieldSummary'),
+      yieldPerQuery: numberOrNull('yieldPerQuery'),
+      emptyFieldEnrichments: numberOrNull('emptyFieldEnrichments'),
     };
   }
 

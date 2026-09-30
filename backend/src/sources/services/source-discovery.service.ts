@@ -39,6 +39,11 @@ import {
   type DiscoveryProviderAttempt,
 } from './discovery-provider-outcome';
 import { WebSearchCompanyDiscovery } from '../providers/web-search/web-search-company.discovery';
+import {
+  classifyDiscoveryStopReason,
+  type DiscoveryRejectionReason,
+  type DiscoveryStopReason,
+} from './discovery-yield';
 
 export function canAttachDiscoveryToOrganization(companyOrganizationId: string, requestOrganizationId: string): boolean {
   return companyOrganizationId.length > 0 && companyOrganizationId === requestOrganizationId;
@@ -110,6 +115,13 @@ export class SourceDiscoveryService {
     let duplicateQueriesSkipped = 0;
     let queriesSkippedBudget = 0;
     let queriesSkippedLowYield = 0;
+    let rejectionSummary = '';
+    let locationYieldSummary = '';
+    let categoryYieldSummary = '';
+    let yieldPerQuery = 0;
+    let discoveryStopReason: DiscoveryStopReason | null = null;
+    const rejectionCounts: Partial<Record<DiscoveryRejectionReason, number>> = {};
+    let emptyFieldEnrichments = 0;
 
     // Phase R — capability inventory at execution start (no secrets).
     const capabilities = detectDiscoveryProviderCapabilities({
@@ -181,6 +193,7 @@ export class SourceDiscoveryService {
         }
         providerResults = deduped.accepted;
         enrichmentSupplements = deduped.supplements;
+        emptyFieldEnrichments += enrichmentSupplements.length;
         duplicatesRemoved = (result.duplicatesRemoved ?? 0) + deduped.duplicatesRemoved;
         providerError = result.providerError ?? null;
         rejected += result.rejectedCandidates ?? 0;
@@ -288,6 +301,7 @@ export class SourceDiscoveryService {
               const { accepted, duplicatesRemoved, supplements } = dedupeDiscoveryCandidates(excludePool, batch);
               duplicates += duplicatesRemoved;
               webDuplicates += duplicatesRemoved;
+              emptyFieldEnrichments += supplements.length;
               if (!accepted.length && !supplements.length) return;
               excludePool.push(...accepted);
               const added = await this.persistResults(
@@ -331,6 +345,14 @@ export class SourceDiscoveryService {
           queriesSkippedBudget += extra.queriesSkippedBudget ?? 0;
           queriesSkippedLowYield += extra.queriesSkippedLowYield ?? 0;
           queriesSkipped += (extra.queriesSkippedDuplicate ?? 0) + (extra.queriesSkippedBudget ?? 0) + (extra.queriesSkippedLowYield ?? 0);
+          if (extra.rejectionSummary) rejectionSummary = extra.rejectionSummary;
+          if (extra.locationYieldSummary) locationYieldSummary = extra.locationYieldSummary;
+          if (extra.categoryYieldSummary) categoryYieldSummary = extra.categoryYieldSummary;
+          if (typeof extra.yieldPerQuery === 'number') yieldPerQuery = extra.yieldPerQuery;
+          if (extra.stopReason) discoveryStopReason = extra.stopReason;
+          for (const [reason, count] of Object.entries(extra.rejectionCounts ?? {}) as Array<[DiscoveryRejectionReason, number]>) {
+            rejectionCounts[reason] = (rejectionCounts[reason] ?? 0) + count;
+          }
           if (extra.providerError) {
             webError = extra.providerError;
             const outcome = classifyDiscoveryProviderOutcome({ resultsCount: webResultsCount, error: webError });
@@ -396,6 +418,27 @@ export class SourceDiscoveryService {
       .filter(Boolean)
       .slice(0, 8)
       .join(' | ');
+    if (!discoveryStopReason) {
+      discoveryStopReason = classifyDiscoveryStopReason({
+        accepted: candidates,
+        acceptanceCap: seek,
+        queriesIssued: globalQueriesIssued,
+        queryBudget: globalQueryBudget,
+        providerError: primaryError ?? webError,
+        allProvidersUnavailable: Boolean(
+          attempts.length
+          && attempts.every((attempt) => attempt.outcome !== 'SUCCESS' && attempt.outcome !== 'EMPTY')
+          && candidates === 0,
+        ),
+      });
+    }
+    if (!rejectionSummary && Object.keys(rejectionCounts).length) {
+      rejectionSummary = Object.entries(rejectionCounts)
+        .filter(([, count]) => (count ?? 0) > 0)
+        .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
+        .map(([reason, count]) => `${reason}:${count}`)
+        .join(' | ');
+    }
     await this.usage.recordUsage({ organizationId, operation: 'DISCOVERY', provider: this.provider.providerName(), resourceType: 'search_execution', resourceId: executionId, units: 1, status: 'COMPLETED', requestId: context.requestId, metadata: { candidates, countIntent, shortfall } });
     await this.audit(organizationId, executionId, 'CANDIDATES_DISCOVERED', undefined, {
       count: String(candidates),
@@ -419,6 +462,12 @@ export class SourceDiscoveryService {
       queriesSkippedLowYield: String(queriesSkippedLowYield),
       uniqueCompaniesDiscovered: String(candidates),
       acceptanceRate: discovered > 0 ? String(Number((candidates / Math.max(1, discovered)).toFixed(4))) : '0',
+      yieldPerQuery: String(yieldPerQuery),
+      emptyFieldEnrichments: String(emptyFieldEnrichments),
+      rejectionSummary,
+      locationYieldSummary,
+      categoryYieldSummary,
+      discoveryStopReason: discoveryStopReason ?? '',
       providersAttempted: String(progress.providersAttempted),
       providersSucceeded: String(progress.providersSucceeded),
       providersEmpty: String(progress.providersEmpty),
@@ -459,6 +508,12 @@ export class SourceDiscoveryService {
       duplicateQueriesSkipped,
       queriesSkippedBudget,
       queriesSkippedLowYield,
+      yieldPerQuery,
+      emptyFieldEnrichments,
+      rejectionSummary,
+      locationYieldSummary,
+      categoryYieldSummary,
+      discoveryStopReason,
       providersAttempted: progress.providersAttempted,
       providersSucceeded: progress.providersSucceeded,
       providersEmpty: progress.providersEmpty,
