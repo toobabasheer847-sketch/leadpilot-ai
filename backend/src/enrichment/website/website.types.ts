@@ -47,7 +47,7 @@ export interface WebsiteDiscoveryInput {
 
 export interface WebsiteDiscoveryOutcome {
   website: string | null;
-  status: 'FOUND' | 'NOT_FOUND' | 'INVALID';
+  status: 'FOUND' | 'NOT_FOUND' | 'INVALID' | 'LIMITED';
   page?: WebsitePageResult;
   pages?: WebsitePageResult[];
   reason?: string;

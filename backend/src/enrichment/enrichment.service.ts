@@ -254,7 +254,7 @@ export class EnrichmentService {
     const nothingNew = Object.keys(updates).length === 0 && fieldsExtracted === 0 && discoveredSocial.size === 0;
     return {
       website: officialWebsite,
-      websiteStatus: officialWebsite ? 'FOUND' as const : 'NOT_FOUND' as const,
+      websiteStatus: websiteResult.status === 'LIMITED' ? 'LIMITED' as const : officialWebsite ? 'FOUND' as const : 'NOT_FOUND' as const,
       message: nothingNew ? 'No additional verified enrichment data found.' : undefined,
       socialProfiles: [...discoveredSocial],
       pagesFetched: pages.length,

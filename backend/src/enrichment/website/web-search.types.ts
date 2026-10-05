@@ -9,6 +9,16 @@ export interface WebSearchQuery {
 export interface WebSearchResult {
   title: string;
   url: string;
+  /** Official company site when it differs from the cited evidence URL. */
+  website?: string;
+  extractedContacts?: Array<{
+    fullName: string;
+    title: string;
+    email?: string;
+    sourceUrl: string;
+    evidenceExcerpt: string;
+    retrievedAt: string;
+  }>;
   snippet: string;
   source: string;
   retrievedAt: string;

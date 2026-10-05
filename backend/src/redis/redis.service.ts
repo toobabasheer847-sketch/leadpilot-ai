@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import { bullConnectionOptions, destroyRedisClient, enterRedisShutdown, isRedisShutdown, isShutdownConnectionError, leaveRedisShutdown, noteShutdownReset } from '../queue/bull-connection';
+import { isRedisOomError } from './redis-error';
 
 @Injectable()
 export class RedisService implements OnModuleDestroy {
@@ -21,8 +22,10 @@ export class RedisService implements OnModuleDestroy {
         return Math.min(times * 500, 5_000);
       },
     });
-    this.client.on('error', () => {
-      this.logger.warn('Redis client reported an error');
+    this.client.on('error', (error: Error) => {
+      this.logger.warn(isRedisOomError(error)
+        ? 'Redis rejected a command because its memory limit was reached'
+        : 'Redis client reported an error');
     });
   }
 
@@ -46,7 +49,8 @@ export class RedisService implements OnModuleDestroy {
       ));
       const ttl = await this.client.ttl(key);
       return { allowed: count <= limit, count, resetAt: new Date(Date.now() + Math.max(ttl, 0) * 1000) };
-    } catch {
+    } catch (error) {
+      if (isRedisOomError(error)) this.logger.warn('Redis memory limit reached while consuming a rate-limit window');
       return { allowed: true, count: 0, resetAt };
     }
   }

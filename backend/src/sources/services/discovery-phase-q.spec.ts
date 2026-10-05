@@ -89,6 +89,7 @@ function buildService(input: {
     requestContext as never,
     webDiscovery as never,
     config as never,
+    { warn: jest.fn(), info: jest.fn(), error: jest.fn() } as never,
   );
   const audit = jest.spyOn(service as never as { audit: (...args: unknown[]) => Promise<void> }, 'audit').mockResolvedValue(undefined);
   jest.spyOn(service as never as { persistResults: (...args: unknown[]) => Promise<number> }, 'persistResults')
@@ -203,6 +204,21 @@ describe('Phase Q resilient discovery providers', () => {
       shortfall: 300,
       providersEmpty: expect.any(Number),
     });
+  });
+
+  it('does not run generic web-search refill when OpenRouter is the discovery provider', async () => {
+    const openRouter = mapProvider('openrouter', jest.fn().mockResolvedValue({
+      provider: 'openrouter',
+      results: [company('Texas Investor Group', 'https://texasinvestor.example')],
+      queriesRun: 1,
+    }));
+    const collect = jest.fn().mockResolvedValue({ results: [], rejected: 0, providerError: null, queriesRun: 0 });
+    const { service, webDiscovery } = buildService({ chain: [openRouter], collect });
+
+    await expect(service.discover('exec-openrouter', 'org-openrouter', texasPlan)).resolves.toMatchObject({
+      candidates: 1,
+    });
+    expect(webDiscovery.collect).not.toHaveBeenCalled();
   });
 
   it('F. All providers unavailable → Discovery FAILED', async () => {

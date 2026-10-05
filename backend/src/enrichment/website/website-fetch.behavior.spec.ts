@@ -253,8 +253,8 @@ describe('website discovery after fetch failures', () => {
       ]),
     };
     const result = await discovery(search).discover(company);
-    expect(result).toMatchObject({ status: 'NOT_FOUND', website: null });
-    expect(result.rejectedSearchHits?.map((item) => item.reason).sort()).toEqual(['DNS_ERROR', 'HTTP_5XX']);
+    expect(result).toMatchObject({ status: 'LIMITED', website: null });
+    expect(result.rejectedSearchHits?.map((item) => item.reason).sort()).toEqual(['DNS_ERROR']);
     expect(result.website).toBeNull();
   });
 

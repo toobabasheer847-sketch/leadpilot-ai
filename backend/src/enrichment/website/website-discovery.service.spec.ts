@@ -1,5 +1,6 @@
+import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { classifyPipelineError, summarizeJobStates, summarizeWebsiteFindings } from '../../pipeline/pipeline.progress';
+import { classifyPipelineError, summarizeJobStates, summarizeWebsiteFindings, WEBSITE_LIMITED_MESSAGE } from '../../pipeline/pipeline.progress';
 import { CompanyEnrichmentRepository } from '../repositories/company-enrichment.repository';
 import { EnrichmentService } from '../enrichment.service';
 import { WebsiteDiscoveryError } from './website-discovery.error';
@@ -181,12 +182,21 @@ describe('Website discovery', () => {
     });
   });
 
-  it('reports a provider 5xx response', async () => {
+  it('treats HTTP 503 as a limited result and logs the affected domain', async () => {
     const fetchPage = jest.fn().mockRejectedValue(new Error('Website fetch failed with HTTP 503.'));
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    const result = await discovery(fetchPage).discover({ existingWebsite: 'https://oak.example/' });
+    expect(result).toMatchObject({ status: 'LIMITED', website: null, sourceUrl: 'https://oak.example/' });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('oak.example'));
+    warn.mockRestore();
+  });
+
+  it('keeps other provider 5xx responses retryable', async () => {
+    const fetchPage = jest.fn().mockRejectedValue(new Error('Website fetch failed with HTTP 500.'));
     await expect(discovery(fetchPage).discover({ existingWebsite: 'https://oak.example/' })).rejects.toMatchObject({
       errorCode: 'PROVIDER_5XX',
       retryable: true,
-      message: 'Website discovery provider returned HTTP 503.',
+      message: 'Website discovery provider returned HTTP 500.',
     });
   });
 
@@ -218,17 +228,18 @@ describe('Website discovery', () => {
   });
 
   it('keeps a genuine provider failure failed', async () => {
-    await expect(discovery(jest.fn().mockRejectedValue(new Error('Website fetch failed with HTTP 503.'))).discover({ existingWebsite: 'https://oak.example/' })).rejects.toBeInstanceOf(WebsiteDiscoveryError);
-    expect(classifyPipelineError(new Error('Website discovery provider returned HTTP 503.'))).toMatchObject({
+    await expect(discovery(jest.fn().mockRejectedValue(new Error('Website fetch failed with HTTP 500.'))).discover({ existingWebsite: 'https://oak.example/' })).rejects.toBeInstanceOf(WebsiteDiscoveryError);
+    expect(classifyPipelineError(new Error('Website discovery provider returned HTTP 500.'))).toMatchObject({
       code: 'TRANSIENT_PROVIDER_ERROR',
-      message: 'Website discovery provider returned HTTP 503.',
+      message: 'Website discovery provider returned HTTP 500.',
       retryable: true,
     });
-    expect(summarizeJobStates(['failed', 'failed', 'failed'], 'Website discovery provider returned HTTP 503.')).toEqual({
+    expect(summarizeJobStates(['failed', 'failed', 'failed'], 'Website discovery provider returned HTTP 500.')).toEqual({
       state: 'FAILED',
-      message: 'Website discovery provider returned HTTP 503.',
+      message: 'Website discovery provider returned HTTP 500.',
     });
     expect(summarizeWebsiteFindings(['FOUND', 'NOT_FOUND'])).toEqual({ state: 'PARTIAL', message: 'No verified website found for some companies.' });
+    expect(summarizeWebsiteFindings(['LIMITED'])).toEqual({ state: 'PARTIAL', message: WEBSITE_LIMITED_MESSAGE });
   });
 
   it('does not issue an empty company update when there is nothing to store', async () => {
@@ -257,6 +268,15 @@ describe('Website discovery', () => {
     expect(updateCompany).not.toHaveBeenCalled();
     expect(result.website).toBe('https://existing.example/');
     expect(persistEvidence).toHaveBeenCalledWith('company-1', 'https://other.example/', [expect.objectContaining({ field: 'website', value: 'https://existing.example/' })], 'https://existing.example/', expect.objectContaining({ verified: false }));
+  });
+
+  it('returns LIMITED enrichment successfully so later pipeline stages can run', async () => {
+    const limited = jest.fn().mockResolvedValue({ status: 'LIMITED', website: null, reason: 'Website temporarily unavailable (HTTP 503): oak.example.' });
+    const run = enrichment({ discover: limited });
+    await expect(run.service.runCompanyEnrichment({ companyId: 'company-1', organizationId: 'org-1' })).resolves.toMatchObject({
+      website: null,
+      websiteStatus: 'LIMITED',
+    });
   });
 
   it('stores source provenance for a discovered website and a not-found attempt', async () => {

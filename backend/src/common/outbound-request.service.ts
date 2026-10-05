@@ -18,10 +18,15 @@ export class OutboundRequestService {
     this.retries = configService.get<number>('outbound.retries', 2);
   }
 
-  async fetch(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = this.timeoutMs): Promise<Response> {
+  async fetch(
+    input: RequestInfo | URL,
+    init: RequestInit = {},
+    timeoutMs = this.timeoutMs,
+    retries = this.retries,
+  ): Promise<Response> {
     let lastError: unknown;
 
-    for (let attempt = 0; attempt <= this.retries; attempt += 1) {
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
       const controller = new AbortController();
       const onExternalAbort = () => controller.abort();
       if (init.signal) {

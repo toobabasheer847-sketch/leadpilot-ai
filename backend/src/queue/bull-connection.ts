@@ -1,6 +1,11 @@
 import type { WorkerOptions } from 'bullmq';
 import { redisEndpoint } from '../redis/redis-endpoint';
 
+export const BULL_DEFAULT_JOB_OPTIONS = {
+  removeOnComplete: 50,
+  removeOnFail: 100,
+};
+
 /** Shared BullMQ connection settings. Local `localhost` is pinned to IPv4. */
 export function bullConnectionOptions(redisUrl: string) {
   return {

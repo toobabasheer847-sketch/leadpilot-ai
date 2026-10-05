@@ -1,4 +1,4 @@
-import { Inject, Injectable, Optional } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { WebsiteDiscoveryError } from './website-discovery.error';
 import { evaluateOfficialWebsite, classifyOfficialWebsiteHost, type OfficialWebsiteRejection } from './official-website.validator';
@@ -37,6 +37,8 @@ export function websitesFromSourceRaw(raw: unknown): string[] {
 
 @Injectable()
 export class WebsiteDiscoveryService {
+  private readonly logger = new Logger(WebsiteDiscoveryService.name);
+
   constructor(
     private readonly normalizer: WebsiteNormalizerService,
     private readonly fetchService: WebsiteFetchService,
@@ -89,12 +91,17 @@ export class WebsiteDiscoveryService {
     if (candidates.length === 0) return { outcome: null, failure: null, clearStoredWebsite: false, rejections };
     this.assertFetchConfigured();
     let failure: WebsiteDiscoveryError | null = null;
+    let limitedOutcome: WebsiteDiscoveryOutcome | null = null;
     let clearStoredWebsite = false;
     let best: { outcome: WebsiteDiscoveryOutcome; score: number } | null = null;
     for (const candidate of candidates) {
       try {
         const result = await this.fetchCandidate(candidate, input);
         if (result.kind === 'miss') continue;
+        if (result.kind === 'limited') {
+          limitedOutcome ??= result.outcome;
+          continue;
+        }
         if (result.kind === 'rejected') {
           if (candidate.hit) rejections.push({ reason: result.reason, hit: candidate.hit });
           if (candidate.provider === 'stored_website' && result.reason !== 'INSUFFICIENT_COMPANY_MATCH' && result.reason !== 'FETCH_FAILED' && !isWebsiteFetchFailure(result.reason)) clearStoredWebsite = true;
@@ -111,6 +118,7 @@ export class WebsiteDiscoveryService {
       }
     }
     if (best) return { outcome: best.outcome, failure: null, clearStoredWebsite, rejections };
+    if (limitedOutcome) return { outcome: limitedOutcome, failure: null, clearStoredWebsite, rejections };
     return { outcome: null, failure, clearStoredWebsite, rejections };
   }
 
@@ -148,13 +156,29 @@ export class WebsiteDiscoveryService {
     }
   }
 
-  private async fetchCandidate(candidate: { provider: string; url: string; hit?: WebSearchResult }, input: WebsiteDiscoveryInput): Promise<{ kind: 'outcome'; outcome: WebsiteDiscoveryOutcome; score: number } | { kind: 'miss' } | { kind: 'rejected'; reason: OfficialWebsiteRejection }> {
+  private async fetchCandidate(candidate: { provider: string; url: string; hit?: WebSearchResult }, input: WebsiteDiscoveryInput): Promise<{ kind: 'outcome'; outcome: WebsiteDiscoveryOutcome; score: number } | { kind: 'miss' } | { kind: 'limited'; outcome: WebsiteDiscoveryOutcome } | { kind: 'rejected'; reason: OfficialWebsiteRejection }> {
     let page: WebsiteFetchResult;
     try {
       page = await this.fetchService.fetchPage(candidate.url);
     } catch (error) {
-      if (candidate.provider === 'web_search') return { kind: 'rejected', reason: websiteFetchFailureCategory(error) };
       const classified = this.classifyFetchError(error, candidate.provider);
+      if (classified === 'limited') {
+        const domain = new URL(candidate.url).hostname;
+        this.logger.warn(`Website discovery received HTTP 503 from ${domain}; continuing with limited results.`);
+        return {
+          kind: 'limited',
+          outcome: {
+            website: null,
+            status: 'LIMITED',
+            reason: `Website temporarily unavailable (HTTP 503): ${domain}.`,
+            provider: candidate.provider,
+            sourceUrl: candidate.url,
+            sourceType: 'WEBSITE',
+            retrievedAt: new Date().toISOString(),
+          },
+        };
+      }
+      if (candidate.provider === 'web_search') return { kind: 'rejected', reason: websiteFetchFailureCategory(error) };
       if (classified === 'miss') return { kind: 'miss' };
       throw classified;
     }
@@ -260,13 +284,14 @@ export class WebsiteDiscoveryService {
     return (page.title?.trim() || page.description?.trim() || website).slice(0, 500);
   }
 
-  private classifyFetchError(error: unknown, provider: string): WebsiteDiscoveryError | 'miss' {
+  private classifyFetchError(error: unknown, provider: string): WebsiteDiscoveryError | 'miss' | 'limited' {
     const message = error instanceof Error ? error.message : 'Website discovery failed.';
     if (/invalid website url|invalid url provided|private or internal|localhost targets|disallowed by robots|only public http/i.test(message)) return 'miss';
     const http = message.match(/HTTP (\d{3})/);
     if (http) {
       const status = Number(http[1]);
       if (status === 404 || status === 410) return 'miss';
+      if (status === 503) return 'limited';
       if (status >= 500) return new WebsiteDiscoveryError('PROVIDER_5XX', provider, 'fetch', true, `Website discovery provider returned HTTP ${status}.`);
       if (status === 429) return new WebsiteDiscoveryError('PROVIDER_UNAVAILABLE', provider, 'fetch', true, 'Website discovery provider is unavailable.');
       if (status >= 400) return new WebsiteDiscoveryError('PROVIDER_4XX', provider, 'fetch', false, `Website discovery provider returned HTTP ${status}.`);

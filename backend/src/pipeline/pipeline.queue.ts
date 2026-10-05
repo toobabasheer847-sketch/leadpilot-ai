@@ -15,7 +15,7 @@ export class PipelineQueue {
       delay: wait > 0 ? STAGE_WAIT_DELAY_MS : 0,
       attempts: 3,
       backoff: { type: 'exponential', delay: 1000 },
-      removeOnComplete: true,
+      removeOnComplete: 50,
       removeOnFail: 100,
     });
   }

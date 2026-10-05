@@ -6,6 +6,7 @@ import type { Queue, Worker } from 'bullmq';
 import { StructuredLoggerService } from '../common/observability/structured-logger.service';
 import { DatabaseService } from '../database/database.service';
 import { RedisService } from '../redis/redis.service';
+import { isRedisOomError } from '../redis/redis-error';
 import { bullRedisClients, BullResource, closeBullResources, countRedisClients, enterRedisShutdown, isRedisShutdown, isShutdownConnectionError, leaveRedisShutdown, noteShutdownReset, takeShutdownResetCount } from './bull-connection';
 import { QUEUE_NAMES, QueueObservabilityService } from './queue-observability.service';
 
@@ -142,6 +143,13 @@ export class QueueShutdownService implements OnApplicationBootstrap, OnModuleDes
           return;
         }
         const clients = bullRedisClients(resource);
+        if (isRedisOomError(error)) {
+          this.logger.warn('redis.client.oom', {
+            code: 'OOM',
+            openClients: clients.filter((client) => client.status && client.status !== 'end').length,
+          });
+          return;
+        }
         const code = 'code' in error && typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : '';
         this.logger.error('redis.client.error', {
           message: error.message,

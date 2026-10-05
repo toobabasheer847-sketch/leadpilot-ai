@@ -54,9 +54,22 @@ describe('environment validation', () => {
     })).toThrow(/OVERPASS_API_URL/);
   });
 
+  it('accepts OpenRouter discovery and rejects unsupported SOURCE_PROVIDER values', () => {
+    expect(validateEnvironment({
+      ...base,
+      SOURCE_PROVIDER: 'openrouter',
+      OPENROUTER_API_KEY: 'present',
+      OPENROUTER_MODEL: 'openrouter/auto',
+    })).toEqual(expect.objectContaining({ SOURCE_PROVIDER: 'openrouter', OPENROUTER_MODEL: 'openrouter/auto' }));
+    expect(() => validateEnvironment({ ...base, SOURCE_PROVIDER: 'tavily' }))
+      .toThrow(/Unsupported SOURCE_PROVIDER: tavily/);
+  });
+
   it('requires OpenRouter key and model together without accepting a blank value', () => {
     expect(validateEnvironment({ ...base, OPENROUTER_API_KEY: '', OPENROUTER_MODEL: '' })).toEqual(expect.objectContaining(base));
     expect(() => validateEnvironment({ ...base, OPENROUTER_API_KEY: 'present' })).toThrow(/must both be set/);
+    expect(validateEnvironment({ ...base, SOURCE_PROVIDER: 'openrouter', OPENROUTER_API_KEY: 'present' }))
+      .toEqual(expect.objectContaining({ SOURCE_PROVIDER: 'openrouter', OPENROUTER_API_KEY: 'present' }));
     expect(() => validateEnvironment({ ...base, OPENROUTER_MODEL: 'configured-model' })).toThrow(/must both be set/);
     expect(() => validateEnvironment({ ...base, OPENROUTER_API_KEY: '   ', OPENROUTER_MODEL: 'configured-model' })).toThrow(/non-empty/);
     expect(() => validateEnvironment({ ...base, OPENROUTER_BASE_URL: 'http://openrouter.example/api/v1', OPENROUTER_API_KEY: 'present', OPENROUTER_MODEL: 'configured-model' })).toThrow(/OPENROUTER_BASE_URL/);

@@ -29,7 +29,7 @@ const JOB_BOARDS = ['indeed.com', 'ziprecruiter.com', 'monster.com', 'simplyhire
 const LISTING = /\b(top\s+\d+|best\s+\d+|list of|companies to watch|ranking of|directory of|reviewed on|agencies? (?:in|for)|freelancers? (?:in|for))\b/i;
 const CONTRADICTION = /\b(restaurant|dentist|church|school|hotel|cafe|bar & grill|auto repair|salon)\b/i;
 const REAL_ESTATE_SIGNAL = /\b(real[\s-]?estate|realty|propert(?:y|ies)|acquisition|multifamily|apartment buildings?|wholesal(?:e|er|ing)|cash\s+home\s+buy|fix(?:\s|-)?and(?:\s|-)?flip)\b/i;
-const INVESTOR_SIGNAL = /\b(real[\s-]?estate|realty|propert(?:y|ies)|investors?|investments?|acquisition|holdings|multifamily|wholesal(?:e|er|ing)|cash\s+home\s+buy|fix(?:\s|-)?and(?:\s|-)?flip|we\s+buy\s+houses?)\b/i;
+const INVESTOR_SIGNAL = /\binvestors?|investments?|acquisition|holdings|multifamily|wholesal(?:e|er|ing)|cash\s+home\s+buy|fix(?:\s|-)?and(?:\s|-)?flip|we\s+buy\s+houses?|house\s+flippers?\b/i;
 const US_STATE_NAMES = [
   'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware', 'Florida', 'Georgia',
   'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland',
@@ -328,7 +328,7 @@ function withExpansionMetrics(
 }
 
 export function assessWebCompanyCandidate(
-  hit: Pick<WebSearchResult, 'title' | 'url' | 'snippet' | 'source' | 'retrievedAt'>,
+  hit: Pick<WebSearchResult, 'title' | 'url' | 'website' | 'extractedContacts' | 'snippet' | 'source' | 'retrievedAt'>,
   plan: SearchPlan,
 ): { accepted: true; result: NormalizedSourceResult } | { accepted: false; reason: string } {
   let hostname = '';
@@ -374,8 +374,9 @@ export function assessWebCompanyCandidate(
       return { accepted: false, reason: 'EXCLUSION_MATCH' };
     }
   }
-  const website = canonicalWebsite(hit.url);
-  const externalId = createHash('sha256').update(`${name.toLowerCase()}|${hostname}`).digest('hex').slice(0, 40);
+  const website = canonicalWebsite(hit.website ?? hit.url);
+  const websiteHost = new URL(website).hostname.toLowerCase().replace(/^www\./, '');
+  const externalId = createHash('sha256').update(`${name.toLowerCase()}|${websiteHost || hostname}`).digest('hex').slice(0, 40);
   return {
     accepted: true,
     result: {
@@ -394,6 +395,7 @@ export function assessWebCompanyCandidate(
         snippet: hit.snippet,
         source: hit.source,
         retrievedAt: hit.retrievedAt,
+        ...(hit.extractedContacts?.length ? { openRouterContacts: hit.extractedContacts } : {}),
         ...(location ? { locationEvidence: location.evidence } : {}),
       },
     },
@@ -408,7 +410,7 @@ function isInvestorPlan(plan: SearchPlan): boolean {
 function categoryDecision(text: string, plan: SearchPlan, companyName: string): { matched: true; label: string } | { matched: false; reason: string } {
   if (isInvestorPlan(plan)) {
     if (CONTRADICTION.test(text) && !REAL_ESTATE_SIGNAL.test(text)) return { matched: false, reason: 'NOT_REAL_ESTATE_INVESTOR' };
-    if (!INVESTOR_SIGNAL.test(text)) return { matched: false, reason: 'NOT_REAL_ESTATE_INVESTOR' };
+    if (!matchesRequestedInvestorCategory(text, plan)) return { matched: false, reason: 'NOT_REAL_ESTATE_INVESTOR' };
     return { matched: true, label: plan.leadTypes.find((type) => /investor|flip|hold|brrrr|buyer|wholesaler/.test(type)) ?? 'real_estate_investor' };
   }
   const assessment = assessCategoryEvidence({
@@ -418,6 +420,22 @@ function categoryDecision(text: string, plan: SearchPlan, companyName: string): 
   });
   if (assessment.verdict === 'NO_MATCH') return { matched: false, reason: assessment.reason };
   return { matched: true, label: plan.industry[0] ?? plan.leadTypes[0] ?? 'company' };
+}
+
+function matchesRequestedInvestorCategory(text: string, plan: SearchPlan): boolean {
+  const types = plan.leadTypes.map((type) => type.toLowerCase().replace(/[^a-z0-9]+/g, '_'));
+  const requestedSignals: RegExp[] = [];
+  if (types.some((type) => /cash_home_buyer|cash_buyer/.test(type))) {
+    requestedSignals.push(/\b(?:cash\s+(?:home|house)\s+buyers?|we\s+buy\s+houses?|buy(?:ing)?\s+houses?\s+for\s+cash)\b/i);
+  }
+  if (types.some((type) => /fix_and_flip|house_flipper|flipper/.test(type))) {
+    requestedSignals.push(/\b(?:fix(?:\s|-)?and(?:\s|-)?flip|house\s+flippers?|flipping\s+houses?)\b/i);
+  }
+  if (types.some((type) => /wholesaler|wholesal/.test(type))) {
+    requestedSignals.push(/\b(?:real\s+estate\s+wholesal(?:er|ing)|wholesal(?:e|ing)\s+(?:houses?|homes?|properties|real\s+estate))\b/i);
+  }
+  if (requestedSignals.length) return requestedSignals.some((signal) => signal.test(text));
+  return INVESTOR_SIGNAL.test(text);
 }
 
 function companyNameFromTitle(title: string): string | null {

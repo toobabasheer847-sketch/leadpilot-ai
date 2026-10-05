@@ -22,6 +22,7 @@ describe('DiscoveryProviderRegistry', () => {
     expect(status.providers).toEqual([
       { name: 'google_places', configured: true, enabled: true },
       { name: 'osm', configured: true, enabled: false },
+      { name: 'openrouter', configured: false, enabled: false },
     ]);
     expect(JSON.stringify(status)).not.toContain('secret-key');
   });
@@ -41,5 +42,16 @@ describe('DiscoveryProviderRegistry', () => {
       'sourceProvider.overpassApiUrl': 'http://overpass.example/api',
     }).status();
     expect(insecure.providers).toContainEqual({ name: 'osm', configured: false, enabled: false });
+  });
+
+  it('reports OpenRouter configured from its key without exposing it and enables only the selected provider', () => {
+    const status = registry({
+      nodeEnv: 'development',
+      'sourceProvider.provider': 'openrouter',
+      'openRouter.apiKey': 'openrouter-private-key',
+      'openRouter.baseUrl': 'https://openrouter.ai/api/v1',
+    }).status();
+    expect(status.providers).toContainEqual({ name: 'openrouter', configured: true, enabled: true });
+    expect(JSON.stringify(status)).not.toContain('openrouter-private-key');
   });
 });

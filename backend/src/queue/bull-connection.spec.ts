@@ -1,6 +1,7 @@
 import { Queue, QueueEvents, Worker } from 'bullmq';
 import Redis from 'ioredis';
-import { bullConnectionOptions, bullRedisClients, closeBullResources, LONG_RUNNING_WORKER } from './bull-connection';
+import { BULL_DEFAULT_JOB_OPTIONS, bullConnectionOptions, bullRedisClients, closeBullResources, LONG_RUNNING_WORKER } from './bull-connection';
+import { isRedisOomError } from '../redis/redis-error';
 
 const prefix = `leadpilot-test-${process.pid}`;
 
@@ -10,6 +11,10 @@ describe('bull connection', () => {
     expect(bullConnectionOptions('redis://localhost:6379')).toMatchObject({ host: '127.0.0.1', port: 6379, maxRetriesPerRequest: null });
     expect(bullConnectionOptions('redis://127.0.0.1:6379').host).toBe('127.0.0.1');
     expect(LONG_RUNNING_WORKER.lockRenewTime).toBeLessThan(LONG_RUNNING_WORKER.lockDuration ?? 0);
+    expect(BULL_DEFAULT_JOB_OPTIONS).toEqual({ removeOnComplete: 50, removeOnFail: 100 });
+    expect(isRedisOomError(new Error("OOM command not allowed when used memory > 'maxmemory'."))).toBe(true);
+    expect(isRedisOomError({ code: 'OOM' })).toBe(true);
+    expect(isRedisOomError(new Error('WRONGTYPE operation against a key'))).toBe(false);
   });
 
   it('surfaces a failed redis connection and still closes', async () => {
@@ -70,5 +75,30 @@ describe('bull connection', () => {
     expect(clients.length).toBeGreaterThanOrEqual(4);
     await new Promise((resolve) => setTimeout(resolve, 400));
     for (const client of clients) expect(client.status).toBe('end');
+  });
+
+  it('prunes completed jobs using the configured default retention count', async () => {
+    const connection = bullConnectionOptions('redis://127.0.0.1:6379');
+    const name = 'job-retention';
+    const queue = new Queue(name, { connection, prefix, defaultJobOptions: BULL_DEFAULT_JOB_OPTIONS });
+    queue.setMaxListeners(BULL_DEFAULT_JOB_OPTIONS.removeOnComplete + 10);
+    const events = new QueueEvents(name, { connection, prefix });
+    const worker = new Worker(name, async (job) => job.data.value, { connection, prefix });
+    worker.on('error', () => undefined);
+
+    try {
+      await Promise.all([queue.waitUntilReady(), events.waitUntilReady(), worker.waitUntilReady()]);
+      await worker.pause();
+      const jobCount = BULL_DEFAULT_JOB_OPTIONS.removeOnComplete + 1;
+      const jobs = await Promise.all(Array.from({ length: jobCount }, (_, index) => queue.add('retention-probe', { value: index })));
+      const completions = jobs.map((job) => job.waitUntilFinished(events, 15_000));
+      await worker.resume();
+      await Promise.all(completions);
+
+      expect(await queue.getJob(String(jobs[0].id))).toBeUndefined();
+      expect(await queue.getJob(String(jobs[jobCount - 1].id))).toBeDefined();
+    } finally {
+      await closeBullResources([worker, events, queue]);
+    }
   });
 });

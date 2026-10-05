@@ -27,8 +27,8 @@ export class ResearchQueue {
       jobId,
       attempts: retries + 1,
       backoff: { type: 'exponential', delay: 2000 },
-      removeOnComplete: true,
-      removeOnFail: false,
+      removeOnComplete: 50,
+      removeOnFail: 100,
     });
   }
 }

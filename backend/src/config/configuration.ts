@@ -57,8 +57,8 @@ export default () => ({
     apiKey: process.env.OPENROUTER_API_KEY?.trim() || undefined,
     model: process.env.OPENROUTER_MODEL?.trim() || undefined,
     baseUrl: process.env.OPENROUTER_BASE_URL?.trim() || 'https://openrouter.ai/api/v1',
-    timeoutMs: parseInt(process.env.OPENROUTER_TIMEOUT_MS ?? '20000', 10),
-    retries: parseInt(process.env.OPENROUTER_RETRIES ?? '2', 10),
+    timeoutMs: parseInt(process.env.OPENROUTER_TIMEOUT_MS ?? '120000', 10),
+    retries: parseInt(process.env.OPENROUTER_RETRIES ?? '1', 10),
   },
 
   contactProvider: {
@@ -181,9 +181,16 @@ export function validateEnvironment(config: Record<string, unknown>) {
   const throttlerLimit = Number(config.THROTTLE_LIMIT ?? 100);
   const throttlerTtl = Number(config.THROTTLE_TTL ?? 60000);
   const nodeEnv = typeof config.NODE_ENV === 'string' ? config.NODE_ENV : 'development';
+  const sourceProvider = typeof config.SOURCE_PROVIDER === 'string' && config.SOURCE_PROVIDER.trim()
+    ? config.SOURCE_PROVIDER.trim().toLowerCase()
+    : 'google_places';
   const corsOrigin = typeof config.CORS_ORIGIN === 'string'
     ? config.CORS_ORIGIN
     : 'http://localhost:3000,http://localhost:5173';
+
+  if (!['google_places', 'osm', 'openrouter', 'fake', 'fake_source'].includes(sourceProvider)) {
+    throw new Error(`Unsupported SOURCE_PROVIDER: ${sourceProvider}`);
+  }
 
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error('PORT must be an integer between 1 and 65535');
@@ -205,7 +212,6 @@ export function validateEnvironment(config: Record<string, unknown>) {
   const openRouterModel = typeof config.OPENROUTER_MODEL === 'string' ? config.OPENROUTER_MODEL.trim() : '';
 
   if (nodeEnv === 'production') {
-    const sourceProvider = typeof config.SOURCE_PROVIDER === 'string' ? config.SOURCE_PROVIDER : 'google_places';
     if (sourceProvider === 'fake' || sourceProvider === 'fake_source') {
       throw new Error('SOURCE_PROVIDER=fake is not allowed in production');
     }
@@ -218,7 +224,8 @@ export function validateEnvironment(config: Record<string, unknown>) {
     || (typeof config.OPENROUTER_MODEL === 'string' && config.OPENROUTER_MODEL.length > 0 && !openRouterModel)) {
     throw new Error('OPENROUTER_API_KEY and OPENROUTER_MODEL must be non-empty when set');
   }
-  if (Boolean(openRouterKey) !== Boolean(openRouterModel)) {
+  const openRouterSearchCanUseDefaultModel = sourceProvider === 'openrouter' && Boolean(openRouterKey) && !openRouterModel;
+  if ((!openRouterSearchCanUseDefaultModel && Boolean(openRouterKey) !== Boolean(openRouterModel))) {
     throw new Error('OPENROUTER_API_KEY and OPENROUTER_MODEL must both be set');
   }
   if (typeof config.OPENROUTER_BASE_URL === 'string' && config.OPENROUTER_BASE_URL.trim()) {

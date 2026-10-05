@@ -66,6 +66,7 @@ function buildService(input: {
     requestContext as never,
     webDiscovery as never,
     config as never,
+    { warn: jest.fn(), info: jest.fn(), error: jest.fn() } as never,
   );
   jest.spyOn(service as never as { audit: (...args: unknown[]) => Promise<void> }, 'audit').mockResolvedValue(undefined);
   jest.spyOn(service as never as { persistResults: (...args: unknown[]) => Promise<number> }, 'persistResults')

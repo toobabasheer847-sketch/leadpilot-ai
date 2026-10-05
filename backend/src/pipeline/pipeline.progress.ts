@@ -246,6 +246,7 @@ export function classifyPipelineError(error: unknown): { code: PipelineErrorCode
 }
 
 export const WEBSITE_PARTIAL_MESSAGE = 'No verified website found for some companies.';
+export const WEBSITE_LIMITED_MESSAGE = 'Website access was limited for some companies.';
 export const ENRICHMENT_EMPTY_MESSAGE = 'No additional verified enrichment data found.';
 
 function classifyWebSearchMessage(raw: string): { code: PipelineErrorCode; retryable: boolean } | null {
@@ -268,8 +269,9 @@ function classifyWebsiteDiscoveryMessage(raw: string): { code: PipelineErrorCode
   return null;
 }
 
-export function summarizeWebsiteFindings(outcomes: Array<'FOUND' | 'NOT_FOUND'>): { state: 'COMPLETED' } | { state: 'PARTIAL'; message: string } | null {
+export function summarizeWebsiteFindings(outcomes: Array<'FOUND' | 'NOT_FOUND' | 'LIMITED'>): { state: 'COMPLETED' } | { state: 'PARTIAL'; message: string } | null {
   if (outcomes.length === 0) return null;
+  if (outcomes.includes('LIMITED')) return { state: 'PARTIAL', message: WEBSITE_LIMITED_MESSAGE };
   const found = outcomes.some((item) => item === 'FOUND');
   const missing = outcomes.some((item) => item === 'NOT_FOUND');
   if (found && missing) return { state: 'PARTIAL', message: WEBSITE_PARTIAL_MESSAGE };

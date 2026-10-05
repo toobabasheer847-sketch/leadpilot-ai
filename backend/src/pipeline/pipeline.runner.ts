@@ -79,7 +79,7 @@ export class PipelineStageRunner {
     private readonly jobs: PipelineJobInspector,
     private readonly metrics: MetricsService,
     private readonly completeness: CompletenessRetryService,
-    config: ConfigService,
+    private readonly config: ConfigService,
   ) {
     this.dispatchConcurrency = clampConcurrency(
       config.get<number>('enrichment.dispatchConcurrency') ?? config.get<number>('enrichment.concurrency'),
@@ -155,6 +155,10 @@ export class PipelineStageRunner {
     if (stage === 'SOURCE_DISCOVERY') {
       return this.move(progress, 'sourceDiscovery', 'COMPANY_PERSISTENCE');
     }
+    if (this.openRouterOnlyDiscovery()) {
+      const skipped = withStageState(progress, 'websiteDiscovery', 'SKIPPED');
+      return this.move(skipped, 'companyPersistence', 'ENRICHMENT');
+    }
     return this.move(progress, 'companyPersistence', 'WEBSITE_DISCOVERY');
   }
 
@@ -215,7 +219,7 @@ export class PipelineStageRunner {
   /** Phase O: bounded missing-field pass before contact quality, without a new UI stage. */
   private async afterPostEnrichment(row: PipelineExecutionRow, progress: PipelineProgressState): Promise<StageTick> {
     let next = progress;
-    if (!next.metrics?.completenessPassDone && row.searchExecutionId) {
+    if (!this.openRouterOnlyDiscovery() && !next.metrics?.completenessPassDone && row.searchExecutionId) {
       try {
         const stats = await this.completeness.runForExecution(row.organizationId, row.searchExecutionId);
         next = {
@@ -399,6 +403,10 @@ export class PipelineStageRunner {
   }
 
   private async dispatch(row: PipelineExecutionRow, key: TrackedKey): Promise<string[]> {
+    if (
+      this.openRouterOnlyDiscovery()
+      && (key === 'websiteDiscovery' || key === 'deepResearch' || key === 'employeeSize' || key === 'decisionMakerDiscovery')
+    ) return [];
     if (key === 'employeeSize') {
       if (!row.searchExecutionId || !employeeSizeRequested(await this.planFor(row))) return [];
     }
@@ -424,6 +432,11 @@ export class PipelineStageRunner {
       }
     }, { maxConcurrency: 32 });
     return jobIds.filter((jobId): jobId is string => Boolean(jobId));
+  }
+
+  private openRouterOnlyDiscovery(): boolean {
+    const provider = this.config.get<unknown>('sourceProvider.provider');
+    return typeof provider === 'string' && provider.trim().toLowerCase() === 'openrouter';
   }
 
   private async planFor(row: PipelineExecutionRow): Promise<unknown> {

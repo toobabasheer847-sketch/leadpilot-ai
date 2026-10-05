@@ -21,8 +21,8 @@ export class ClassificationQueue {
       jobId: data.idempotencyKey,
       attempts: 3,
       backoff: { type: 'exponential', delay: 2000 },
-      removeOnComplete: true,
-      removeOnFail: false,
+      removeOnComplete: 50,
+      removeOnFail: 100,
     });
   }
 }

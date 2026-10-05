@@ -57,6 +57,7 @@ export interface DiscoveryProviderAttempt {
 export function providerDisplayName(provider: string): string {
   if (provider === 'osm') return 'OpenStreetMap';
   if (provider === 'google_places') return 'Google Places';
+  if (provider === 'openrouter') return 'OpenRouter Web Search';
   if (provider === 'web_search') return 'Web Search';
   if (provider === 'fake' || provider === 'fake_source') return 'Fake';
   return provider;

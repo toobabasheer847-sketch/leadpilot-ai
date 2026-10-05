@@ -41,7 +41,7 @@ export class PipelineJobInspector {
     if (!queue) return { state: 'FAILED', message: 'Pipeline stage queue is unavailable.' };
 
     const observed: ObservedJobState[] = [];
-    const websiteOutcomes: Array<'FOUND' | 'NOT_FOUND'> = [];
+    const websiteOutcomes: Array<'FOUND' | 'NOT_FOUND' | 'LIMITED'> = [];
     let failureMessage = 'Pipeline stage failed.';
     for (const jobId of jobIds) {
       const job = await queue.getJob(jobId);
@@ -66,8 +66,8 @@ export class PipelineJobInspector {
   }
 }
 
-function websiteStatusFrom(value: unknown): 'FOUND' | 'NOT_FOUND' | null {
+function websiteStatusFrom(value: unknown): 'FOUND' | 'NOT_FOUND' | 'LIMITED' | null {
   if (!value || typeof value !== 'object' || !('websiteStatus' in value)) return null;
   const status = (value as { websiteStatus?: unknown }).websiteStatus;
-  return status === 'FOUND' || status === 'NOT_FOUND' ? status : null;
+  return status === 'FOUND' || status === 'NOT_FOUND' || status === 'LIMITED' ? status : null;
 }

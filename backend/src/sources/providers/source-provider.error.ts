@@ -6,6 +6,7 @@ export const PROVIDER_ERROR_CODES = [
   'PROVIDER_UNAVAILABLE',
   'PROVIDER_INVALID_REQUEST',
   'PROVIDER_QUOTA_EXCEEDED',
+  'PROVIDER_INVALID_RESPONSE',
   'PROVIDER_UNKNOWN_ERROR',
 ] as const;
 
@@ -22,6 +23,7 @@ const TERMINAL_PROVIDER_ERRORS = new Set<string>([
   'PROVIDER_NOT_CONFIGURED',
   'PROVIDER_AUTH_ERROR',
   'PROVIDER_INVALID_REQUEST',
+  'PROVIDER_INVALID_RESPONSE',
   'PROVIDER_QUOTA_EXCEEDED',
   'NOT_CONFIGURED',
   'AUTHENTICATION',
@@ -60,6 +62,7 @@ export function isRecoverableDiscoveryError(error: unknown): error is SourceProv
     || error.code === 'PROVIDER_UNAVAILABLE'
     || error.code === 'PROVIDER_NOT_CONFIGURED'
     || error.code === 'PROVIDER_INVALID_REQUEST'
+    || error.code === 'PROVIDER_INVALID_RESPONSE'
     || error.code === 'PROVIDER_QUOTA_EXCEEDED'
     || error.code === 'PROVIDER_AUTH_ERROR'
   );

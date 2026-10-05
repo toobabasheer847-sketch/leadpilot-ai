@@ -49,7 +49,16 @@ export class SourceDiscoveryProcessor extends WorkerHost {
       const safeMessage = error instanceof SourceProviderError || error instanceof Error
         ? error.message
         : 'Source discovery failed.';
-      this.logger.warn('job.source_discovery.failed', { jobId: job.id, errorType: error instanceof Error ? error.name : 'unknown', errorCode: error instanceof SourceProviderError ? error.code : undefined });
+      const errorCode = error instanceof SourceProviderError ? error.code : undefined;
+      this.logger.warn('job.source_discovery.failed', {
+        jobId: job.id,
+        searchExecutionId,
+        errorType: error instanceof Error ? error.name : 'unknown',
+        errorCode,
+        ...(errorCode === 'PROVIDER_QUOTA_EXCEEDED'
+          ? { fallbackNote: 'OSM fallback was attempted during discovery. Job is terminal if all providers were exhausted.' }
+          : {}),
+      });
       await this.db.update(searchExecutions).set({
         status: 'FAILED',
         completedAt: new Date(),

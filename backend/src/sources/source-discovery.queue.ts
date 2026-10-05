@@ -19,7 +19,7 @@ export class SourceDiscoveryQueue {
       jobId: `search-discovery-${data.searchExecutionId}`,
       attempts: 3,
       backoff: { type: 'exponential', delay: 1000 },
-      removeOnComplete: 100,
+      removeOnComplete: 50,
       removeOnFail: 100,
     });
   }

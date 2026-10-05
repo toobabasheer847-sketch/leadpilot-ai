@@ -1,11 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHash } from 'node:crypto';
 import { and, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { DRIZZLE } from '../../database/database.constants';
 import type { Database } from '../../database/database.types';
-import { auditLogs, companies, companyLocations, leadEvidence, sourceRecords } from '../../database/schema/schema';
+import { auditLogs, companies, companyContacts, companyLocations, leadEvidence, sourceRecords } from '../../database/schema/schema';
 import { ProviderObservabilityService } from '../../common/observability/provider-observability.service';
 import { RequestContextService } from '../../common/observability/request-context.service';
+import { StructuredLoggerService } from '../../common/observability/structured-logger.service';
 import { UsageService } from '../../usage/usage.service';
 import { SearchPlan } from '../../search/types/search-plan.types';
 import {
@@ -83,6 +85,7 @@ export class SourceDiscoveryService {
     private readonly requestContext: RequestContextService,
     private readonly webDiscovery: WebSearchCompanyDiscovery,
     private readonly config: ConfigService,
+    private readonly logger: StructuredLoggerService,
   ) {}
 
   async discover(executionId: string, organizationId: string, plan: SearchPlan, trace: Pick<SourceSearchContext, 'requestId' | 'correlationId'> = {}) {
@@ -277,7 +280,8 @@ export class SourceDiscoveryService {
 
     // Stream web discovery + refill: persist each accepted chunk immediately so hanging SERP
     // queries cannot block COMPANIES_SAVED / WEBSITE_DISCOVERY forever.
-    const webUsable = !synthetic && capabilities.webSearchAvailable && !circuit.isUnavailable('web_search');
+    const openRouterOnly = this.provider.providerName() === 'openrouter';
+    const webUsable = !openRouterOnly && !synthetic && capabilities.webSearchAvailable && !circuit.isUnavailable('web_search');
     if (webUsable) {
       let round = 0;
       let webQueriesRun = 0;
@@ -398,6 +402,115 @@ export class SourceDiscoveryService {
           queriesSkipped: webQueriesSkipped,
           skipped: false,
           errorCategory: webError ? webOutcome : null,
+        });
+      }
+    }
+
+    // ─── Quota-exceeded OSM fallback ──────────────────────────────────────────
+    // When Tavily / web-search is exhausted (QUOTA_EXCEEDED) and there is still a
+    // candidate shortfall, automatically re-run any OSM provider from the chain that
+    // has NOT already tripped the circuit for this execution.  This gives the job a
+    // map-provider safety net without requiring a full BullMQ retry cycle.
+    if (
+      candidates < seek
+      && webError
+      && classifyDiscoveryProviderOutcome({ resultsCount: 0, error: webError }) === 'QUOTA_EXCEEDED'
+    ) {
+      const osmFallbackProviders = mapProviders.filter(
+        (p) => p.providerName() === 'osm'
+          && !attempts.some((attempt) => attempt.provider === p.providerName())
+          && !circuit.isUnavailable(p.providerName()),
+      );
+      if (osmFallbackProviders.length > 0) {
+        this.logger.warn('discovery.web_search.quota_exceeded_osm_fallback', {
+          executionId,
+          organizationId,
+          webError,
+          message: 'Tavily quota exceeded. Falling back to OpenStreetMap provider automatically.',
+        });
+        await this.audit(organizationId, executionId, 'SOURCE_PROVIDER_FALLBACK', undefined, {
+          reason: 'QUOTA_EXCEEDED',
+          from: 'web_search',
+          to: 'osm',
+          executionId,
+          organizationId,
+        });
+      }
+
+      for (const osmProvider of osmFallbackProviders) {
+        if (candidates >= seek) break;
+        const providerName = osmProvider.providerName();
+        let osmResults: NormalizedSourceResult[] = [];
+        let osmError: string | null = null;
+        let osmErrorCode: string | null = null;
+        let osmQueriesRun = 0;
+        let osmDuplicatesRemoved = 0;
+        try {
+          const result = await this.providerObservability.track(providerName, 'DISCOVERY_FALLBACK', async () => ({
+            value: await osmProvider.searchBusinesses(plan, context),
+          }));
+          const room = Math.max(0, seek - candidates);
+          const deduped = dedupeDiscoveryCandidates(excludePool, result.results.slice(0, room));
+          osmResults = deduped.accepted;
+          const osmSupplements = deduped.supplements;
+          emptyFieldEnrichments += osmSupplements.length;
+          osmDuplicatesRemoved = deduped.duplicatesRemoved;
+          osmError = result.providerError ?? null;
+          osmQueriesRun = result.queriesRun ?? 0;
+          providerQueries += osmQueriesRun;
+          globalQueriesIssued += osmQueriesRun;
+          duplicates += osmDuplicatesRemoved;
+          if (osmResults.length || osmSupplements.length) {
+            excludePool.push(...osmResults);
+            const added = await this.persistResults(
+              organizationId,
+              executionId,
+              providerName,
+              [...osmResults, ...osmSupplements],
+              synthetic,
+              context,
+            );
+            candidates += added;
+            mapDiscovered += osmResults.length;
+          }
+        } catch (error) {
+          if (!isRecoverableDiscoveryError(error)) throw error;
+          osmError = error.message;
+          osmErrorCode = error.code;
+        }
+
+        const osmOutcome = classifyDiscoveryProviderOutcome({
+          resultsCount: osmResults.length,
+          error: osmError,
+          errorCode: osmErrorCode,
+        });
+        circuit.trip(providerName, osmOutcome, osmError);
+        attempts.push({
+          provider: `${providerName}_quota_fallback`,
+          outcome: osmOutcome,
+          message: osmError,
+          resultsCount: osmResults.length,
+          acceptedCandidates: osmResults.length,
+          duplicatesRemoved: osmDuplicatesRemoved,
+          queriesRun: osmQueriesRun,
+          queriesSkipped: 0,
+          skipped: false,
+          errorCategory: osmError ? osmOutcome : null,
+        });
+        if (osmError && !primaryError) primaryError = osmError;
+        await this.auditProgress(organizationId, executionId, {
+          candidates,
+          target: seek,
+          requested: explicit ?? null,
+          discovered: mapDiscovered + webDiscovered,
+          accepted: candidates,
+          rejected,
+          duplicates,
+          shortfall: countShortfall(plan, candidates),
+          providerQueries,
+          queriesSkipped,
+          phase: 'OSM_QUOTA_FALLBACK_PERSISTED',
+          attempts,
         });
       }
     }
@@ -661,12 +774,114 @@ export class SourceDiscoveryService {
             role: 'discovery_candidate',
           });
         }
+        if (provider === 'openrouter') {
+          await this.persistOpenRouterContacts(company.id, normalized, sourceRecord.id);
+        }
         if (!alreadyLinked) accepted += 1;
       } catch (error) {
         await this.audit(organizationId, executionId, 'SOURCE_RESULT_REJECTED', undefined, { reason: error instanceof Error ? error.name : 'unknown' });
       }
     }
     return accepted;
+  }
+
+  private async persistOpenRouterContacts(
+    companyId: string,
+    result: ReturnType<SourceNormalizerService['normalize']>,
+    sourceRecordId: string,
+  ) {
+    const rawContacts = result.rawData?.openRouterContacts;
+    if (!Array.isArray(rawContacts)) return;
+    for (const value of rawContacts) {
+      if (!value || typeof value !== 'object') continue;
+      const candidate = value as {
+        fullName?: unknown;
+        title?: unknown;
+        email?: unknown;
+        sourceUrl?: unknown;
+        evidenceExcerpt?: unknown;
+        retrievedAt?: unknown;
+      };
+      if (
+        typeof candidate.fullName !== 'string'
+        || !candidate.fullName.trim()
+        || typeof candidate.title !== 'string'
+        || !candidate.title.trim()
+        || typeof candidate.sourceUrl !== 'string'
+        || typeof candidate.evidenceExcerpt !== 'string'
+        || !candidate.evidenceExcerpt.toLowerCase().includes(candidate.fullName.toLowerCase())
+        || !candidate.evidenceExcerpt.toLowerCase().includes(candidate.title.toLowerCase())
+      ) continue;
+      const email = typeof candidate.email === 'string'
+        && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate.email)
+        && candidate.evidenceExcerpt.toLowerCase().includes(candidate.email.toLowerCase())
+        ? candidate.email.toLowerCase()
+        : null;
+      const fullName = candidate.fullName.trim();
+      const title = candidate.title.trim();
+      const [existing] = await this.db.select().from(companyContacts).where(and(
+        eq(companyContacts.companyId, companyId),
+        eq(companyContacts.fullName, fullName),
+      )).limit(1);
+      const [contact] = existing
+        ? await this.db.update(companyContacts).set({
+            ...(!existing.title ? { title } : {}),
+            ...(!existing.email && email ? { email, emailStatus: 'UNVERIFIED' } : {}),
+            ...(!existing.source ? { source: candidate.sourceUrl } : {}),
+            updatedAt: new Date(),
+          }).where(eq(companyContacts.id, existing.id)).returning()
+        : await this.db.insert(companyContacts).values({
+            companyId,
+            fullName,
+            firstName: fullName.split(/\s+/)[0] ?? fullName,
+            lastName: fullName.split(/\s+/).slice(1).join(' ') || null,
+            title,
+            email,
+            emailStatus: email ? 'UNVERIFIED' : 'NOT_FOUND',
+            source: candidate.sourceUrl,
+            status: 'DISCOVERED',
+            confidence: '0.8000',
+            verificationStatus: 'NOT_VERIFIED',
+          }).returning();
+      if (!contact) continue;
+      const evidenceExcerpt = candidate.evidenceExcerpt.slice(0, 2000);
+      const retrievedAt = typeof candidate.retrievedAt === 'string' && Number.isFinite(Date.parse(candidate.retrievedAt))
+        ? new Date(candidate.retrievedAt)
+        : new Date();
+      const fields = [
+        ['fullName', fullName],
+        ['title', title],
+        ...(email ? [['email', email] as [string, string]] : []),
+      ];
+      for (const [field, fieldValue] of fields) {
+        const idempotencyKey = createHash('sha256').update(JSON.stringify({
+          companyId,
+          contactId: contact.id,
+          field,
+          sourceUrl: candidate.sourceUrl,
+          value: fieldValue,
+          evidenceExcerpt,
+        })).digest('hex');
+        await this.db.insert(leadEvidence).values({
+          companyId,
+          contactId: contact.id,
+          sourceRecordId,
+          evidenceType: 'PUBLIC_WEB_SEARCH',
+          sourceUrl: candidate.sourceUrl,
+          sourceType: 'PUBLIC_WEB',
+          provider: 'openrouter',
+          evidenceText: evidenceExcerpt,
+          evidenceTimestamp: retrievedAt,
+          idempotencyKey,
+          metadata: {
+            field,
+            value: fieldValue,
+            discoveryStatus: 'FOUND',
+            verificationStatus: 'NOT_VERIFIED',
+          },
+        }).onConflictDoNothing({ target: leadEvidence.idempotencyKey });
+      }
+    }
   }
 
   private async companyAlreadyInExecution(organizationId: string, executionId: string, companyId: string) {
