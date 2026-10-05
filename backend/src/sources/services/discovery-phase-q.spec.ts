@@ -79,6 +79,7 @@ function buildService(input: {
     },
   };
   const persisted: NormalizedSourceResult[] = [];
+  const logger = { warn: jest.fn(), info: jest.fn(), error: jest.fn() };
   const service = new SourceDiscoveryService(
     {} as never,
     primary,
@@ -89,7 +90,7 @@ function buildService(input: {
     requestContext as never,
     webDiscovery as never,
     config as never,
-    { warn: jest.fn(), info: jest.fn(), error: jest.fn() } as never,
+    logger as never,
   );
   const audit = jest.spyOn(service as never as { audit: (...args: unknown[]) => Promise<void> }, 'audit').mockResolvedValue(undefined);
   jest.spyOn(service as never as { persistResults: (...args: unknown[]) => Promise<number> }, 'persistResults')
@@ -97,7 +98,7 @@ function buildService(input: {
       persisted.push(...results);
       return results.length;
     });
-  return { service, webDiscovery, audit, persisted, usage };
+  return { service, webDiscovery, audit, persisted, usage, logger };
 }
 
 describe('Phase Q resilient discovery providers', () => {
@@ -219,6 +220,25 @@ describe('Phase Q resilient discovery providers', () => {
       candidates: 1,
     });
     expect(webDiscovery.collect).not.toHaveBeenCalled();
+  });
+
+  it('maps an unexpected OpenRouter execution error to a safe empty result and logs its stack', async () => {
+    const openRouter = mapProvider('openrouter', jest.fn());
+    const { service, audit, logger } = buildService({ chain: [openRouter] });
+    const failure = new TypeError('candidate property access failed');
+    audit.mockRejectedValueOnce(failure);
+
+    await expect(service.discover('exec-openrouter-error', 'org-openrouter', texasPlan))
+      .resolves.toMatchObject({
+        candidates: 0,
+        providersUnavailable: 1,
+        discoveryStopReason: 'PROVIDER_UNAVAILABLE',
+      });
+    expect(logger.error).toHaveBeenCalledWith('discovery.openrouter.unhandled_error', expect.objectContaining({
+      errorType: 'TypeError',
+      stack: failure.stack,
+      provider: 'openrouter',
+    }));
   });
 
   it('F. All providers unavailable → Discovery FAILED', async () => {

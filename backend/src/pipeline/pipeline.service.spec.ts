@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { GooglePlacesProvider } from '../sources/providers/google-places/google-places.provider';
 import { SourceProviderError } from '../sources/providers/source-provider.error';
@@ -101,6 +101,33 @@ describe('pipeline orchestration', () => {
     const tick = await runner.tick(row(), initialProgress());
     expect(tick).toMatchObject({ type: 'advance', currentStage: 'COMPANY_PERSISTENCE' });
     if (tick.type === 'advance') expect(tick.progress.stages.sourceDiscovery).toBe('COMPLETED');
+  });
+
+  it('advances past OpenRouter discovery when reading the search execution throws', async () => {
+    const repository = repositoryMock();
+    const failure = new TypeError('database response is malformed');
+    repository.getSearchExecution = jest.fn().mockRejectedValue(failure);
+    const errorLog = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+    try {
+      const runner = runnerWith(repository, { 'sourceProvider.provider': 'openrouter' });
+      const tick = await runner.tick(row(), initialProgress());
+
+      expect(tick).toMatchObject({
+        type: 'advance',
+        currentStage: 'ENRICHMENT',
+        progress: {
+          stages: {
+            sourceDiscovery: 'PARTIAL',
+            companyPersistence: 'PARTIAL',
+            websiteDiscovery: 'SKIPPED',
+          },
+        },
+      });
+      const logged = JSON.parse(String(errorLog.mock.calls[0]?.[0])) as { stack?: string; errorType?: string };
+      expect(logged).toMatchObject({ errorType: 'TypeError', stack: failure.stack });
+    } finally {
+      errorLog.mockRestore();
+    }
   });
 
   it('records a configuration failure and does not complete the pipeline', async () => {
@@ -406,7 +433,7 @@ function config(values: Record<string, unknown>) {
   return { get: (key: string) => values[key] } as ConfigService;
 }
 
-function runnerWith(repository: Record<string, unknown>) {
+function runnerWith(repository: Record<string, unknown>, configValues: Record<string, unknown> = {}) {
   return new PipelineStageRunner(
     repository as never,
     {} as never,
@@ -422,6 +449,6 @@ function runnerWith(repository: Record<string, unknown>) {
     {} as never,
     { increment: jest.fn(), observe: jest.fn() } as never,
     { runForExecution: jest.fn().mockResolvedValue({ companiesAssessed: 0, companiesRetried: 0, fieldsFilled: 0, searchesSkipped: 0, providerFailures: 0, durationMs: 0 }) } as never,
-    config({}),
+    config(configValues),
   );
 }

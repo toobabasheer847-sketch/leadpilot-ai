@@ -15,10 +15,20 @@ export interface WebSearchResult {
     fullName: string;
     title: string;
     email?: string;
+    linkedinUrl?: string;
+    facebookUrl?: string;
+    instagramUrl?: string;
     sourceUrl: string;
     evidenceExcerpt: string;
     retrievedAt: string;
   }>;
+  companyEmail?: string;
+  socialProfiles?: Array<{
+    platform: 'linkedin' | 'facebook' | 'instagram';
+    profileUrl: string;
+    role: 'company' | 'decision_maker';
+  }>;
+  citationStatus?: 'CITATION_PRESENT' | 'CITATION_ANNOTATION_MISSING';
   snippet: string;
   source: string;
   retrievedAt: string;

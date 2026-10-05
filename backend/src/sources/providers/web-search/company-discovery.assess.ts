@@ -6,7 +6,7 @@ import { expansionCities, placeMentioned } from '../../../search/search-plan.pla
 import { toCountryCode } from '../../location/location-evidence';
 import type { SearchLocation, SearchPlan } from '../../../search/types/search-plan.types';
 import { rejectDiscoveryUrl } from '../../services/discovery-candidate.gate';
-import { discoveryIdentityKeys } from '../../services/discovery-fallback';
+import { areDiscoveryCandidatesDuplicates } from '../../services/discovery-fallback';
 import {
   buildExpandedDiscoveryQueries,
   expandDiscoveryLocationVariants,
@@ -74,6 +74,8 @@ export interface CollectWebCompanyOptions {
   sleep?: (ms: number) => Promise<void>;
   exclude?: NormalizedSourceResult[];
   round?: number;
+  /** Keep identifiable OpenRouter discoveries for persistence; downstream qualification remains authoritative. */
+  allowUnqualifiedOpenRouter?: boolean;
   /** Called as soon as a chunk of accepted candidates is ready — used for streaming persist. */
   onBatch?: (batch: NormalizedSourceResult[]) => Promise<void> | void;
 }
@@ -131,8 +133,7 @@ export async function collectWebCompanyCandidates(
   const persistChunkSize = Math.max(1, Math.trunc(options.persistChunkSize ?? wanted));
   const results: NormalizedSourceResult[] = [];
   const pendingChunk: NormalizedSourceResult[] = [];
-  const seen = new Set<string>();
-  for (const existing of options.exclude ?? []) discoveryIdentityKeys(existing).forEach((key) => seen.add(key));
+  const seen = [...(options.exclude ?? [])];
   let rejected = 0;
   let queriesRun = 0;
   let consecutiveFailures = 0;
@@ -151,14 +152,18 @@ export async function collectWebCompanyCandidates(
   };
 
   const acceptHit = (hit: WebSearchResult): { status: 'accepted' | 'rejected' | 'duplicate'; reason?: DiscoveryRejectionReason } => {
-    const decision = assessWebCompanyCandidate(hit, plan);
+    const decision = assessWebCompanyCandidate(hit, plan, {
+      allowUnqualified: hit.source === 'openrouter'
+        && (options.allowUnqualifiedOpenRouter ?? true),
+    });
     if (!decision.accepted) {
       rejected += 1;
       return { status: 'rejected', reason: classifyDiscoveryRejectionReason(decision.reason) };
     }
-    const keys = discoveryIdentityKeys(decision.result);
-    if (keys.some((key) => seen.has(key))) return { status: 'duplicate', reason: 'DUPLICATE' };
-    keys.forEach((key) => seen.add(key));
+    if (seen.some((candidate) => areDiscoveryCandidatesDuplicates(candidate, decision.result))) {
+      return { status: 'duplicate', reason: 'DUPLICATE' };
+    }
+    seen.push(decision.result);
     results.push(decision.result);
     pendingChunk.push(decision.result);
     return { status: 'accepted' };
@@ -328,9 +333,57 @@ function withExpansionMetrics(
 }
 
 export function assessWebCompanyCandidate(
-  hit: Pick<WebSearchResult, 'title' | 'url' | 'website' | 'extractedContacts' | 'snippet' | 'source' | 'retrievedAt'>,
+  hit: Pick<WebSearchResult, 'title' | 'url' | 'website' | 'extractedContacts' | 'companyEmail' | 'socialProfiles' | 'citationStatus' | 'snippet' | 'source' | 'retrievedAt'>,
   plan: SearchPlan,
+  options: { allowUnqualified?: boolean } = {},
 ): { accepted: true; result: NormalizedSourceResult } | { accepted: false; reason: string } {
+  if (hit.source === 'openrouter' && (options.allowUnqualified ?? true)) {
+    const websiteCandidate = isHttpUrl(hit.website) ? hit.website : hit.url;
+    if (!isHttpUrl(websiteCandidate)) return { accepted: false, reason: 'INVALID_URL' };
+    const name = companyNameFromTitle(hit.title) ?? companyNameFromUrl(websiteCandidate);
+    if (!name) return { accepted: false, reason: 'UNUSABLE_NAME' };
+    const website = canonicalWebsite(websiteCandidate);
+    const hostname = new URL(website).hostname.toLowerCase().replace(/^www\./, '');
+    const externalId = createHash('sha256').update(`${name.toLowerCase()}|${hostname}`).digest('hex').slice(0, 40);
+    const requestedLocation = plan.locations.find((location) =>
+      location.city || location.state || location.region || location.country || location.originalText);
+    const observedLocation = requestedLocation
+      ? locationEvidence(`${hit.title} ${hit.snippet}`, name, requestedLocation)
+      : null;
+    return {
+      accepted: true,
+      result: {
+        externalId,
+        name,
+        website,
+        ...(hit.companyEmail ? { email: hit.companyEmail } : {}),
+        address: {
+          ...(observedLocation?.city ? { city: observedLocation.city } : {}),
+          ...(observedLocation?.state ? { state: observedLocation.state } : {}),
+          ...(observedLocation?.country ? { country: observedLocation.country } : {}),
+        },
+        sourceUrl: hit.url,
+        rawData: {
+          title: hit.title,
+          snippet: hit.snippet,
+          source: hit.source,
+          retrievedAt: hit.retrievedAt,
+          qualificationStatus: 'PENDING',
+          ...(hit.citationStatus ? { citationStatus: hit.citationStatus } : {}),
+          ...(observedLocation ? { locationEvidence: observedLocation.evidence } : {}),
+          openRouterFields: {
+            companyName: name,
+            website,
+            personName: hit.extractedContacts?.[0]?.fullName?.trim() || null,
+            personTitle: hit.extractedContacts?.[0]?.title?.trim() || null,
+            personEmail: hit.extractedContacts?.[0]?.email?.trim() || null,
+          },
+          ...(hit.extractedContacts?.length ? { openRouterContacts: hit.extractedContacts } : {}),
+          ...(hit.socialProfiles?.length ? { openRouterSocialProfiles: hit.socialProfiles } : {}),
+        },
+      },
+    };
+  }
   let hostname = '';
   try {
     const parsed = new URL(hit.url);
@@ -343,6 +396,50 @@ export function assessWebCompanyCandidate(
   const rejectedUrl = rejectDiscoveryUrl(hit.url);
   if (rejectedUrl) return { accepted: false, reason: rejectedUrl };
   const text = `${hit.title} ${hit.snippet}`.replace(/\s+/g, ' ').trim();
+  if (options.allowUnqualified) {
+    const name = companyNameFromTitle(hit.title) ?? companyNameFromUrl(hit.website ?? hit.url);
+    if (!name) return { accepted: false, reason: 'UNUSABLE_NAME' };
+    const websiteCandidate = isHttpUrl(hit.website) ? hit.website : hit.url;
+    const website = canonicalWebsite(websiteCandidate);
+    const hostname = new URL(website).hostname.toLowerCase().replace(/^www\./, '');
+    const externalId = createHash('sha256').update(`${name.toLowerCase()}|${hostname}`).digest('hex').slice(0, 40);
+    const requestedLocation = plan.locations.find((location) =>
+      location.city || location.state || location.region || location.country || location.originalText);
+    const observedLocation = requestedLocation ? locationEvidence(text, name, requestedLocation) : null;
+    return {
+      accepted: true,
+      result: {
+        externalId,
+        name,
+        website,
+        ...(hit.companyEmail ? { email: hit.companyEmail } : {}),
+        address: {
+          ...(observedLocation?.city ? { city: observedLocation.city } : {}),
+          ...(observedLocation?.state ? { state: observedLocation.state } : {}),
+          ...(observedLocation?.country ? { country: observedLocation.country } : {}),
+        },
+        sourceUrl: hit.url,
+        rawData: {
+          title: hit.title,
+          snippet: hit.snippet,
+          source: hit.source,
+          retrievedAt: hit.retrievedAt,
+          qualificationStatus: 'PENDING',
+          ...(hit.citationStatus ? { citationStatus: hit.citationStatus } : {}),
+          ...(observedLocation ? { locationEvidence: observedLocation.evidence } : {}),
+          openRouterFields: {
+            companyName: name,
+            website,
+            personName: hit.extractedContacts?.[0]?.fullName?.trim() || null,
+            personTitle: hit.extractedContacts?.[0]?.title?.trim() || null,
+            personEmail: hit.extractedContacts?.[0]?.email?.trim() || null,
+          },
+          ...(hit.extractedContacts?.length ? { openRouterContacts: hit.extractedContacts } : {}),
+          ...(hit.socialProfiles?.length ? { openRouterSocialProfiles: hit.socialProfiles } : {}),
+        },
+      },
+    };
+  }
   if (LISTING.test(text)) return { accepted: false, reason: 'GENERIC_LIST' };
   const name = companyNameFromTitle(hit.title);
   if (!name) return { accepted: false, reason: 'UNUSABLE_NAME' };
@@ -395,11 +492,39 @@ export function assessWebCompanyCandidate(
         snippet: hit.snippet,
         source: hit.source,
         retrievedAt: hit.retrievedAt,
+        ...(hit.citationStatus ? { citationStatus: hit.citationStatus } : {}),
+        openRouterFields: {
+          companyName: name.trim() || 'Unknown Company',
+          website: website || null,
+          personName: hit.extractedContacts?.[0]?.fullName?.trim() || null,
+          personTitle: hit.extractedContacts?.[0]?.title?.trim() || null,
+          personEmail: hit.extractedContacts?.[0]?.email?.trim() || null,
+        },
         ...(hit.extractedContacts?.length ? { openRouterContacts: hit.extractedContacts } : {}),
         ...(location ? { locationEvidence: location.evidence } : {}),
       },
     },
   };
+}
+
+function isHttpUrl(value: string | undefined): value is string {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function companyNameFromUrl(value: string): string | null {
+  try {
+    const hostname = new URL(value).hostname.replace(/^www\./i, '');
+    const label = hostname.split('.')[0]?.replace(/[-_]+/g, ' ').trim();
+    return label ? label.replace(/\b\w/g, (letter) => letter.toUpperCase()) : null;
+  } catch {
+    return null;
+  }
 }
 
 function isInvestorPlan(plan: SearchPlan): boolean {

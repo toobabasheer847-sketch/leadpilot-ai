@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, eq } from 'drizzle-orm';
 import { DRIZZLE } from '../database/database.constants';
@@ -17,10 +17,12 @@ import { UsageService } from '../usage/usage.service';
 import { ProviderObservabilityService } from '../common/observability/provider-observability.service';
 import { createHash } from 'node:crypto';
 import { CompanyResearchContextService } from './research-context/company-research-context.service';
+import { isPlanLimitFallbackError, PLAN_LIMIT_FALLBACK_MESSAGE } from './website/website-discovery.error';
 
 @Injectable()
 export class EnrichmentService {
   private readonly dispatchConcurrency: number;
+  private readonly logger = new Logger(EnrichmentService.name);
 
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
@@ -99,14 +101,31 @@ export class EnrichmentService {
       throw new NotFoundException('Company not found');
     }
 
-    await this.usage.checkRequestRate(organizationId, undefined, 'WEBSITE_FETCH');
     try {
+      await this.usage.checkRequestRate(organizationId, undefined, 'WEBSITE_FETCH');
       const plan = await this.loadPlan(data.searchExecutionId, organizationId);
       const result = await this.providerObservability.track('website', 'ENRICHMENT', async () => ({ value: await this.enrichPages(company, plan, data.searchExecutionId ?? null) }));
       await this.usage.recordUsage({ organizationId, operation: 'WEBSITE_FETCH', provider: 'website', resourceType: 'company', resourceId: company.id, units: Math.max(1, result.pagesFetched), status: 'COMPLETED', metadata: { pagesFetched: result.pagesFetched, fieldsExtracted: result.fieldsExtracted, websiteStatus: result.websiteStatus, ...(result.message ? { message: result.message } : {}) } });
       await this.db.insert(auditLogs).values({ organizationId, entityId: company.id, action: 'COMPANY_ENRICHMENT_COMPLETED', entityType: 'company', metadata: { companyId: company.id, pagesFetched: result.pagesFetched, fieldsExtracted: result.fieldsExtracted, websiteStatus: result.websiteStatus, ...(result.message ? { message: result.message } : {}) } });
       return { companyId, organizationId, website: result.website, websiteStatus: result.websiteStatus, message: result.message, socialProfiles: result.socialProfiles, fieldsExtracted: result.fieldsExtracted };
     } catch (error) {
+      if (isPlanLimitFallbackError(error)) {
+        this.logger.warn(PLAN_LIMIT_FALLBACK_MESSAGE, {
+          companyId: company.id,
+          organizationId,
+          searchExecutionId: data.searchExecutionId ?? null,
+        });
+        return {
+          companyId,
+          organizationId,
+          website: company.website ?? null,
+          websiteStatus: 'LIMITED' as const,
+          message: PLAN_LIMIT_FALLBACK_MESSAGE,
+          socialProfiles: [],
+          fieldsExtracted: 0,
+          pagesFetched: 0,
+        };
+      }
       await this.usage.recordUsage({ organizationId, operation: 'WEBSITE_FETCH', provider: 'website', resourceType: 'company', resourceId: company.id, units: 1, status: 'FAILED' });
       throw error;
     }

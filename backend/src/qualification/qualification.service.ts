@@ -86,7 +86,25 @@ export class QualificationService {
     const stored = (await mapWithConcurrency(companyIds, concurrency, async (companyId) => {
       const context = await this.loadContext(companyId, data.organizationId, data.searchExecutionId);
       const decision = evaluateQualification(context, criteria);
-      return this.persist(data, companyId, context.contacts[0]?.id ?? null, decision);
+      const [openRouterSource] = await this.db.select({ id: sourceRecords.id }).from(sourceRecords).where(and(
+        eq(sourceRecords.companyId, companyId),
+        eq(sourceRecords.searchExecutionId, data.searchExecutionId),
+        eq(sourceRecords.sourceType, 'openrouter'),
+      )).limit(1);
+      const hasSocialOrWebsite = Boolean(context.company.website || context.socialProfiles.length);
+      const finalDecision = openRouterSource && context.company.name.trim() && hasSocialOrWebsite
+        && decision.status === 'NOT_QUALIFIED'
+        ? {
+            ...decision,
+            status: 'NEEDS_REVIEW' as const,
+            disqualifiedReasons: [],
+            needsReviewReasons: [
+              ...decision.needsReviewReasons,
+              'OpenRouter-discovered company retained for review despite incomplete contact or verification details.',
+            ],
+          }
+        : decision;
+      return this.persist(data, companyId, context.contacts[0]?.id ?? null, finalDecision);
     }, { maxConcurrency: 16 })).filter((row): row is NonNullable<typeof row> => Boolean(row));
     const qualified = stored.filter((row) => row.status === 'QUALIFIED').length;
     const notQualified = stored.filter((row) => row.status === 'NOT_QUALIFIED').length;

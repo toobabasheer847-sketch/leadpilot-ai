@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { and, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { DRIZZLE } from '../../database/database.constants';
 import type { Database } from '../../database/database.types';
-import { auditLogs, companies, companyContacts, companyLocations, leadEvidence, sourceRecords } from '../../database/schema/schema';
+import { auditLogs, companies, companyContacts, companyLocations, companySocialProfiles, leadEvidence, sourceRecords } from '../../database/schema/schema';
 import { ProviderObservabilityService } from '../../common/observability/provider-observability.service';
 import { RequestContextService } from '../../common/observability/request-context.service';
 import { StructuredLoggerService } from '../../common/observability/structured-logger.service';
@@ -89,6 +89,62 @@ export class SourceDiscoveryService {
   ) {}
 
   async discover(executionId: string, organizationId: string, plan: SearchPlan, trace: Pick<SourceSearchContext, 'requestId' | 'correlationId'> = {}) {
+    try {
+      return await this.execute(executionId, organizationId, plan, trace);
+    } catch (error) {
+      const openRouterParseError = error instanceof SourceProviderError && error.code === 'PROVIDER_INVALID_RESPONSE';
+      if ((!openRouterParseError && error instanceof SourceProviderError) || this.provider.providerName() !== 'openrouter') throw error;
+      const message = 'OpenRouter discovery stopped after an unexpected internal error.';
+      this.logger.error('discovery.openrouter.unhandled_error', {
+        executionId,
+        organizationId,
+        errorType: error instanceof Error ? error.name : 'unknown',
+        stack: error instanceof Error ? error.stack : undefined,
+        provider: 'openrouter',
+        candidates: 0,
+      });
+      return {
+        candidates: 0,
+        requested: null,
+        countIntent: null,
+        discovered: 0,
+        accepted: 0,
+        persisted: 0,
+        rejected: 0,
+        duplicatesRemoved: 0,
+        shortfall: 0,
+        providerQueries: 0,
+        queriesIssued: 0,
+        queriesSkipped: 0,
+        queryFamiliesGenerated: 0,
+        queriesGenerated: 0,
+        duplicateQueriesSkipped: 0,
+        queriesSkippedBudget: 0,
+        queriesSkippedLowYield: 0,
+        yieldPerQuery: 0,
+        emptyFieldEnrichments: 0,
+        rejectionSummary: '',
+        locationYieldSummary: '',
+        categoryYieldSummary: '',
+        discoveryStopReason: 'PROVIDER_UNAVAILABLE' as const,
+        providersAttempted: 1,
+        providersSucceeded: 0,
+        providersEmpty: 0,
+        providersUnavailable: 1,
+        providersQuotaExceeded: 0,
+        providersFailed: 1,
+        providersSkipped: 0,
+        providerStatusSummary: 'openrouter:UNAVAILABLE',
+        capabilitySummary: 'openrouter:unavailable',
+        providerAttempts: [],
+        primaryError: message,
+        webError: null,
+        limitationsMessage: 'OpenRouter discovery could not complete because of an internal provider error.',
+      };
+    }
+  }
+
+  private async execute(executionId: string, organizationId: string, plan: SearchPlan, trace: Pick<SourceSearchContext, 'requestId' | 'correlationId'> = {}) {
     const currentContext = this.requestContext.get();
     const context: SourceSearchContext = { searchExecutionId: executionId, organizationId, requestId: trace.requestId ?? currentContext?.requestId, correlationId: trace.correlationId ?? currentContext?.correlationId };
     await this.audit(organizationId, executionId, 'SOURCE_SEARCH_STARTED');
@@ -731,10 +787,10 @@ export class SourceDiscoveryService {
     const [company] = await this.db.insert(companies).values({
       organizationId,
       name: result.name,
-      website,
-      phone: result.phone,
-      email: result.email,
-      category: result.category,
+      website: website ?? null,
+      phone: result.phone ?? null,
+      email: result.email ?? null,
+      category: result.category ?? null,
       ...(provider === 'google_places' ? { googlePlaceId: result.externalId, googleMapsUrl: result.sourceUrl } : {}),
       verificationStatus: 'NOT_VERIFIED',
       investorType: null,
@@ -756,8 +812,21 @@ export class SourceDiscoveryService {
   private async persistResults(organizationId: string, executionId: string, provider: string, results: ReturnType<SourceNormalizerService['normalize']>[], synthetic: boolean, context: SourceSearchContext) {
     let accepted = 0;
     for (const raw of results) {
+      let normalized: ReturnType<SourceNormalizerService['normalize']> | undefined;
       try {
-        const normalized = this.normalizer.normalize(raw);
+        const candidate = provider === 'openrouter' && raw.rawData?.qualificationStatus === 'PENDING'
+          ? {
+              ...raw,
+              name: pendingCompanyName(raw),
+              ...(raw.website ? { website: raw.website } : { website: undefined }),
+              address: {
+                ...raw.address,
+                state: raw.address?.state?.trim() || 'Texas',
+                country: raw.address?.country?.trim() || 'US',
+              },
+            }
+          : raw;
+        normalized = this.normalizer.normalize(candidate);
         const gate = isPersistableDiscoveryCandidate({ website: normalized.website, sourceUrl: normalized.sourceUrl });
         if (!gate.ok) {
           await this.audit(organizationId, executionId, 'SOURCE_RESULT_REJECTED', undefined, { reason: gate.reason, sourceUrl: normalized.sourceUrl.slice(0, 200) });
@@ -766,6 +835,7 @@ export class SourceDiscoveryService {
         const company = await this.upsertCompany(organizationId, provider, normalized);
         const alreadyLinked = await this.companyAlreadyInExecution(organizationId, executionId, company.id);
         const sourceRecord = await this.upsertSourceRecord(organizationId, executionId, company.id, provider, normalized, context);
+        if (!alreadyLinked) accepted += 1;
         // Cross-provider rediscovery fills empty fields (upsert) but is not independent verification evidence.
         if (!synthetic) {
           await this.createEvidence(company.id, sourceRecord.id, normalized, provider, {
@@ -776,10 +846,21 @@ export class SourceDiscoveryService {
         }
         if (provider === 'openrouter') {
           await this.persistOpenRouterContacts(company.id, normalized, sourceRecord.id);
+          await this.persistOpenRouterSocialProfiles(company.id, normalized);
         }
-        if (!alreadyLinked) accepted += 1;
       } catch (error) {
-        await this.audit(organizationId, executionId, 'SOURCE_RESULT_REJECTED', undefined, { reason: error instanceof Error ? error.name : 'unknown' });
+        if (provider === 'openrouter') {
+          console.error('[OpenRouterPersistenceError]', error);
+        }
+        this.logger.error('discovery.candidate_persistence.failed', {
+          executionId,
+          organizationId,
+          provider,
+          errorType: error instanceof Error ? error.name : 'unknown',
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+          companyName: normalized?.name ?? raw.name ?? null,
+        });
       }
     }
     return accepted;
@@ -798,10 +879,20 @@ export class SourceDiscoveryService {
         fullName?: unknown;
         title?: unknown;
         email?: unknown;
+        linkedinUrl?: unknown;
+        facebookUrl?: unknown;
+        instagramUrl?: unknown;
         sourceUrl?: unknown;
         evidenceExcerpt?: unknown;
         retrievedAt?: unknown;
       };
+      const openRouterFields = result.rawData?.openRouterFields && typeof result.rawData.openRouterFields === 'object'
+        ? result.rawData.openRouterFields as Record<string, unknown>
+        : {};
+      const decisionMakerLinkedIn = typeof openRouterFields.decisionMakerLinkedIn === 'string'
+        ? openRouterFields.decisionMakerLinkedIn
+        : undefined;
+      candidate.linkedinUrl ??= decisionMakerLinkedIn;
       if (
         typeof candidate.fullName !== 'string'
         || !candidate.fullName.trim()
@@ -827,7 +918,10 @@ export class SourceDiscoveryService {
         ? await this.db.update(companyContacts).set({
             ...(!existing.title ? { title } : {}),
             ...(!existing.email && email ? { email, emailStatus: 'UNVERIFIED' } : {}),
-            ...(!existing.source ? { source: candidate.sourceUrl } : {}),
+                ...(!existing.linkedinUrl && typeof candidate.linkedinUrl === 'string' ? { linkedinUrl: candidate.linkedinUrl } : {}),
+                ...(!existing.facebookUrl && typeof candidate.facebookUrl === 'string' ? { facebookUrl: candidate.facebookUrl } : {}),
+                ...(!existing.instagramUrl && typeof candidate.instagramUrl === 'string' ? { instagramUrl: candidate.instagramUrl } : {}),
+                ...(!existing.source ? { source: candidate.sourceUrl } : {}),
             updatedAt: new Date(),
           }).where(eq(companyContacts.id, existing.id)).returning()
         : await this.db.insert(companyContacts).values({
@@ -837,6 +931,9 @@ export class SourceDiscoveryService {
             lastName: fullName.split(/\s+/).slice(1).join(' ') || null,
             title,
             email,
+            linkedinUrl: typeof candidate.linkedinUrl === 'string' ? candidate.linkedinUrl : null,
+            facebookUrl: typeof candidate.facebookUrl === 'string' ? candidate.facebookUrl : null,
+            instagramUrl: typeof candidate.instagramUrl === 'string' ? candidate.instagramUrl : null,
             emailStatus: email ? 'UNVERIFIED' : 'NOT_FOUND',
             source: candidate.sourceUrl,
             status: 'DISCOVERED',
@@ -881,6 +978,32 @@ export class SourceDiscoveryService {
           },
         }).onConflictDoNothing({ target: leadEvidence.idempotencyKey });
       }
+    }
+  }
+
+  private async persistOpenRouterSocialProfiles(
+    companyId: string,
+    result: ReturnType<SourceNormalizerService['normalize']>,
+  ) {
+    const profiles = result.rawData?.openRouterSocialProfiles;
+    if (!Array.isArray(profiles)) return;
+    for (const value of profiles) {
+      if (!value || typeof value !== 'object') continue;
+      const profile = value as { platform?: unknown; profileUrl?: unknown; role?: unknown };
+      if (
+        !['linkedin', 'facebook', 'instagram'].includes(String(profile.platform))
+        || typeof profile.profileUrl !== 'string'
+        || !isPublicSocialUrl(profile.platform as string, profile.profileUrl)
+      ) continue;
+      if (profile.role === 'decision_maker') continue;
+      const username = socialUsername(profile.profileUrl);
+      await this.db.insert(companySocialProfiles).values({
+        companyId,
+        platform: profile.platform as string,
+        profileUrl: profile.profileUrl,
+        username,
+        verificationStatus: 'NOT_VERIFIED',
+      }).onConflictDoNothing();
     }
   }
 
@@ -929,10 +1052,10 @@ export class SourceDiscoveryService {
       sourceName: provider,
       sourceUrl: result.sourceUrl,
       externalId: result.externalId,
-      requestId: context.requestId,
-      correlationId: context.correlationId,
+      requestId: context.requestId ?? null,
+      correlationId: context.correlationId ?? null,
       retrievedAt: new Date(),
-      rawData: result.rawData,
+      rawData: result.rawData ?? null,
     }).returning();
     return record;
   }
@@ -1024,6 +1147,38 @@ function columnText(value: string | null | undefined, max: number): string | nul
   const trimmed = value?.trim();
   if (!trimmed || trimmed.length > max) return null;
   return trimmed;
+}
+
+function pendingCompanyName(result: NormalizedSourceResult): string {
+  const fields = result.rawData?.openRouterFields;
+  const extractedName = fields && typeof fields === 'object' && 'companyName' in fields
+    && typeof fields.companyName === 'string'
+    ? fields.companyName.trim()
+    : '';
+  const name = extractedName || result.name.trim() || 'Unknown Company';
+  return name.slice(0, 255);
+}
+
+function isPublicSocialUrl(platform: string, value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
+    const host = url.hostname.toLowerCase().replace(/^www\./, '');
+    if (platform === 'linkedin') return host === 'linkedin.com' && /^\/(?:company|in)\//i.test(url.pathname);
+    if (platform === 'facebook') return host === 'facebook.com' && url.pathname.split('/').filter(Boolean).length >= 1;
+    if (platform === 'instagram') return host === 'instagram.com' && url.pathname.split('/').filter(Boolean).length >= 1;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function socialUsername(value: string): string | null {
+  try {
+    return new URL(value).pathname.split('/').filter(Boolean).pop() ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** Country is varchar(2). A longer place name is stored as an ISO code, or omitted so the company is not dropped. */

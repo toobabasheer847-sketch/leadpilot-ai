@@ -9,7 +9,12 @@ import type { Database } from '../database/database.types';
 import { and, eq } from 'drizzle-orm';
 import { pipelineJobs } from '../database/schema/schema';
 import { StructuredLoggerService } from '../common/observability/structured-logger.service';
-import { isWebsiteDiscoveryError, websiteFailureLog } from './website/website-discovery.error';
+import {
+  isPlanLimitFallbackError,
+  isWebsiteDiscoveryError,
+  PLAN_LIMIT_FALLBACK_MESSAGE,
+  websiteFailureLog,
+} from './website/website-discovery.error';
 import { isWebSearchError } from './website/web-search.error';
 
 @Processor('company-enrichment-queue', {
@@ -38,6 +43,23 @@ export class CompanyEnrichmentProcessor extends WorkerHost {
       if (searchExecutionId) await this.updatePipelineJob(searchExecutionId, 'COMPLETED', bullJobId);
       return result;
     } catch (error) {
+      if (isPlanLimitFallbackError(error)) {
+        this.logger.warn(PLAN_LIMIT_FALLBACK_MESSAGE, {
+          jobId: job.id,
+          companyId: job.data.companyId,
+          searchExecutionId: searchExecutionId ?? null,
+        });
+        if (searchExecutionId) await this.updatePipelineJob(searchExecutionId, 'COMPLETED', bullJobId);
+        return {
+          companyId: job.data.companyId,
+          organizationId: job.data.organizationId,
+          websiteStatus: 'LIMITED' as const,
+          message: PLAN_LIMIT_FALLBACK_MESSAGE,
+          socialProfiles: [],
+          fieldsExtracted: 0,
+          pagesFetched: 0,
+        };
+      }
       const failure = websiteFailureLog(error);
       if (searchExecutionId) await this.updatePipelineJob(searchExecutionId, 'FAILED', bullJobId, failure.message);
       this.logger.warn('job.company_enrichment.failed', { jobId: job.id, companyId: job.data.companyId, stage: failure.stage, errorCode: failure.errorCode, provider: failure.provider, operation: failure.operation, retryable: failure.retryable, message: failure.message });

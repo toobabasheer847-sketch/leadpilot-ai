@@ -58,7 +58,7 @@ export default () => ({
     model: process.env.OPENROUTER_MODEL?.trim() || undefined,
     baseUrl: process.env.OPENROUTER_BASE_URL?.trim() || 'https://openrouter.ai/api/v1',
     timeoutMs: parseInt(process.env.OPENROUTER_TIMEOUT_MS ?? '120000', 10),
-    retries: parseInt(process.env.OPENROUTER_RETRIES ?? '1', 10),
+    retries: parseInt(process.env.OPENROUTER_RETRIES ?? '2', 10),
   },
 
   contactProvider: {

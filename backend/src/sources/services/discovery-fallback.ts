@@ -69,25 +69,43 @@ export function dedupeDiscoveryCandidates(
   /** Phase R — duplicates kept for empty-field enrichment; not counted as new candidates. */
   supplements: NormalizedSourceResult[];
 } {
-  const seen = new Set<string>();
-  for (const result of existing) discoveryIdentityKeys(result).forEach((key) => seen.add(key));
+  const seen = [...existing];
   const accepted: NormalizedSourceResult[] = [];
   const supplements: NormalizedSourceResult[] = [];
   let duplicatesRemoved = 0;
   for (const result of incoming) {
-    const keys = discoveryIdentityKeys(result);
-    if (keys.some((key) => seen.has(key))) {
+    if (seen.some((candidate) => areDiscoveryCandidatesDuplicates(candidate, result))) {
       duplicatesRemoved += 1;
       supplements.push(result);
       continue;
     }
-    keys.forEach((key) => seen.add(key));
+    seen.push(result);
     accepted.push(result);
   }
   return { accepted, duplicatesRemoved, supplements };
 }
 
-export function discoveryIdentityKeys(result: Pick<NormalizedSourceResult, 'externalId' | 'name' | 'website' | 'address'>): string[] {
+export function areDiscoveryCandidatesDuplicates(
+  left: Pick<NormalizedSourceResult, 'externalId' | 'name' | 'website' | 'address' | 'rawData'>,
+  right: Pick<NormalizedSourceResult, 'externalId' | 'name' | 'website' | 'address' | 'rawData'>,
+): boolean {
+  if (isOpenRouterCandidate(left) && isOpenRouterCandidate(right) && sameWebsiteHost(left.website, right.website)) {
+    const leftPeople = decisionMakerNames(left);
+    const rightPeople = decisionMakerNames(right);
+    if ((leftPeople.length || rightPeople.length)
+      && (leftPeople.length !== rightPeople.length || leftPeople.some((name) => !rightPeople.includes(name)))) return false;
+    const leftLocation = locationKey(left);
+    const rightLocation = locationKey(right);
+    if ((leftLocation || rightLocation) && leftLocation !== rightLocation) return false;
+  }
+  const leftKeys = discoveryIdentityKeys(left);
+  const rightKeys = new Set(discoveryIdentityKeys(right));
+  return leftKeys.some((key) => rightKeys.has(key));
+}
+
+export function discoveryIdentityKeys(
+  result: Pick<NormalizedSourceResult, 'externalId' | 'name' | 'website' | 'address' | 'rawData'>,
+): string[] {
   const keys: string[] = [];
   if (result.externalId) keys.push(`id:${result.externalId}`);
   const website = websiteKey(result.website);
@@ -97,6 +115,49 @@ export function discoveryIdentityKeys(result: Pick<NormalizedSourceResult, 'exte
   const state = result.address?.state?.trim().toLowerCase();
   if (name && city) keys.push(`place:${name}|${city}|${state ?? ''}`);
   return keys;
+}
+
+function isOpenRouterCandidate(result: Pick<NormalizedSourceResult, 'rawData'>): boolean {
+  return result.rawData?.source === 'openrouter'
+    || result.rawData?.provider === 'openrouter'
+    || result.rawData?.qualificationStatus === 'PENDING';
+}
+
+function decisionMakerNames(result: Pick<NormalizedSourceResult, 'rawData'>): string[] {
+  const raw = result.rawData ?? {};
+  const fields = raw.openRouterFields && typeof raw.openRouterFields === 'object'
+    ? raw.openRouterFields as Record<string, unknown>
+    : {};
+  const names = [
+    ...(typeof fields.personName === 'string' ? [fields.personName] : []),
+    ...(Array.isArray(raw.openRouterContacts)
+      ? raw.openRouterContacts.flatMap((contact) => {
+          if (!contact || typeof contact !== 'object') return [];
+          const name = (contact as { fullName?: unknown }).fullName;
+          return typeof name === 'string' && name.trim() ? [name] : [];
+        })
+      : []),
+  ];
+  return [...new Set(names.map((name) => name.trim().toLowerCase()).filter(Boolean))].sort();
+}
+
+function locationKey(result: Pick<NormalizedSourceResult, 'address'>): string {
+  return [
+    result.address?.addressLine1,
+    result.address?.city,
+    result.address?.state,
+    result.address?.postalCode,
+  ].map((value) => value?.trim().toLowerCase() ?? '').join('|').replace(/\|+$/, '');
+}
+
+function sameWebsiteHost(left?: string, right?: string): boolean {
+  if (!left || !right) return false;
+  try {
+    return new URL(left).hostname.toLowerCase().replace(/^www\./, '')
+      === new URL(right).hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return false;
+  }
 }
 
 function websiteKey(website?: string): string | null {

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { SearchPlan } from '../search/types/search-plan.types';
 import { employeeSizeRequested, contactDiscoveryRequested, decisionMakerRolesForPlan } from '../search/search-plan.limits';
@@ -62,6 +62,7 @@ type SettleResult = Awaited<ReturnType<PipelineJobInspector['settle']>>;
 
 @Injectable()
 export class PipelineStageRunner {
+  private readonly logger = new Logger(PipelineStageRunner.name);
   private readonly dispatchConcurrency: number;
 
   constructor(
@@ -144,22 +145,49 @@ export class PipelineStageRunner {
   }
 
   private async tickDiscovery(row: PipelineExecutionRow, progress: PipelineProgressState, stage: 'SOURCE_DISCOVERY' | 'COMPANY_PERSISTENCE'): Promise<StageTick> {
-    if (!row.searchExecutionId) return this.fail(progress, stage, 'NOT_FOUND', 'Search execution not found');
-    const execution = await this.repository.getSearchExecution(row.organizationId, row.searchExecutionId);
-    if (!execution) return this.fail(progress, stage, 'NOT_FOUND', 'Search execution not found');
-    if (execution.status === 'FAILED') {
-      const classified = classifyPipelineError(new Error(execution.errorMessage || 'Source discovery failed.'));
-      return this.fail(progress, 'SOURCE_DISCOVERY', classified.code, classified.message);
+    try {
+      if (!row.searchExecutionId) return this.fail(progress, stage, 'NOT_FOUND', 'Search execution not found');
+      const execution = await this.repository.getSearchExecution(row.organizationId, row.searchExecutionId);
+      if (!execution) return this.fail(progress, stage, 'NOT_FOUND', 'Search execution not found');
+      if (execution.status === 'FAILED') {
+        if (this.openRouterOnlyDiscovery()) {
+          return this.skipFailedOpenRouterDiscovery(row, progress, stage, new Error(execution.errorMessage || 'OpenRouter discovery failed.'));
+        }
+        const classified = classifyPipelineError(new Error(execution.errorMessage || 'Source discovery failed.'));
+        return this.fail(progress, 'SOURCE_DISCOVERY', classified.code, classified.message);
+      }
+      if (execution.status !== 'COMPLETED') return { type: 'wait', progress };
+      if (stage === 'SOURCE_DISCOVERY') {
+        return this.move(progress, 'sourceDiscovery', 'COMPANY_PERSISTENCE');
+      }
+      return this.move(progress, 'companyPersistence', 'WEBSITE_DISCOVERY');
+    } catch (error) {
+      if (!this.openRouterOnlyDiscovery()) throw error;
+      return this.skipFailedOpenRouterDiscovery(row, progress, stage, error);
     }
-    if (execution.status !== 'COMPLETED') return { type: 'wait', progress };
-    if (stage === 'SOURCE_DISCOVERY') {
-      return this.move(progress, 'sourceDiscovery', 'COMPANY_PERSISTENCE');
-    }
-    if (this.openRouterOnlyDiscovery()) {
-      const skipped = withStageState(progress, 'websiteDiscovery', 'SKIPPED');
-      return this.move(skipped, 'companyPersistence', 'ENRICHMENT');
-    }
-    return this.move(progress, 'companyPersistence', 'WEBSITE_DISCOVERY');
+  }
+
+  private skipFailedOpenRouterDiscovery(
+    row: PipelineExecutionRow,
+    progress: PipelineProgressState,
+    stage: 'SOURCE_DISCOVERY' | 'COMPANY_PERSISTENCE',
+    error: unknown,
+  ): StageTick {
+    this.logger.error(JSON.stringify({
+      event: 'pipeline.openrouter.discovery.unavailable',
+      pipelineExecutionId: row.id,
+      searchExecutionId: row.searchExecutionId,
+      organizationId: row.organizationId,
+      stage,
+      errorType: error instanceof Error ? error.name : 'unknown',
+      stack: error instanceof Error ? error.stack : undefined,
+    }));
+    const partial = withStageState(
+      withStageState(progress, 'sourceDiscovery', 'PARTIAL'),
+      'companyPersistence',
+      'PARTIAL',
+    );
+    return this.advanceTo(withStageState(partial, 'websiteDiscovery', 'SKIPPED'), 'ENRICHMENT');
   }
 
   private async tickTracked(row: PipelineExecutionRow, progress: PipelineProgressState, key: TrackedKey): Promise<StageTick> {
@@ -405,13 +433,13 @@ export class PipelineStageRunner {
   private async dispatch(row: PipelineExecutionRow, key: TrackedKey): Promise<string[]> {
     if (
       this.openRouterOnlyDiscovery()
-      && (key === 'websiteDiscovery' || key === 'deepResearch' || key === 'employeeSize' || key === 'decisionMakerDiscovery')
+      && (key === 'deepResearch' || key === 'employeeSize')
     ) return [];
     if (key === 'employeeSize') {
       if (!row.searchExecutionId || !employeeSizeRequested(await this.planFor(row))) return [];
     }
     if (key === 'decisionMakerDiscovery') {
-      if (!row.searchExecutionId || !contactDiscoveryRequested(await this.planFor(row))) return [];
+      if (!row.searchExecutionId || (!this.openRouterOnlyDiscovery() && !contactDiscoveryRequested(await this.planFor(row)))) return [];
     }
     if (key === 'websiteDiscovery') {
       if (!row.searchExecutionId) return [];

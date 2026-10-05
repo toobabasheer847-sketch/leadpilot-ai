@@ -23,6 +23,27 @@ export class WebsiteDiscoveryError extends Error {
   }
 }
 
+export const PLAN_LIMIT_FALLBACK_MESSAGE =
+  '[PlanLimitFallback] Web search provider limit hit; skipping active enrichment step while keeping discovered data.';
+
+export function isPlanLimitFallbackError(error: unknown): boolean {
+  const values = error && typeof error === 'object' ? error as Record<string, unknown> : {};
+  const response = values.response && typeof values.response === 'object'
+    ? values.response as Record<string, unknown>
+    : {};
+  const status = [
+    values.status,
+    values.statusCode,
+    response.status,
+    typeof values.getStatus === 'function' ? (values.getStatus as () => unknown)() : undefined,
+  ].find((value): value is number => typeof value === 'number');
+  if (status === 403 || status === 429) return true;
+  const message = error instanceof Error
+    ? error.message
+    : typeof values.message === 'string' ? values.message : String(error ?? '');
+  return /plan\s+limit\s+exceeded|pay-as-you-go\s+limit\s+exceeded|rate\s*limit|http\s*(?:status\s*)?(?:403|429)|status\s*(?:403|429)|\b(?:403|429)\b/i.test(message);
+}
+
 export function isWebsiteDiscoveryError(error: unknown): error is WebsiteDiscoveryError {
   return error instanceof WebsiteDiscoveryError;
 }
